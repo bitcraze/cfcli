@@ -168,7 +168,7 @@ impl Default for Config {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
 
-    let mut config: Config = confy::load("cf-cli").unwrap_or_else(|err| {
+    let mut config: Config = confy::load("cf-cli", None).unwrap_or_else(|err| {
         println!("Could not load config file: {:?}", err);
         process::exit(1);
     });
@@ -241,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             config.uri = selected_uri.clone();
 
-            confy::store("cf-cli", config).unwrap_or_else(|err| {
+            confy::store("cf-cli", None, config).unwrap_or_else(|err| {
                 println!("Could not save configuration: {:?}", err);
             });
 
