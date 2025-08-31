@@ -164,7 +164,7 @@ impl Default for Config {
 // }
 
 // Example scans for Crazyflies, connect the first one and print the log and param variables TOC.
-#[async_std::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
 
@@ -173,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     });
 
-    let link_context = crazyflie_link::LinkContext::new(async_executors::AsyncStd);
+    let link_context = crazyflie_link::LinkContext::new();
 
     let cf_address: [u8; 5] = match u64::from_str_radix(&args.address.replace("0x", ""), 16) {
         Ok(a) if a <= 0xFFFFFFFFFF => {
@@ -251,7 +251,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Connecting to {} ...", config.uri);
 
             let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                async_executors::AsyncStd,
                 &link_context,
                 config.uri.as_str(),
             )
@@ -273,7 +272,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Connecting to {} ...", config.uri);
 
                     let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        async_executors::AsyncStd,
                         &link_context,
                         config.uri.as_str(),
                     )
@@ -289,7 +287,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Connecting to {} ...", config.uri);
 
                     let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        async_executors::AsyncStd,
                         &link_context,
                         config.uri.as_str(),
                     )
@@ -309,7 +306,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Connecting to {} ...", config.uri);
 
                     let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        async_executors::AsyncStd,
                         &link_context,
                         config.uri.as_str(),
                     )
@@ -323,7 +319,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Connecting to {} ...", config.uri);
 
                     let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        async_executors::AsyncStd,
                         &link_context,
                         config.uri.as_str(),
                     )
@@ -337,7 +332,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Connecting to {} ...", config.uri);
 
                     let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        async_executors::AsyncStd,
                         &link_context,
                         config.uri.as_str(),
                     )
