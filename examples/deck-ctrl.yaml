@@ -1,0 +1,7 @@
+version_major: 0
+version_minor: 1
+vid: 0xBC
+pid: 0x13
+rev: 'B'
+name: 'HP LED'
+partitions: []

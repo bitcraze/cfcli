@@ -1,11 +1,21 @@
+use crate::utils::deckctrl::DeckConfig;
 use clap::{Args, Parser, Subcommand};
 use futures::StreamExt;
+use probe_rs::probe::list::Lister;
+use probe_rs::{
+    flashing::{DownloadOptions},
+    Permissions,
+};
 use serde::{Deserialize, Serialize};
 use std::{io::Write, process};
 
 pub mod modules {
     pub mod log;
     pub mod param;
+}
+
+pub mod utils {
+    pub mod deckctrl;
 }
 
 #[derive(Parser, Debug)]
@@ -31,6 +41,11 @@ enum Commands {
     Param {
         #[clap(subcommand)]
         command: ParamCommands,
+    },
+    /// Various supporting utilities for the Crazyflie and its ecosystem
+    Util {
+        #[clap(subcommand)]
+        command: UtilCommands,
     },
 
     /// List the Crazyflies found while scanning (on the selected address)
@@ -60,6 +75,43 @@ enum ParamCommands {
     /// Set the value of a parameter
     Set(VariableNameAndValue),
 }
+#[derive(Debug, Subcommand)]
+enum UtilCommands {
+    /// Utilities for the deck controller
+    DeckCtrl {
+        #[clap(subcommand)]
+        command: DeckControlCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DeckControlCommands {
+    /// Generate the configuration binary for the top page
+    Bingen(DeckBingenParameters),
+    /// Flash the configuration binary to the deck
+    Binflash(DeckBinflashParameters),
+}
+
+#[derive(Debug, Args)]
+struct DeckBinflashParameters {
+    /// Input file (in yaml format) containing the full configuration
+    #[clap(value_parser)]
+    input: String,
+    /// Probe index
+    #[clap(value_parser, default_value_t = -1)]
+    probe_idx: i8,
+}
+
+#[derive(Debug, Args)]
+struct DeckBingenParameters {
+    /// Input file (in yaml format) containing the full configuration
+    #[clap(value_parser)]
+    input: String,
+    /// Binary output for writing directly to flash
+    #[clap(value_parser, default_value = "dev-deck.bin")]
+    output: String,
+}
+
 
 #[derive(Debug, Args)]
 struct VariableName {
@@ -341,6 +393,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     modules::param::set(&cf, &var.name, &var.value).await?;
                 }
+            }
+        }
+        Commands::Util { command } => {
+            match command {
+                UtilCommands::DeckCtrl { command } => {
+                    match command {
+                        DeckControlCommands::Bingen(params) => {
+                            println!(
+                                "Generating deck binary from {} to {}",
+                                params.input, params.output
+                            );
+                            let deck_config = DeckConfig::from_yaml(params.input.clone())?;
+                            let bytes = deck_config.to_bytes();
+                            // Write bytes to file
+                            std::fs::write(&params.output, &bytes)?;
+
+                            // Print bytes as hex with 16 chars in each row
+                            println!("Generated binary ({} bytes):", bytes.len());
+                            for (i, byte) in bytes.iter().enumerate() {
+                                if i % 16 == 0 {
+                                    print!("{:08x}: ", i);
+                                }
+                                print!("{:02x} ", byte);
+                                if (i + 1) % 16 == 0 {
+                                    println!();
+                                }
+                            }
+                            if bytes.len() % 16 != 0 {
+                                println!();
+                            }
+                        }
+                        DeckControlCommands::Binflash(params) => {
+                            println!("Generating deck binary from {}", params.input);
+                            let deck_config = DeckConfig::from_yaml(params.input.clone())?;
+                            let bytes = deck_config.to_bytes();
+
+                            let lister = Lister::new();
+                            let probes = lister.list_all();
+
+                            let mut probe_idx = params.probe_idx;
+                            if probe_idx < 0 && probes.len() == 1 {
+                                probe_idx = 0;
+                            } else if probe_idx < 0 || probe_idx >= probes.len() as i8 {
+                              println!("Multiple probes found, please select which one to use:");
+                              for (i, p) in probes.iter().enumerate() {
+                                  println!("[{}] {}", i, p.identifier);
+                              }
+                              process::exit(1);
+                            }
+
+                            println!("Flashing deck binary to probe #{} ...", probe_idx);
+
+                            if probes.is_empty() {
+                                println!("No probes found, cannot flash deck");
+                                process::exit(1);
+                            }
+
+                            let address = 0x08000000 + 1024 * 30;
+                            let probe = probes[params.probe_idx as usize].open()?;
+                            let mut session =
+                                probe.attach("STM32C011F6Ux", Permissions::default())?;
+
+                            let mut loader = session.target().flash_loader();
+                            loader.add_data(address, &bytes)?;
+                            loader.commit(&mut session, DownloadOptions::default())?;
+
+                            println!("Deck binary flashed successfully!");
+                        }
+                    }
             }
         }
     }
