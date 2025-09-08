@@ -462,8 +462,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("Deck binary flashed successfully!");
                         }
                     }
+                }
             }
         }
+        
     }
 
     Ok(())
