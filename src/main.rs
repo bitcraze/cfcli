@@ -1,5 +1,7 @@
 use crate::utils::deckctrl::DeckConfig;
 use clap::{Args, Parser, Subcommand};
+use clap_num::maybe_hex;
+use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed, RawMemory};
 use futures::StreamExt;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
@@ -7,15 +9,36 @@ use probe_rs::{
     Permissions,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::{io::Write, process};
 
 pub mod modules {
     pub mod log;
     pub mod param;
+    pub mod memory;
 }
 
 pub mod utils {
     pub mod deckctrl;
+}
+
+/// Custom parser: "a=1,b=2" → { "a" => "1", "b" => "2" }
+fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
+    let mut map = HashMap::new();
+
+    for pair in s.split(',') {
+        let mut iter = pair.splitn(2, '=');
+        let key = iter.next().ok_or("Missing key")?.trim().to_string();
+        let value = iter.next().ok_or("Missing value")?.trim().to_string();
+
+        if key.is_empty() {
+            return Err("Empty key found".into());
+        }
+
+        map.insert(key, value);
+    }
+
+    Ok(map)
 }
 
 #[derive(Parser, Debug)]
@@ -42,6 +65,19 @@ enum Commands {
         #[clap(subcommand)]
         command: ParamCommands,
     },
+
+    /// Access to the memory subsystem
+    Memory {
+        #[clap(subcommand)]
+        command: MemoryCommands,
+    },
+
+    /// Configure the Crazyflie (radio settings, etc)
+    Config {
+        #[clap(subcommand)]
+        command: ConfigCommands,
+    },
+
     /// Various supporting utilities for the Crazyflie and its ecosystem
     Util {
         #[clap(subcommand)]
@@ -56,6 +92,27 @@ enum Commands {
 
     /// Print the console text from a Crazyflie
     Console,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommands {
+    /// Set an EEPROM configuration value in the Crazylfie
+    Set(ConfigNameAndValue),
+    /// Display the current configuration
+    Display,
+}
+
+#[derive(Debug, Args)]
+struct ConfigNameAndValue {
+    /// Comma separated list of key value pairs:
+    ///   channel: Radio channel (0-125)
+    ///   address: Radio address (5 byte hex, e.g. E7E7E7E7E7)
+    ///   speed  : Radio speed (0=250Kbps, 1=1Mbps, 2=2Mbps)
+    ///   pitch_trim: Pitch trim (float between -20.0 and 20.0)
+    ///   roll_trim : Roll trim (float between -20.0 and 20.0)
+    /// Example: channel=10,address=E7E7E7E7E7,speed=2
+    #[clap(value_parser, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
+    settings: HashMap<String, String>
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,6 +132,7 @@ enum ParamCommands {
     /// Set the value of a parameter
     Set(VariableNameAndValue),
 }
+
 #[derive(Debug, Subcommand)]
 enum UtilCommands {
     /// Utilities for the deck controller
@@ -112,6 +170,52 @@ struct DeckBingenParameters {
     output: String,
 }
 
+#[derive(Debug, Subcommand)]
+enum MemoryCommands {
+    /// List all available variables
+    List,
+    /// Read the value of a parameter
+    Read(ReadMemoryParameters),
+    /// Write a list of values to memory
+    Write(WriteMemoryParameters),
+    /// Display memory contents in a human-readable format
+    Display(SelectMemoryParameters),
+    /// Erase a memory
+    Erase(SelectMemoryParameters)
+}
+
+#[derive(Debug, Args)]
+struct SelectMemoryParameters {
+    /// ID of memory to read
+    #[clap(value_parser, default_value = None)]
+    id: Option<usize>
+}
+
+#[derive(Debug, Args)]
+struct ReadMemoryParameters {
+    /// ID of memory to read
+    #[clap(value_parser)]
+    id: usize,
+    /// Offset in bytes to start reading from
+    #[clap(value_parser)]
+    offset: usize,
+    /// Length in bytes to read
+    #[clap(value_parser)]
+    length: usize,
+}
+
+#[derive(Debug, Args)]
+struct WriteMemoryParameters {
+    /// ID of memory to read
+    #[clap(value_parser)]
+    id: usize,
+    /// Offset in bytes to start reading from
+    #[clap(value_parser)]
+    offset: usize,
+    /// Data to write (comma-separated list of bytes)
+    #[clap(value_parser, value_delimiter = ',', value_parser=maybe_hex::<u8>)]
+    data: Vec<u8>,
+}
 
 #[derive(Debug, Args)]
 struct VariableName {
@@ -215,6 +319,39 @@ impl Default for Config {
 //   Ok(())
 // }
 
+fn get_user_selection(options: Vec<usize>) -> usize {
+    let mut selected: Option<usize> = None;
+
+    while selected.is_none() {
+        print!("> ");
+        std::io::stdout()
+            .flush()
+            .expect("Could not flush console output");
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .expect("Could not read input");
+
+        selected = match input.trim().parse::<usize>() {
+            Ok(idx) => {
+                if options.contains(&idx) {
+                  Some(idx)
+                } else {
+                    println!("Invalid index, please try again");
+                    None
+                }
+            }
+            Err(_) => {
+                println!("Invalid input, please try again");
+                None
+            }
+        };
+    }
+
+    selected.unwrap()
+}
+
+
 // Example scans for Crazyflies, connect the first one and print the log and param variables TOC.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -228,14 +365,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let link_context = crazyflie_link::LinkContext::new();
 
     let cf_address: [u8; 5] = match u64::from_str_radix(&args.address.replace("0x", ""), 16) {
-        Ok(a) if a <= 0xFFFFFFFFFF => {
-            a.to_be_bytes()[3..].try_into().expect("Could not convert u64 to [u8; 5]")
-        }
+        Ok(a) if a <= 0xFFFFFFFFFF => a.to_be_bytes()[3..]
+            .try_into()
+            .expect("Could not convert u64 to [u8; 5]"),
         Ok(_) => {
-          return Err("Invalid address, please provide a valid 5 byte hexadecimal address".into());
+            return Err(
+                "Invalid address, please provide a valid 5 byte hexadecimal address".into(),
+            );
         }
         Err(_) => {
-            return Err("Invalid address, please provide a valid 5 byte hexadecimal address".into());
+            return Err(
+                "Invalid address, please provide a valid 5 byte hexadecimal address".into(),
+            );
         }
     };
 
@@ -302,11 +443,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Console => {
             println!("Connecting to {} ...", config.uri);
 
-            let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                &link_context,
-                config.uri.as_str(),
-            )
-            .await?;
+            let cf = crazyflie_lib::Crazyflie::connect_from_uri(&link_context, config.uri.as_str())
+                .await?;
 
             // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
@@ -465,7 +603,267 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
+        Commands::Config { command } => {
+            match command {
+                ConfigCommands::Set(var) => {
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
+
+                    if memories.len() != 1 {
+                      println!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
+                      process::exit(1);
+                    }
+
+                    let mut eeprom_memory = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
+                      Some(Ok(m)) => m,
+                      Some(Err(e)) => {
+                        println!("Could not access EEPROM memory: {}", e);
+                        process::exit(1);
+                      }
+                      None => {
+                        println!("No EEPROM memory found");
+                        process::exit(1);
+                      }
+                    };
+
+                    for (key, value) in &var.settings {
+                      match key.as_str() {
+                        "channel" => {
+                          let channel: u8 = match value.parse() {
+                            Ok(c) if c <= 125 => c,
+                            _ => {
+                              println!("Invalid channel value, must be an integer between 0 and 125");
+                              process::exit(1);
+                            }
+                          };
+                          eeprom_memory.set_radio_channel(channel)?;
+                          println!("Set radio channel to {}", channel);
+                        }
+                        "address" => {
+                          let address: [u8; 5] = match u64::from_str_radix(&value.replace("0x", ""), 16) {
+                            Ok(a) if a <= 0xFFFFFFFFFF => a.to_be_bytes()[3..]
+                                .try_into()
+                                .expect("Could not convert u64 to [u8; 5]"),
+                            _ => {
+                                println!("Invalid address, must be a 5 byte hexadecimal value (e.g. E7E7E7E7E7)");
+                                process::exit(1);
+                            }
+                          };
+                          eeprom_memory.set_radio_address(address);
+                          println!("Set radio address to {:02X?}", address);
+                        }
+                        "speed" => {
+                          let speed: u8 = match value.parse() {
+                            Ok(s) if s <= 2 => s,
+                            _ => {
+                              println!("Invalid speed value, must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)");
+                              process::exit(1);
+                            }
+                          };
+                          eeprom_memory.set_radio_speed(RadioSpeed::try_from(speed)?);
+                          println!("Set radio speed to {}", speed);
+                        }
+                        "pitch_trim" => {
+                          let pitch_trim: f32 = match value.parse() {
+                            Ok(p) if p >= -20.0 && p <= 20.0 => p,
+                            _ => {
+                              println!("Invalid pitch trim value, must be a float between -20.0 and 20.0");
+                              process::exit(1);
+                            }
+                          };
+                          eeprom_memory.set_pitch_trim(pitch_trim);
+                          println!("Set pitch trim to {}", pitch_trim);
+                        }
+                        "roll_trim" => {
+                          let roll_trim: f32 = match value.parse() {
+                            Ok(r) if r >= -20.0 && r <= 20.0 => r,
+                            _ => {
+                              println!("Invalid roll trim value, must be a float between -20.0 and 20.0");
+                              process::exit(1);
+                            }
+                          };
+                          eeprom_memory.set_roll_trim(roll_trim);
+                          println!("Set roll trim to {}", roll_trim);
+                        }
+                        _ => {
+                          println!("Unknown setting: {}", key);
+                        }
+                      }
+                    }
+
+                    eeprom_memory.commit().await?;
+
+                    cf.disconnect().await;
+                }
+                ConfigCommands::Display => {
+                    println!("Connecting to {} ...", config.uri);
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
+
+                    if memories.len() != 1 {
+                      println!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
+                      process::exit(1);
+                    }
+
+                    modules::memory::display(&cf, memories[0].clone()).await;
+
+                    cf.disconnect().await;
+                  }
+            }
+        }
+        Commands::Memory { command } => {
+            match command {
+                MemoryCommands::List => {
+                    println!("Connecting to {} ...", config.uri);
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memory = cf.memory.get_memories(None);
+
+                    println!("Memories:");
+                    for mem in memory {
+                      println!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size);
+                    }
+
+
+                    cf.disconnect().await;
+                }
+                MemoryCommands::Read(var) => {
+                    println!("Connecting to {} ...", config.uri);
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memories = cf.memory.get_memories(None);
+
+                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(memories[var.id].clone()).await {
+                      Some(Ok(m)) => m,
+                      Some(Err(e)) => {
+                        println!("Could not access memory ID={} as raw memory: {}", var.id, e);
+                        process::exit(1);
+                      }
+                      None => {
+                        println!("Memory ID={} not found", var.id);
+                        process::exit(1);
+                      }
+                    };
+
+                    let data = raw_access_memory.read(var.offset, var.length).await?;
+
+                    for (i, byte) in data.iter().enumerate() {
+                      if i % 16 == 0 {
+                        print!("\n{:08x}: ", var.offset + i);
+                      }
+                      print!("{:02x} ", byte);
+                    }
+                    println!();
+
+                    cf.disconnect().await;
+                }
+                MemoryCommands::Write(var) => {
+                    println!("Connecting to {} ...", config.uri);
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memories = cf.memory.get_memories(None);
+
+                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(memories[var.id].clone()).await {
+                      Some(Ok(m)) => m,
+                      Some(Err(e)) => {
+                        println!("Could not access memory ID={} as raw memory: {}", var.id, e);
+                        process::exit(1);
+                      }
+                      None => {
+                        println!("Memory ID={} not found", var.id);
+                        process::exit(1);
+                      }
+                    };
+
+                    raw_access_memory.write(var.offset, &var.data).await?;
+
+                    println!("Wrote {} bytes to memory ID={} at offset 0x{:x}", var.data.len(), var.id, var.offset);
+
+                    cf.disconnect().await;
+                }
+                MemoryCommands::Display(var) => {
+                    println!("Connecting to {} ...", config.uri);
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memories = cf.memory.get_memories(None);
+
+                    let selected_id = match var.id {
+                      Some(id) => id,
+                      None => {
+                        println!("No memory ID provided, please select which memory to display:");
+                        for mem in &memories {
+                          println!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size);
+                        }
+                        get_user_selection(memories.iter().map(|m| m.memory_id as usize).collect())
+                      }
+                        
+                    };
+
+                    modules::memory::display(&cf, memories[selected_id].clone()).await;
+
+                    cf.disconnect().await;
+                  }
+                MemoryCommands::Erase(var) => {
+                    println!("Connecting to {} ...", config.uri);
+
+                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+                        &link_context,
+                        config.uri.as_str(),
+                    )
+                    .await?;
+
+                    let memories = cf.memory.get_memories(None);
+
+                    let selected_id = match var.id {
+                      Some(id) => id,
+                      None => {
+                        println!("No memory ID provided, please select which memory to display:");
+                        for mem in &memories {
+                          println!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size);
+                        }
+                        get_user_selection(memories.iter().map(|m| m.memory_id as usize).collect())
+                      }
+                        
+                    };
+
+                    modules::memory::erase(&cf, memories[selected_id].clone()).await;
+
+                    cf.disconnect().await;
+                  }
+            }
+        }
     }
 
     Ok(())
