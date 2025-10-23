@@ -22,10 +22,8 @@ flume = "0.11.1"
 num_enum = "0.7.4"
 half = "2.6.0"
 env_logger = "0.11.8"
-#crazyflie-link = { version="0.3.0", default-features = false }
-#crazyflie-lib = "0.2.0"
-crazyflie-link = {path = "../crazyflie-link-rs/crazyflie-link"}
-crazyflie-lib = {path = "../crazyflie-lib-rs"}
+crazyflie-link = { version="0.3.0", default-features = false }
+crazyflie-lib = {git="https://github.com/bitcraze/crazyflie-lib-rs.git", tag="0.3.0", default-features = false }
 clap = { version = "4.5.46", features = ["derive"] }
 
 serde = { version = "1.0.219", features = ["derive"] }
@@ -36,3 +34,5 @@ tokio = "1.47.1"
 serde_yaml = "0.9.34"
 probe-rs = "0.29.1"
 clap-num = "1.2.0"
+inquire = "0.9.1"
+indicatif = { version = "0.18.1", features = ["tokio"] }

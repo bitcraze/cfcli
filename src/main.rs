@@ -10,7 +10,10 @@ use probe_rs::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::{io::Write, process};
+use std::process;
+use inquire::{Select, MultiSelect};
+use indicatif::{ProgressBar, ProgressStyle};
+use crazyflie_lib::Value;
 
 pub mod modules {
     pub mod log;
@@ -67,7 +70,7 @@ enum Commands {
     },
 
     /// Access to the memory subsystem
-    Memory {
+    Mem {
         #[clap(subcommand)]
         command: MemoryCommands,
     },
@@ -219,27 +222,27 @@ struct WriteMemoryParameters {
 
 #[derive(Debug, Args)]
 struct VariableName {
-    /// Name of variable
-    #[clap(value_parser)]
-    name: String,
+    /// Comma-separated list of parameter names (defaults to list for selection)
+    /// Example: loco.mode,kalman.initialX
+    #[clap(value_parser, verbatim_doc_comment)]
+    names: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct VariableNameAndValue {
-    /// Name of variable
-    #[clap(value_parser)]
-    name: String,
-    /// Value to set
-    #[clap(value_parser)]
-    value: String,
+    /// Comma separated list of parameter value pairs (defaults to list of selection)
+    /// Example: usd.logging=1,loco.mode=2
+    #[clap(value_parser, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
+    params: Option<HashMap<String, String>>
 }
 
 #[derive(Debug, Args)]
 struct VariablesAndPeriod {
-    /// Comma-separated list of variable names
-    #[clap(value_parser)]
-    names: String,
-    /// The period in milliseconds to log at (default 100ms)
+    /// Comma-separated list of variable names (defaults to list for selection)
+    /// Example: stabilizer.roll,stabilizer.pitch
+    #[clap(value_parser, verbatim_doc_comment)]
+    names: Option<String>,
+    /// The period in milliseconds to log at
     #[clap(value_parser, default_value_t = 100)]
     period: u16,
 }
@@ -319,38 +322,22 @@ impl Default for Config {
 //   Ok(())
 // }
 
-fn get_user_selection(options: Vec<usize>) -> usize {
-    let mut selected: Option<usize> = None;
+async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &str) -> Result<crazyflie_lib::Crazyflie, Box<dyn std::error::Error>> {
+  let spinner = ProgressBar::new_spinner();
+  spinner.set_style(
+    ProgressStyle::default_spinner()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+      .template("{spinner:.green} {msg}")
+      .unwrap()
+  );
+  spinner.set_message(format!("Connecting to {}...", uri));
+  spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    while selected.is_none() {
-        print!("> ");
-        std::io::stdout()
-            .flush()
-            .expect("Could not flush console output");
-        let mut input = String::new();
-        std::io::stdin()
-            .read_line(&mut input)
-            .expect("Could not read input");
+  let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri).await?;
 
-        selected = match input.trim().parse::<usize>() {
-            Ok(idx) => {
-                if options.contains(&idx) {
-                  Some(idx)
-                } else {
-                    println!("Invalid index, please try again");
-                    None
-                }
-            }
-            Err(_) => {
-                println!("Invalid input, please try again");
-                None
-            }
-        };
-    }
-
-    selected.unwrap()
+  spinner.finish_with_message(format!("Connected to {}", uri));
+  Ok(cf)
 }
-
 
 // Example scans for Crazyflies, connect the first one and print the log and param variables TOC.
 #[tokio::main]
@@ -398,37 +385,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
 
-            for (idx, uri) in found.clone().into_iter().enumerate() {
-                println!("[{}] {}", idx, uri);
-            }
-
-            let mut selected_uri: Option<String> = None;
-
-            while selected_uri.is_none() {
-                print!("> ");
-                std::io::stdout()
-                    .flush()
-                    .expect("Could not flush console output");
-                let mut input = String::new();
-                std::io::stdin()
-                    .read_line(&mut input)
-                    .expect("Could not read input");
-
-                selected_uri = match input.trim().parse::<usize>() {
-                    Ok(idx) => {
-                        if idx < found.len() {
-                            Some(found[idx].clone())
-                        } else {
-                            println!("Invalid index, please try again");
-                            None
-                        }
-                    }
-                    Err(_) => {
-                        println!("Invalid input, please try again");
-                        None
-                    }
-                };
-            }
+            let selected_uri = Select::new("Select a link:", found.clone())
+                .prompt()
+                .ok();
 
             let selected_uri = selected_uri.unwrap();
 
@@ -438,15 +397,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Could not save configuration: {:?}", err);
             });
 
-            println!("Saved new default URI: {}", selected_uri.clone());
         }
         Commands::Console => {
-            println!("Connecting to {} ...", config.uri);
-
-            let cf = crazyflie_lib::Crazyflie::connect_from_uri(&link_context, config.uri.as_str())
-                .await?;
-
-            // update_cache(&mut config, &cf).expect("Could not populate last used cache");
+            let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
             let mut console_stream = cf.console.line_stream().await;
 
@@ -459,32 +412,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Log { command } => {
             match command {
                 LogCommands::List => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
-
-                    // update_cache(&mut config, &cf).expect("Could not populate last used cache");
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     modules::log::list(&cf).await?;
 
                     cf.disconnect().await;
                 }
                 LogCommands::Print(var) => {
-                    println!("Connecting to {} ...", config.uri);
 
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
-                    modules::log::print(&cf, var.names.as_str(), var.period as u64).await?;
+                    let names = match &var.names {
+                      Some(n) => n.clone(),
+                      None => {
+                        let available_vars = cf.log.names();
+                        let selected_vars = MultiSelect::new("Select variables to log:", available_vars)
+                          .prompt()
+                          .unwrap_or_else(|_| {
+                          println!("No variables selected");
+                          process::exit(1);
+                          });
+                        selected_vars.join(",")
+                      }
+                    };
+
+
+                    modules::log::print(&cf, names.as_str(), var.period as u64).await?;
 
                     cf.disconnect().await;
                 }
@@ -493,43 +448,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Param { command } => {
             match command {
                 ParamCommands::List => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
                     modules::param::list(&cf).await?;
                 }
                 ParamCommands::Get(var) => {
-                    println!("Connecting to {} ...", config.uri);
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let names = match &var.names {
+                      Some(n) => n.clone(),
+                      None => {
+                        let available_vars = cf.param.names();
+                        let selected_vars = MultiSelect::new("Select parameters to show:", available_vars)
+                          .prompt()
+                          .unwrap_or_else(|_| {
+                          println!("No parameters selected");
+                          process::exit(1);
+                          });
+                        selected_vars.join(",")
+                      }
+                    };                    
 
-                    // update_cache(&mut config, &cf).expect("Could not populate last used cache");
-
-                    modules::param::get(&cf, &var.name).await?;
+                    modules::param::get(&cf, &names).await?;
                 }
-                ParamCommands::Set(var) => {
-                    println!("Connecting to {} ...", config.uri);
+                ParamCommands::Set(params) => {
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let param_list = match &params.params {
+                      Some(p) => p.clone(),
+                      None => {
+                        let available_vars = cf.param.names();
+                        let available_vars: Vec<String> = available_vars
+                          .into_iter()
+                          .filter(|name| cf.param.is_writable(name).unwrap_or(false))
+                          .collect();
+                        let selected_vars = MultiSelect::new("Select parameters to set:", available_vars)
+                          .prompt()
+                          .unwrap_or_else(|_| {
+                          println!("No parameters selected");
+                          process::exit(1);
+                          });
 
-                    // update_cache(&mut config, &cf).expect("Could not populate last used cache");
+                        let mut param_map = HashMap::new();
+                        for name in selected_vars {
+                          let param: Value = cf.param.get(&name).await?;
+                          let value: String = inquire::Text::new(&format!("[{}] {:?}:", name, param))
+                            .prompt()
+                            .unwrap_or_else(|_| {
+                              println!("No value entered for parameter '{}'", name);
+                              process::exit(1);
+                            });
+                          param_map.insert(name, value);
+                        }
+                        param_map
+                      }
+                    };
 
-                    modules::param::set(&cf, &var.name, &var.value).await?;
+                    modules::param::set(&cf, &param_list).await?;
                 }
             }
         }
@@ -606,12 +583,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -702,13 +674,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 ConfigCommands::Display => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -723,16 +689,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                   }
             }
         }
-        Commands::Memory { command } => {
+        Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memory = cf.memory.get_memories(None);
 
@@ -745,13 +705,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Read(var) => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -780,13 +734,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Write(var) => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -809,24 +757,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Display(var) => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(None);
 
                     let selected_id = match var.id {
                       Some(id) => id,
                       None => {
-                        println!("No memory ID provided, please select which memory to display:");
-                        for mem in &memories {
-                          println!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size);
-                        }
-                        get_user_selection(memories.iter().map(|m| m.memory_id as usize).collect())
+                        let options: Vec<String> = memories.iter().map(|mem| {
+                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
+                        }).collect();
+
+                        let selected_option = Select::new("Select a memory:", options)
+                          .prompt()
+                          .unwrap_or_else(|_| {
+                            println!("No memory selected");
+                            process::exit(1);
+                          });
+
+                        // Extract the memory ID from the selected option
+                        let selected_id = selected_option
+                          .split(']')
+                          .next()
+                          .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
+                          .unwrap_or_else(|| {
+                            println!("Failed to parse memory ID");
+                            process::exit(1);
+                          });
+
+                        selected_id
                       }
                         
                     };
@@ -836,27 +795,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                   }
                 MemoryCommands::Erase(var) => {
-                    println!("Connecting to {} ...", config.uri);
-
-                    let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-                        &link_context,
-                        config.uri.as_str(),
-                    )
-                    .await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(None);
 
                     let selected_id = match var.id {
                       Some(id) => id,
                       None => {
-                        println!("No memory ID provided, please select which memory to display:");
-                        for mem in &memories {
-                          println!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size);
-                        }
-                        get_user_selection(memories.iter().map(|m| m.memory_id as usize).collect())
+                        let options: Vec<String> = memories.iter().map(|mem| {
+                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
+                        }).collect();
+
+                        let selected_option = Select::new("Select a memory:", options)
+                          .prompt()
+                          .unwrap_or_else(|_| {
+                            println!("No memory selected");
+                            process::exit(1);
+                          });
+
+                        // Extract the memory ID from the selected option
+                        let selected_id = selected_option
+                          .split(']')
+                          .next()
+                          .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
+                          .unwrap_or_else(|| {
+                            println!("Failed to parse memory ID");
+                            process::exit(1);
+                          });
+
+                        selected_id
                       }
                         
                     };
+
+                    if selected_id >= memories.len() {
+                      println!("Invalid memory ID selected");
+                      process::exit(1);
+                    }
 
                     modules::memory::erase(&cf, memories[selected_id].clone()).await;
 

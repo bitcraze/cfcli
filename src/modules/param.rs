@@ -1,6 +1,7 @@
 use crazyflie_lib::Crazyflie;
 use crazyflie_lib::Value;
 use crazyflie_lib::ValueType;
+use std::collections::HashMap;
 
 pub async fn list(cf: &Crazyflie) -> Result<(), Box<dyn std::error::Error>> {
   
@@ -21,21 +22,32 @@ pub async fn list(cf: &Crazyflie) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn get(cf: &Crazyflie, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn get(cf: &Crazyflie, names: &str) -> Result<(), Box<dyn std::error::Error>> {
 
-  let value:Value = cf.param.get(name).await?;
+  println!("{: <30} | {: <6} | {: <6}", "Name", "Access", "Value");
+  println!("{0:-<30}-|-{0:-<6}-|-{0:-<6}", "");
 
-  println!("{}: {:?}", name, value);
+  let name_list: Vec<&str> = names.split(',').collect();
+  for name in name_list {
+    let value: Value = cf.param.get(name).await?;
+    let writable = if cf.param.is_writable(&name)? {
+      "RW"
+    } else {
+      "RO"
+    };
+    println!("{: <30} | {: ^6} | {:?}", name, writable, value);
+  }
 
   Ok(())
 }
 
-pub async fn set(cf: &Crazyflie, name: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>) -> Result<(), Box<dyn std::error::Error>> {
 
-  match cf.param.get_type(name) {
-    Ok(ValueType::U8) => {
-      let value:u8 = value.parse().expect("Invalid value");
-      cf.param.set(name, value).await?;
+  for (name, value) in param_list {
+    match cf.param.get_type(&name) {
+      Ok(ValueType::U8) => {
+        let value:u8 = value.parse().expect("Invalid value");
+        cf.param.set(name, value).await?;
     },
     Ok(ValueType::U16) => {
       let value:u16 = value.parse().expect("Invalid value");
@@ -81,6 +93,8 @@ pub async fn set(cf: &Crazyflie, name: &str, value: &str) -> Result<(), Box<dyn 
       println!("Invalid value type");
     }
   }
+}
+  
 
   Ok(())
 }
