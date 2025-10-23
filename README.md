@@ -25,6 +25,9 @@ Usage: cfcli [OPTIONS] <COMMAND>
 Commands:
   log      Access to the log subsystem
   param    Access to the parameter subsystem
+  mem      Access to the memory subsystem
+  config   Configure the Crazyflie (radio settings, etc)
+  util     Various supporting utilities for the Crazyflie and its ecosystem
   scan     List the Crazyflies found while scanning (on the selected address)
   select   Scan for Crazyflies and select which one to save for later interactions
   console  Print the console text from a Crazyflie
@@ -62,6 +65,14 @@ And a log variable can be printed using the following command:
 cfcli log print stabilizer.roll 100
 ```
 
+Some commands support interactively selecting parameters, like the following commands:
+
+```text
+cfcli param get
+cfcli param set
+cfcli log print
+cfcli mem display
+```
 
 ## Development
 
