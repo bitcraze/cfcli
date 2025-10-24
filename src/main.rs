@@ -158,9 +158,9 @@ struct DeckBinflashParameters {
     /// Input file (in yaml format) containing the full configuration
     #[clap(value_parser)]
     input: String,
-    /// Probe index
-    #[clap(value_parser, default_value_t = -1)]
-    probe_idx: i8,
+    /// Probe index (defaults to selection if more than one debugger is connected)
+    #[clap(value_parser)]
+    probe_idx: Option<usize>,
 }
 
 #[derive(Debug, Args)]
@@ -547,18 +547,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let lister = Lister::new();
                             let probes = lister.list_all();
 
-                            let mut probe_idx = params.probe_idx;
-                            if probe_idx < 0 && probes.len() == 1 {
-                                probe_idx = 0;
-                            } else if probe_idx < 0 || probe_idx >= probes.len() as i8 {
-                              println!("Multiple probes found, please select which one to use:");
-                              for (i, p) in probes.iter().enumerate() {
-                                  println!("[{}] {}", i, p.identifier);
-                              }
-                              process::exit(1);
+                            if probes.is_empty() {
+                                println!("No probes found, cannot flash deck");
+                                process::exit(1);
                             }
 
-                            println!("Flashing deck binary to probe #{} ...", probe_idx);
+                            let probe_idx = match params.probe_idx {
+                                Some(idx) => {
+                                  if idx < probes.len() {
+                                    idx
+                                  } else {
+                                    println!("Invalid probe index");
+                                    process::exit(1);
+                                  }
+                                },
+                                None => {
+                                    if probes.len() == 1 {
+                                        0 as usize
+                                    } else {
+                                        let options: Vec<String> = probes.iter().enumerate().map(|(i, p)| {
+                                          format!("[{}] {} ({}:{}-{})", i, p.identifier, p.vendor_id, p.product_id, p.serial_number.as_deref().unwrap_or("N/A"))
+                                        }).collect();
+
+                                        let selected_option = Select::new("Select a probe:", options)
+                                          .prompt()
+                                          .unwrap_or_else(|_| {
+                                            println!("No probe selected");
+                                            process::exit(1);
+                                          });
+
+                                        // Extract the probe index from the selected option
+                                        let idx = selected_option
+                                          .split(']')
+                                          .next()
+                                          .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
+                                          .unwrap_or_else(|| {
+                                            println!("Failed to parse probe index");
+                                            process::exit(1);
+                                          });
+                                        idx
+                                    }
+                                }
+                            };
 
                             if probes.is_empty() {
                                 println!("No probes found, cannot flash deck");
@@ -566,7 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             let address = 0x08000000 + 1024 * 30;
-                            let probe = probes[params.probe_idx as usize].open()?;
+                            let probe = probes[probe_idx].open()?;
                             let mut session =
                                 probe.attach("STM32C011F6Ux", Permissions::default())?;
 
