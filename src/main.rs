@@ -87,6 +87,12 @@ enum Commands {
         command: UtilCommands,
     },
 
+    /// Access platform functionality
+    Platform {
+        #[clap(subcommand)]
+        command: PlatformCommands,
+    },
+
     /// List the Crazyflies found while scanning (on the selected address)
     Scan,
 
@@ -185,6 +191,12 @@ enum MemoryCommands {
     Display(SelectMemoryParameters),
     /// Erase a memory
     Erase(SelectMemoryParameters)
+}
+
+#[derive(Debug, Subcommand)]
+enum PlatformCommands {
+    /// Show information about the connected platform
+    Info,
 }
 
 #[derive(Debug, Args)]
@@ -867,6 +879,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     cf.disconnect().await;
                   }
+            }
+        }
+        Commands::Platform { command } => {
+            match command {
+                PlatformCommands::Info => {
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+
+                    let protocol_version = cf.platform.protocol_version().await?;
+                    let firmware_version = cf.platform.firmware_version().await?;
+                    let device_type_name = cf.platform.device_type_name().await?;
+
+                    println!("Platform\t: {}", device_type_name);
+                    println!("Firmware\t: {}", firmware_version);
+                    println!("CRTP protocol\t: {}", protocol_version);
+
+                    cf.disconnect().await;
+                }
             }
         }
     }
