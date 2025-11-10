@@ -212,10 +212,10 @@ struct ReadMemoryParameters {
     #[clap(value_parser)]
     id: usize,
     /// Offset in bytes to start reading from
-    #[clap(value_parser)]
+    #[clap(value_parser, value_parser=maybe_hex::<usize>)]
     offset: usize,
     /// Length in bytes to read
-    #[clap(value_parser)]
+    #[clap(value_parser, value_parser=maybe_hex::<usize>)]
     length: usize,
 }
 
@@ -225,7 +225,7 @@ struct WriteMemoryParameters {
     #[clap(value_parser)]
     id: usize,
     /// Offset in bytes to start reading from
-    #[clap(value_parser)]
+    #[clap(value_parser, value_parser=maybe_hex::<usize>)]
     offset: usize,
     /// Data to write (comma-separated list of bytes)
     #[clap(value_parser, value_delimiter = ',', value_parser=maybe_hex::<u8>)]
