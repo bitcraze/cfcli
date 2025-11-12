@@ -1,5 +1,5 @@
 use crate::utils::deckctrl::DeckConfig;
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_num::maybe_hex;
 use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed, RawMemory};
 use futures::StreamExt;
@@ -217,9 +217,18 @@ struct ReadMemoryParameters {
     /// Length in bytes to read
     #[clap(value_parser, value_parser=maybe_hex::<usize>)]
     length: usize,
+    /// File to save the read raw binary data into
+    #[clap(long, short = 'o')]
+    output: Option<String>,
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("source")
+        .required(true)
+        .multiple(false)
+        .args(&["data", "input"])
+))]
 struct WriteMemoryParameters {
     /// ID of memory to read
     #[clap(value_parser)]
@@ -228,8 +237,11 @@ struct WriteMemoryParameters {
     #[clap(value_parser, value_parser=maybe_hex::<usize>)]
     offset: usize,
     /// Data to write (comma-separated list of bytes)
-    #[clap(value_parser, value_delimiter = ',', value_parser=maybe_hex::<u8>)]
-    data: Vec<u8>,
+    #[clap(long, short = 'd', value_delimiter = ',', value_parser=maybe_hex::<u8>)]
+    data: Option<Vec<u8>>,
+    /// File to read raw binary data from
+    #[clap(long, short = 'i')]
+    input: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -765,17 +777,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let data = raw_access_memory.read(var.offset, var.length).await?;
 
-                    for (i, byte) in data.iter().enumerate() {
-                      if i % 16 == 0 {
-                        print!("\n{:08x}: ", var.offset + i);
+                    if let Some(output_file) = &var.output {
+                      std::fs::write(output_file, &data).unwrap_or_else(|e| {
+                        println!("Could not write to output file {}: {}", output_file, e);
+                        process::exit(1);
+                      });
+                      println!("Wrote {} bytes to {}", data.len(), output_file);
+                    } else {
+                      for (i, byte) in data.iter().enumerate() {
+                        if i % 16 == 0 {
+                          print!("\n{:08x}: ", var.offset + i);
+                        }
+                        print!("{:02x} ", byte);
                       }
-                      print!("{:02x} ", byte);
+                      println!();
                     }
-                    println!();
 
                     cf.disconnect().await;
                 }
                 MemoryCommands::Write(var) => {
+
+                    let data: Vec<u8> = match &var.data {
+                      Some(d) => d.clone(),
+                      None => {
+                        // Read from input file
+                        let input_file = match &var.input {
+                          Some(f) => f,
+                          None => {
+                            println!("No data provided to write, please provide data via --data or --input");
+                            process::exit(1);
+                          }
+                        };
+                        std::fs::read(input_file).unwrap_or_else(|e| {
+                          println!("Could not read input file {}: {}", input_file, e);
+                          process::exit(1);
+                        })
+                      }
+                    };
+
                     let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
 
                     let memories = cf.memory.get_memories(None);
@@ -792,9 +831,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    raw_access_memory.write(var.offset, &var.data).await?;
+                    raw_access_memory.write(var.offset, &data).await?;
 
-                    println!("Wrote {} bytes to memory ID={} at offset 0x{:x}", var.data.len(), var.id, var.offset);
+                    println!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), var.id, var.offset);
 
                     cf.disconnect().await;
                 }
