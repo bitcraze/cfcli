@@ -775,7 +775,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    let data = raw_access_memory.read(var.offset, var.length).await?;
+                    let progress_bar = ProgressBar::new(var.length as u64);
+                    progress_bar.set_style(
+                      ProgressStyle::default_bar()
+                      .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({eta})")
+                      .unwrap()
+                      .progress_chars("=>-")
+                    );
+
+                    let data = raw_access_memory.read_with_progress(var.offset, var.length, |progress, _total| {
+                      progress_bar.set_position(progress as u64);
+                    }).await?;
+
+                    progress_bar.finish_with_message("Read complete");
 
                     if let Some(output_file) = &var.output {
                       std::fs::write(output_file, &data).unwrap_or_else(|e| {
@@ -831,7 +843,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    raw_access_memory.write(var.offset, &data).await?;
+                    let progress_bar = ProgressBar::new(data.len() as u64);
+                    progress_bar.set_style(
+                      ProgressStyle::default_bar()
+                        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({eta})")
+                        .unwrap()
+                        .progress_chars("=>-")
+                    );
+
+                    raw_access_memory.write_with_progress(var.offset, &data, |progress, _total| {
+                      progress_bar.set_position(progress as u64);
+                    }).await?;
+
+                    progress_bar.finish_with_message("Write complete");
 
                     println!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), var.id, var.offset);
 
