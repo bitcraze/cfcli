@@ -819,7 +819,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memories = cf.memory.get_memories(None);
 
