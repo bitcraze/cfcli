@@ -2,6 +2,7 @@ use crate::utils::deckctrl::DeckConfig;
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_num::maybe_hex;
 use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed, RawMemory};
+use crazyflie_lib::TocCache;
 use futures::StreamExt;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
@@ -50,6 +51,10 @@ struct CliArgs {
     /// Specify address
     #[clap(short, long, value_parser, default_value_t=String::from("E7E7E7E7E7"))]
     address: String,
+
+    /// Do not use TOC cache
+    #[clap(short, long, action)]
+    no_toc_cache: bool,
 
     #[clap(subcommand)]
     command: Commands,
@@ -291,9 +296,7 @@ pub struct LatestCache {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     uri: String,
-
-    cache: Vec<(String, String)>,
-    auto_complete_cache: Option<LatestCache>,
+    toc_cache: HashMap<String, String>
 }
 
 impl Default for Config {
@@ -301,52 +304,51 @@ impl Default for Config {
         println!("No configuration found, loading default values");
         Config {
             uri: "".to_string(),
-            auto_complete_cache: None,
-            cache: Vec::new(),
+            toc_cache: HashMap::new(),
         }
     }
 }
 
-// fn update_cache(config: &mut Config, cf: &Crazyflie) -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Clone)]
+struct ConfigTocCache {
+    config: Config,
+    no_toc_cache: bool,
+}
 
-//   let mut auto_complete_cache = LatestCache {
-//     log: Vec::new(),
-//     param: Vec::new()
-//   };
+impl ConfigTocCache {
+    fn new(config: Config, no_toc_cache: bool) -> Self {
+        ConfigTocCache {
+            config,
+            no_toc_cache,
+        }
+    }
+}
 
-//   for name in cf.log.names() {
-//     auto_complete_cache.log.push(LatestCachedLogVariable {
-//       name: name.clone()
-//     });
-//   }
+impl TocCache for ConfigTocCache {
+    fn get_toc(&self, crc32: u32) -> Option<String> {
+        // println!("Getting TOC with crc32: {}", crc32);
+        match self.no_toc_cache {
+            true => return None,
+            false => self.config.toc_cache.get(&crc32.to_string()).cloned(),
+        } 
+    }
+    
+    fn store_toc(&mut self, crc32: u32, toc: &str) {
+        // dbg!("Storing TOC with crc32: {}", crc32);
 
-//   for name in cf.param.names() {
-//     auto_complete_cache.param.push(LatestCachedParameter {
-//       name: name.clone(),
-//       readonly: !cf.param.is_writable(&name)?
-//     });
-//   }
+        match self.no_toc_cache {
+            true => return,
+            false => {
+              self.config.toc_cache.insert(crc32.to_string(), toc.to_string());
+              confy::store("cf-cli", None, self.config.clone()).unwrap_or_else(|err| {
+                  println!("Could not save configuration: {:?}", err);
+              });              
+            },
+        }
+    }
+}
 
-//   config.auto_complete_cache = Some(auto_complete_cache);
-
-//   let cache = cf.get_caches();
-
-//   for entry in cache {
-//     let existing_entry = config.cache.iter_mut().find(|x| x.0 == entry.0);
-//     if existing_entry.is_none() {
-//       config.cache.push(entry);
-//     }
-
-//   }
-
-//   confy::store("cf-cli", config).unwrap_or_else(|err| {
-//     println!("Could not save configuration: {:?}", err);
-//   });
-
-//   Ok(())
-// }
-
-async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &str) -> Result<crazyflie_lib::Crazyflie, Box<dyn std::error::Error>> {
+async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache) -> Result<crazyflie_lib::Crazyflie, Box<dyn std::error::Error>> {
   let spinner = ProgressBar::new_spinner();
   spinner.set_style(
     ProgressStyle::default_spinner()
@@ -357,7 +359,7 @@ async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &
   spinner.set_message(format!("Connecting to {}...", uri));
   spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-  let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri).await?;
+  let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache).await?;
 
   spinner.finish_with_message(format!("Connected to {}", uri));
   Ok(cf)
@@ -370,8 +372,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config: Config = confy::load("cf-cli", None).unwrap_or_else(|err| {
         println!("Could not load config file: {:?}", err);
-        process::exit(1);
+        Config::default()
     });
+
+    let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
 
     let link_context = crazyflie_link::LinkContext::new();
 
@@ -423,7 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         }
         Commands::Console => {
-            let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
             let mut console_stream = cf.console.line_stream().await;
 
@@ -436,7 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Log { command } => {
             match command {
                 LogCommands::List => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     modules::log::list(&cf).await?;
 
@@ -444,7 +448,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 LogCommands::Print(var) => {
 
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
@@ -472,14 +476,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Param { command } => {
             match command {
                 ParamCommands::List => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
                     modules::param::list(&cf).await?;
                 }
                 ParamCommands::Get(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -498,7 +502,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modules::param::get(&cf, &names).await?;
                 }
                 ParamCommands::Set(params) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let param_list = match &params.params {
                       Some(p) => p.clone(),
@@ -637,7 +641,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -728,7 +732,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 ConfigCommands::Display => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -746,7 +750,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memory = cf.memory.get_memories(None);
 
@@ -759,7 +763,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Read(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -838,7 +842,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Display(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -876,7 +880,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cf.disconnect().await;
                   }
                 MemoryCommands::Erase(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -923,7 +927,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Platform { command } => {
             match command {
                 PlatformCommands::Info => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str()).await?;
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
                     let protocol_version = cf.platform.protocol_version().await?;
                     let firmware_version = cf.platform.firmware_version().await?;
