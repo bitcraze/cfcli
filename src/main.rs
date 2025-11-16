@@ -27,22 +27,34 @@ pub mod utils {
 }
 
 /// Custom parser: "a=1,b=2" → { "a" => "1", "b" => "2" }
+/// Supports hex values with 0x prefix: "a=0x10,b=2" → { "a" => "16", "b" => "2" }
 fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
-    let mut map = HashMap::new();
+  let mut map = HashMap::new();
 
-    for pair in s.split(',') {
-        let mut iter = pair.splitn(2, '=');
-        let key = iter.next().ok_or("Missing key")?.trim().to_string();
-        let value = iter.next().ok_or("Missing value")?.trim().to_string();
+  for pair in s.split(',') {
+    let mut iter = pair.splitn(2, '=');
+    let key = iter.next().ok_or("Missing key")?.trim().to_string();
+    let value_str = iter.next().ok_or("Missing value")?.trim();
 
-        if key.is_empty() {
-            return Err("Empty key found".into());
-        }
-
-        map.insert(key, value);
+    if key.is_empty() {
+      return Err("Empty key found".into());
     }
 
-    Ok(map)
+    // Parse hex if it starts with 0x, otherwise keep as string
+    let value = if let Some(hex_str) = value_str.strip_prefix("0x").or_else(|| value_str.strip_prefix("0X")) {
+      // Try to parse as hex, but keep original string if parsing fails
+      match u64::from_str_radix(hex_str, 16) {
+        Ok(num) => num.to_string(),
+        Err(_) => value_str.to_string(),
+      }
+    } else {
+      value_str.to_string()
+    };
+
+    map.insert(key, value);
+  }
+
+  Ok(map)
 }
 
 #[derive(Parser, Debug)]
