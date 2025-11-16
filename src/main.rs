@@ -20,6 +20,7 @@ pub mod modules {
     pub mod log;
     pub mod param;
     pub mod memory;
+    pub mod bootloader;
 }
 
 pub mod utils {
@@ -214,6 +215,14 @@ enum MemoryCommands {
 enum PlatformCommands {
     /// Show information about the connected platform
     Info,
+    /// Reboot firmware (will NOT power cycle decks, or?)
+    Reboot,
+    /// Power off the platform
+    PowerOff,
+    /// Put the platform to sleep
+    Sleep,
+    /// Wake up the platform
+    Wakeup,
 }
 
 #[derive(Debug, Args)]
