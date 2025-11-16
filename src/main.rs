@@ -455,10 +455,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Console => {
             let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache).await?;
 
-            let mut console_stream = cf.console.line_stream().await;
+            let mut console_stream = cf.console.stream_no_history().await;
 
             while let Some(line) = console_stream.next().await {
-                println!("{}", line);
+                print!("{}", line);
             }
 
             cf.disconnect().await;
