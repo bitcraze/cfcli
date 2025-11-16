@@ -417,7 +417,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .prompt()
                 .ok();
 
-            let selected_uri = selected_uri.unwrap();
+            let selected_uri = match selected_uri {
+                Some(uri) => uri,
+                None => {
+                    process::exit(1);
+                }
+            };
 
             config.uri = selected_uri.clone();
 
