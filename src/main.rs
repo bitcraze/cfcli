@@ -21,6 +21,7 @@ pub mod modules {
     pub mod param;
     pub mod memory;
     pub mod bootloader;
+    pub mod console;
 }
 
 pub mod utils {
@@ -118,7 +119,11 @@ enum Commands {
     Select,
 
     /// Print the console text from a Crazyflie
-    Console,
+    Console {
+      /// Output raw console data without processing
+      #[clap(long)]
+      no_format: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

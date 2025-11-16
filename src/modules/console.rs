@@ -1,0 +1,24 @@
+use futures::StreamExt;
+use colored::*;
+
+fn format_console_line(line: &str) -> String {
+    if let Some((subsystem, message)) = line.split_once(':') {
+        format!("{}:{}", subsystem.bold(), message)
+    } else {
+        line.to_string()
+    }
+}
+
+pub async fn print(cf: &crazyflie_lib::Crazyflie, no_format: bool) -> Result<(), Box<dyn std::error::Error>> {
+            let mut console_stream = cf.console.stream_no_history().await;
+
+    while let Some(line) = console_stream.next().await {
+        if no_format {
+            print!("{}", line);
+        } else {
+            print!("{}", format_console_line(&line));
+        }
+    }
+
+    Ok(())
+}
