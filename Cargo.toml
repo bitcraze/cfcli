@@ -36,3 +36,4 @@ probe-rs = "0.29.1"
 clap-num = "1.2.0"
 inquire = "0.9.1"
 indicatif = { version = "0.18.1", features = ["tokio"] }
+colored = "3.0.0"
