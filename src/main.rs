@@ -966,7 +966,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     cf.disconnect().await;
                 }
+                PlatformCommands::Reboot => {
+                    modules::bootloader::reboot(&link_context, config.uri.as_str()).await?;
+                },
+                PlatformCommands::PowerOff => {
+                    modules::bootloader::power_off(&link_context, config.uri.as_str()).await?;
+                },
+                PlatformCommands::Sleep => {
+                    modules::bootloader::sysoff(&link_context, config.uri.as_str()).await?;
+                },
+                PlatformCommands::Wakeup => {
+                    modules::bootloader::syson(&link_context, config.uri.as_str()).await?;
+                }
             }
+            
+        }
         }
     }
 
