@@ -9,7 +9,6 @@ use probe_rs::{
     Permissions,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::process;
 use std::sync::Arc;
@@ -355,16 +354,17 @@ impl Default for Config {
         }
     }
 }
+
 #[derive(Clone)]
 struct ConfigTocCache {
-    config: Arc<RwLock<Config>>,
+    config: Arc<std::sync::Mutex<Config>>,
     no_toc_cache: bool,
 }
 
 impl ConfigTocCache {
     fn new(config: Config, no_toc_cache: bool) -> Self {
         ConfigTocCache {
-            config: Arc::new(RwLock::new(config)),
+            config: Arc::new(std::sync::Mutex::new(config)),
             no_toc_cache,
         }
     }
@@ -374,10 +374,7 @@ impl TocCache for ConfigTocCache {
     fn get_toc(&self, crc32: u32) -> Option<String> {
         match self.no_toc_cache {
             true => return None,
-            false => {
-                let config = self.config.try_read().ok()?;
-                config.toc_cache.get(&crc32.to_string()).cloned()
-            }
+            false => self.config.lock().unwrap().toc_cache.get(&crc32.to_string()).cloned(),
         } 
     }
     
@@ -385,14 +382,11 @@ impl TocCache for ConfigTocCache {
         match self.no_toc_cache {
             true => return,
             false => {
-                if let Ok(mut config) = self.config.try_write() {
-                    config.toc_cache.insert(crc32.to_string(), toc.to_string());
-                    if let Ok(config_clone) = self.config.try_read() {
-                        confy::store("cf-cli", None, config_clone.clone()).unwrap_or_else(|err| {
-                            println!("Could not save configuration: {:?}", err);
-                        });
-                    }
-                }
+              let mut config = self.config.lock().unwrap();
+              config.toc_cache.insert(crc32.to_string(), toc.to_string());
+              confy::store("cf-cli", None, config.clone()).unwrap_or_else(|err| {
+                  println!("Could not save configuration: {:?}", err);
+              });              
             },
         }
     }
