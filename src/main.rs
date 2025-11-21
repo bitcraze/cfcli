@@ -10,8 +10,10 @@ use probe_rs::{
     Permissions,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::process;
+use std::sync::Arc;
 use inquire::{Select, MultiSelect};
 use indicatif::{ProgressBar, ProgressStyle};
 use crazyflie_lib::Value;
@@ -322,7 +324,7 @@ pub struct LatestCache {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     uri: String,
-    toc_cache: HashMap<String, String>
+    toc_cache: HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -334,17 +336,16 @@ impl Default for Config {
         }
     }
 }
-
 #[derive(Clone)]
 struct ConfigTocCache {
-    config: Config,
+    config: Arc<RwLock<Config>>,
     no_toc_cache: bool,
 }
 
 impl ConfigTocCache {
     fn new(config: Config, no_toc_cache: bool) -> Self {
         ConfigTocCache {
-            config,
+            config: Arc::new(RwLock::new(config)),
             no_toc_cache,
         }
     }
@@ -352,23 +353,27 @@ impl ConfigTocCache {
 
 impl TocCache for ConfigTocCache {
     fn get_toc(&self, crc32: u32) -> Option<String> {
-        // println!("Getting TOC with crc32: {}", crc32);
         match self.no_toc_cache {
             true => return None,
-            false => self.config.toc_cache.get(&crc32.to_string()).cloned(),
+            false => {
+                let config = self.config.try_read().ok()?;
+                config.toc_cache.get(&crc32.to_string()).cloned()
+            }
         } 
     }
     
-    fn store_toc(&mut self, crc32: u32, toc: &str) {
-        // dbg!("Storing TOC with crc32: {}", crc32);
-
+    fn store_toc(&self, crc32: u32, toc: &str) {
         match self.no_toc_cache {
             true => return,
             false => {
-              self.config.toc_cache.insert(crc32.to_string(), toc.to_string());
-              confy::store("cf-cli", None, self.config.clone()).unwrap_or_else(|err| {
-                  println!("Could not save configuration: {:?}", err);
-              });              
+                if let Ok(mut config) = self.config.try_write() {
+                    config.toc_cache.insert(crc32.to_string(), toc.to_string());
+                    if let Ok(config_clone) = self.config.try_read() {
+                        confy::store("cf-cli", None, config_clone.clone()).unwrap_or_else(|err| {
+                            println!("Could not save configuration: {:?}", err);
+                        });
+                    }
+                }
             },
         }
     }
