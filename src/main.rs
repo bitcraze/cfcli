@@ -24,6 +24,7 @@ pub mod modules {
     pub mod memory;
     pub mod bootloader;
     pub mod console;
+    pub mod test;
 }
 
 pub mod utils {
@@ -108,6 +109,12 @@ enum Commands {
         command: UtilCommands,
     },
 
+    /// Run tests with the Crazyflie
+    Test {
+        #[clap(subcommand)]
+        command: TestCommands,
+    },
+
     /// Access platform functionality
     Platform {
         #[clap(subcommand)]
@@ -174,6 +181,19 @@ enum UtilCommands {
         #[clap(subcommand)]
         command: DeckControlCommands,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum TestCommands {
+    /// Stability testing
+    Stability (StabilityTestParameters),
+}
+
+#[derive(Debug, Args)]
+struct StabilityTestParameters {
+    /// Number of iterations to test
+    #[clap(value_parser, default_value_t = 100)]
+    iterations: u32,
 }
 
 #[derive(Debug, Subcommand)]
@@ -986,6 +1006,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
         }
+        Commands::Test { command } => {
+            match command {
+                TestCommands::Stability(params) => {
+                    modules::test::stability(&link_context, config.uri.as_str(), params.iterations).await?;
+                }
+            }
         }
     }
 
