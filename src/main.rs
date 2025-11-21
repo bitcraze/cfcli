@@ -3,7 +3,6 @@ use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_num::maybe_hex;
 use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed, RawMemory};
 use crazyflie_lib::TocCache;
-use futures::StreamExt;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
     flashing::{DownloadOptions},

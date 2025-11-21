@@ -1,9 +1,8 @@
 use std::process::exit;
-use std::os::unix::process;
 use std::pin::Pin;
 use std::future::Future;
 
-use crazyflie_lib::{NoTocCache, subsystems::log::LogPeriod};
+use crazyflie_lib::NoTocCache;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 
@@ -162,7 +161,7 @@ async fn run_stability_tests(
     })
     .collect();
   
-  let mut rng = rand::thread_rng();
+  let mut rng = rand::rng();
   
   let mut test_counts = vec![0u32; num_tests];
   
@@ -174,7 +173,7 @@ async fn run_stability_tests(
       .map(|(idx, _)| idx)
       .collect();
     
-    let test_idx = available_tests[rng.gen_range(0..available_tests.len())];
+    let test_idx = available_tests[rng.random_range(0..available_tests.len())];
 
     match tests[test_idx].run(link_context, uri).await {
         Ok(_) => {
