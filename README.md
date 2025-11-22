@@ -1,9 +1,18 @@
 # Crazyflie CLI
 
 This is a command line interface (CLI) for the Bitcraze Crazyflie written in Rust. It's intended to be used
-during development to easily log the console, set parameters and get logging variables. It's not
-intended to be used from any scripts to make the Crazyflie do things, then using the
-[Crazyflie python library](https://github.com/bitcraze/crazyflie-lib-python) is preferred.
+during development to quickly access various subsystems in the Crazyflie and supports features like:
+
+* Get console output
+* Log variables
+* Get and set parameters
+* Read and write (as well as display and erase some) memories
+* Configure radio settings like channel, address and speed
+* Turn the platform on/off or put it to sleep/wake it up
+* Run stability tests with the Crazyflie
+
+It's not intended to be used fopr creating more advanced scripts or functionality, it's better to
+use the the [Crazyflie python library](https://github.com/bitcraze/crazyflie-lib-python) for that.
 
 ## Installation
 
@@ -42,14 +51,14 @@ Options:
   -V, --version       Print version
 ```
 
-To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies 
+To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies
 and selecting the one you prefer.
 
 ```text
 cfcli select
 ```
 
-If you have a Crazyflie on a different address than the default you can specify it using the `-a` flag:
+If you have a Crazyflie on a different address than the default you can specify it while scanning or selecting:
 
 ```text
 cfcli select 0xE7E7E7E7E7
