@@ -23,20 +23,23 @@ Crazyflie command-line client
 Usage: cfcli [OPTIONS] <COMMAND>
 
 Commands:
-  log      Access to the log subsystem
-  param    Access to the parameter subsystem
-  mem      Access to the memory subsystem
-  config   Configure the Crazyflie (radio settings, etc)
-  util     Various supporting utilities for the Crazyflie and its ecosystem
-  scan     List the Crazyflies found while scanning (on the selected address)
-  select   Scan for Crazyflies and select which one to save for later interactions
-  console  Print the console text from a Crazyflie
-  help     Print this message or the help of the given subcommand(s)
+  log       Access to the log subsystem
+  param     Access to the parameter subsystem
+  mem       Access to the memory subsystem
+  config    Configure the Crazyflie (radio settings, etc)
+  util      Various supporting utilities for the Crazyflie and its ecosystem
+  test      Run tests with the Crazyflie
+  platform  Access platform functionality
+  scan      List the Crazyflies found while scanning (on the selected address)
+  select    Scan for Crazyflies and select which one to save for later interactions
+  console   Print the console text from a Crazyflie
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
-  -a, --address <ADDRESS>  Specify address [default: E7E7E7E7E7]
-  -h, --help               Print help
-  -V, --version            Print version
+  -n, --no-toc-cache  Do not use TOC cache
+  -d, --debug         Enable debug mode
+  -h, --help          Print help
+  -V, --version       Print version
 ```
 
 To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies 
@@ -49,7 +52,7 @@ cfcli select
 If you have a Crazyflie on a different address than the default you can specify it using the `-a` flag:
 
 ```text
-cfcli -a E7E7E7E7E7 select 
+cfcli select 0xE7E7E7E7E7
 ```
 
 Now this URI will be used in all commands until a new one is selected. For instance a parameter

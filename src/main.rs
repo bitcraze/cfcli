@@ -63,10 +63,6 @@ fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct CliArgs {
-    /// Specify address
-    #[clap(short, long, value_parser, default_value_t=String::from("E7E7E7E7E7"))]
-    address: String,
-
     /// Do not use TOC cache
     #[clap(short, long, action)]
     no_toc_cache: bool,
@@ -124,10 +120,10 @@ enum Commands {
     },
 
     /// List the Crazyflies found while scanning (on the selected address)
-    Scan,
+    Scan(ScanOptions),
 
     /// Scan for Crazyflies and select which one to save for later interactions
-    Select,
+    Select(ScanOptions),
 
     /// Print the console text from a Crazyflie
     Console {
@@ -135,6 +131,13 @@ enum Commands {
       #[clap(long)]
       no_format: bool,
     },
+}
+
+#[derive(Debug, Args)]
+struct ScanOptions {
+    /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7)
+    #[clap(value_parser, default_value = "E7E7E7E7E7")]
+    address: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -421,6 +424,20 @@ async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &
   Ok(cf)
 }
 
+pub fn decode_address(address: &str) -> Result<[u8; 5], Box<dyn std::error::Error>> {
+    match u64::from_str_radix(&address.replace("0x", ""), 16) {
+        Ok(a) if a <= 0xFFFFFFFFFF => Ok(a.to_be_bytes()[3..]
+            .try_into()
+            .expect("Could not convert u64 to [u8; 5]")),
+        Ok(_) => {
+            Err("Invalid address, please provide a valid 5 byte hexadecimal address".into())
+        }
+        Err(_) => {
+            Err("Invalid address, please provide a valid 5 byte hexadecimal address".into())
+        }
+    }
+}
+
 // Example scans for Crazyflies, connect the first one and print the log and param variables TOC.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -435,34 +452,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let link_context = crazyflie_link::LinkContext::new();
 
-    let cf_address: [u8; 5] = match u64::from_str_radix(&args.address.replace("0x", ""), 16) {
-        Ok(a) if a <= 0xFFFFFFFFFF => a.to_be_bytes()[3..]
-            .try_into()
-            .expect("Could not convert u64 to [u8; 5]"),
-        Ok(_) => {
-            return Err(
-                "Invalid address, please provide a valid 5 byte hexadecimal address".into(),
-            );
-        }
-        Err(_) => {
-            return Err(
-                "Invalid address, please provide a valid 5 byte hexadecimal address".into(),
-            );
-        }
-    };
-
     match &args.command {
-        Commands::Scan => {
+        Commands::Scan(scan_options) => {
             // Scan for Crazyflies on the default address
-            let found = link_context.scan(cf_address).await?;
+            let address = decode_address(&scan_options.address)?;
+            let found = link_context.scan(address).await?;
 
             for uri in found {
                 println!("> {}", uri);
             }
         }
-        Commands::Select => {
+        Commands::Select(scan_options) => {
             // Scan for Crazyflies on the default address
-            let found = link_context.scan(cf_address).await?;
+            let address = decode_address(&scan_options.address)?;
+            let found = link_context.scan(address).await?;
 
             if found.is_empty() {
                 println!("No Crazyflies found");
