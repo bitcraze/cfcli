@@ -11,7 +11,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * Turn the platform on/off or put it to sleep/wake it up
 * Run stability tests with the Crazyflie
 
-It's not intended to be used fopr creating more advanced scripts or functionality, it's better to
+It's not intended to be used for creating more advanced scripts or functionality, it's better to
 use the the [Crazyflie python library](https://github.com/bitcraze/crazyflie-lib-python) for that.
 
 ## Installation
