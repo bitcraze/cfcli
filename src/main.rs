@@ -27,6 +27,7 @@ pub mod modules {
 
 pub mod utils {
     pub mod deckctrl;
+    pub mod display;
 }
 
 /// Custom parser: "a=1,b=2" → { "a" => "1", "b" => "2" }
@@ -609,18 +610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(output) = &params.output {
                                 std::fs::write(output, &bytes)?;
                             } else {
-                                for (i, byte) in bytes.iter().enumerate() {
-                                    if i % 16 == 0 {
-                                        print!("{:08x}: ", i);
-                                    }
-                                    print!("{:02x} ", byte);
-                                    if (i + 1) % 16 == 0 {
-                                        println!();
-                                    }
-                                }
-                                if bytes.len() % 16 != 0 {
-                                    println!();
-                                }
+                                display::hex_dump(bytes, 0);
                             }
                         }
                         DeckControlCommands::Binflash(params) => {
@@ -844,13 +834,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       });
                       println!("Wrote {} bytes to {}", data.len(), output_file);
                     } else {
-                      for (i, byte) in data.iter().enumerate() {
-                        if i % 16 == 0 {
-                          print!("\n{:08x}: ", var.offset + i);
-                        }
-                        print!("{:02x} ", byte);
-                      }
-                      println!();
+                      display::hex_dump(data, var.offset);
                     }
 
                     cf.disconnect().await;
