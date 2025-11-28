@@ -224,9 +224,9 @@ struct DeckBingenParameters {
     /// Input file (in yaml format) containing the full configuration
     #[clap(value_parser)]
     input: String,
-    /// Binary output for writing directly to flash
-    #[clap(value_parser, default_value = "dev-deck.bin")]
-    output: String,
+    /// File to save the read raw binary data into
+    #[clap(long, short = 'o')]
+    output: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -603,28 +603,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 UtilCommands::DeckCtrl { command } => {
                     match command {
                         DeckControlCommands::Bingen(params) => {
-                            println!(
-                                "Generating deck binary from {} to {}",
-                                params.input, params.output
-                            );
                             let deck_config = DeckConfig::from_yaml(params.input.clone())?;
                             let bytes = deck_config.to_bytes();
-                            // Write bytes to file
-                            std::fs::write(&params.output, &bytes)?;
-
-                            // Print bytes as hex with 16 chars in each row
-                            println!("Generated binary ({} bytes):", bytes.len());
-                            for (i, byte) in bytes.iter().enumerate() {
-                                if i % 16 == 0 {
-                                    print!("{:08x}: ", i);
+                            
+                            if let Some(output) = &params.output {
+                                std::fs::write(output, &bytes)?;
+                            } else {
+                                for (i, byte) in bytes.iter().enumerate() {
+                                    if i % 16 == 0 {
+                                        print!("{:08x}: ", i);
+                                    }
+                                    print!("{:02x} ", byte);
+                                    if (i + 1) % 16 == 0 {
+                                        println!();
+                                    }
                                 }
-                                print!("{:02x} ", byte);
-                                if (i + 1) % 16 == 0 {
+                                if bytes.len() % 16 != 0 {
                                     println!();
                                 }
-                            }
-                            if bytes.len() % 16 != 0 {
-                                println!();
                             }
                         }
                         DeckControlCommands::Binflash(params) => {
