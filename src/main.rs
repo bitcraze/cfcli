@@ -610,7 +610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(output) = &params.output {
                                 std::fs::write(output, &bytes)?;
                             } else {
-                                display::hex_dump(bytes, 0);
+                                utils::display::hex_dump(bytes, 0);
                             }
                         }
                         DeckControlCommands::Binflash(params) => {
@@ -834,7 +834,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       });
                       println!("Wrote {} bytes to {}", data.len(), output_file);
                     } else {
-                      display::hex_dump(data, var.offset);
+                      utils::display::hex_dump(data, var.offset);
                     }
 
                     cf.disconnect().await;
