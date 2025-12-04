@@ -197,8 +197,8 @@ enum TestCommands {
 
 #[derive(Debug, Args)]
 struct StabilityTestParameters {
-    /// Number of iterations to test
-    #[clap(value_parser, default_value_t = 100)]
+    /// Number of iterations to run each test
+    #[clap(value_parser, default_value_t = 10)]
     iterations: u32,
 }
 

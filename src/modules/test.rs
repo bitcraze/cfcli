@@ -144,12 +144,11 @@ async fn run_stability_tests(
     tests: Vec<Box<dyn StabilityTest>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
   let num_tests = tests.len();
-  let target_per_test = iterations / num_tests as u32;
   let multi = indicatif::MultiProgress::new();
   let bars: Vec<ProgressBar> = tests
     .iter()
     .map(|test| {
-      let bar = multi.add(ProgressBar::new(target_per_test as u64));
+      let bar = multi.add(ProgressBar::new(iterations as u64));
       bar.set_style(
         ProgressStyle::default_bar()
           .template(&format!("{} [{{bar:40}}] {{pos}}/{{len}} ({{eta}})", test.name()))
@@ -165,11 +164,11 @@ async fn run_stability_tests(
   
   let mut test_counts = vec![0u32; num_tests];
   
-  while test_counts.iter().any(|&count| count < target_per_test) {
+  while test_counts.iter().any(|&count| count < iterations) {
     let available_tests: Vec<usize> = test_counts
       .iter()
       .enumerate()
-      .filter(|(_, &count)| count < target_per_test)
+      .filter(|(_, &count)| count < iterations)
       .map(|(idx, _)| idx)
       .collect();
     
