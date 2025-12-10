@@ -15,6 +15,7 @@ pub struct DeckConfig {
   pub pid: u8,
   pub rev: char,
   pub name: String,
+  pub manufactured: Option<String>,
   pub partitions: Vec<Partition>,
 }
 
@@ -45,9 +46,35 @@ impl DeckConfig {
     name_array[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
     bytes.extend_from_slice(&name_array);
 
+    if let Some(mfg) = &self.manufactured {
+      // Parse date YYYY-MM-DD and encode as 1 byte year (offset from 2000) + 1 byte month + 1 byte day
+      let parts: Vec<&str> = mfg.split('-').collect();
+      if parts.len() == 3 {
+        let year: u16 = parts[0].parse().unwrap_or(0);
+        let month: u8 = parts[1].parse().unwrap_or(0);
+        let day: u8 = parts[2].parse().unwrap_or(0);
+        bytes.push((year - 2000) as u8);
+        bytes.push(month);
+        bytes.push(day);
+      }
+    }
+
     // Zero pad after header
-    while bytes.len() < 0x20 {
+    while bytes.len() < 0x1F {
       bytes.push(0);
+    }
+
+    // Calculate checksum: sum of first 0x1F bytes, then write value at 0x1F that makes total sum 0
+    let sum: u8 = bytes.iter().take(0x1F).fold(0u8, |acc, &b| acc.wrapping_add(b));
+    let checksum = (0u8).wrapping_sub(sum);
+    bytes.push(checksum);
+
+    // Add partitions
+    for partition in &self.partitions {
+      bytes.push((partition.size & 0xFF) as u8);
+      bytes.push(((partition.size >> 8) & 0xFF) as u8);
+      bytes.push(partition.id);
+      bytes.extend_from_slice(&partition.data);
     }
 
     // Terminate the partitions with one of zero size
