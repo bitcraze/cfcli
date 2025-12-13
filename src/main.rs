@@ -828,15 +828,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    let data = raw_access_memory.read(var.offset, var.length).await?;
-
                     if let Some(output_file) = &var.output {
+
+                        let progress_bar = utils::display::get_progressbar(var.length, None);   
+                        let pb = progress_bar.clone();
+                        let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
+                          pb.set_position(bytes_written as u64);
+                        };
+                        let data = raw_access_memory.read_with_progress(var.offset, var.length, progress_callback).await?;
+
+                        progress_bar.finish_with_message(format!("Read {} bytes from memory ID={} at offset 0x{:x}", var.length, var.id, var.offset));
+
                       std::fs::write(output_file, &data).unwrap_or_else(|e| {
                         println!("Could not write to output file {}: {}", output_file, e);
                         process::exit(1);
                       });
-                      println!("Wrote {} bytes to {}", data.len(), output_file);
                     } else {
+                      let data = raw_access_memory.read(var.offset, var.length).await?;
                       utils::display::hex_dump(data, var.offset);
                     }
 
@@ -878,9 +886,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    raw_access_memory.write(var.offset, &data).await?;
+                    let progress_bar = utils::display::get_progressbar(data.len(), None);   
+                    let pb = progress_bar.clone();
+                    let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
+                      pb.set_position(bytes_written as u64);
+                    };
 
-                    println!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), var.id, var.offset);
+                    raw_access_memory.write_with_progress(var.offset, &data, progress_callback).await?;
+
+                    progress_bar.finish_with_message(format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), var.id, var.offset));
 
                     cf.disconnect().await;
                 }
