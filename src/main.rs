@@ -802,7 +802,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     println!("Memories:");
                     for mem in memory {
-                      println!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size);
+                      let memory_serial = mem.serial.as_ref()
+                        .map(|s| format!(" (0x{})", s.iter().map(|b| format!("{:02X}", b)).collect::<String>()))
+                        .unwrap_or_default();
+                      println!("[{}] {:?} size={}k (0x{:x}/{}){}", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size, memory_serial);
                     }
 
 
