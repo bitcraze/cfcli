@@ -28,6 +28,7 @@ pub mod modules {
 pub mod utils {
     pub mod deckctrl;
     pub mod display;
+    pub mod firmware;
 }
 
 /// Custom parser: "a=1,b=2" → { "a" => "1", "b" => "2" }
@@ -106,6 +107,11 @@ enum Commands {
     Util {
         #[clap(subcommand)]
         command: UtilCommands,
+    },
+
+    Bootload {
+        #[clap(subcommand)]
+        command: BootloadCommands,
     },
 
     /// Run tests with the Crazyflie
@@ -208,6 +214,66 @@ enum DeckControlCommands {
     Bingen(DeckBingenParameters),
     /// Flash the configuration binary to the deck
     Binflash(DeckBinflashParameters),
+}
+
+#[derive(Debug, Subcommand)]
+enum BootloadCommands {
+  /// Print bootloader information
+  Info(InfoParameters),
+  /// List available releases
+  Releases,
+  /// Flash firmware to the device
+  Flash(FlashParameters),
+}
+
+#[derive(Debug, Args)]
+struct InfoParameters {
+  /// Use coldboot (i.e rescue mode) to flash the device
+  #[clap(long, default_value_t = false)]
+  cold: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(
+  // group(
+  //   ArgGroup::new("source_type")
+  //     .args(&["release", "zip"])
+  //     .required(false)
+  //     .multiple(false)
+  // ),
+  group(
+    ArgGroup::new("firmware_source")
+      .args(&["release", "zip", "bin"])
+      .required(true)
+      .multiple(true)
+  )
+)]
+struct FlashParameters {
+  /// Release name, interactive selection if left blank (cannot be combined with zip)
+  #[clap(long)]
+  release: Option<Option<String>>,
+  /// Release ZIP file path (cannot be combined with release)
+  #[clap(long)]
+  zip: Option<String>,
+  /// Comma-separated list of key=value pairs for targets and binary files.
+  /// Note that these will override any files in release or zip.
+  /// 
+  /// Example: stm32-fw=cf2_stm.bin,nrf51-fw=cf2_nrf.bin
+  #[clap(long, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
+  bin: Option<HashMap<String, String>>,
+  /// Comma-separated list of targets to flash, interactive selection if
+  /// left blank. By default all targets found in the release/zip/bin will
+  /// be flashed.
+  /// 
+  /// Example: stm32-fw,nrf51-fw
+  #[clap(long, verbatim_doc_comment)]
+  targets: Option<Option<String>>,
+  /// Do not verify flashed data
+  #[clap(long, default_value_t = false)]
+  no_verify: bool,
+  /// Use coldboot (i.e rescue mode) to flash the device
+  #[clap(long, default_value_t = false)]
+  cold: bool,
 }
 
 #[derive(Debug, Args)]
@@ -364,7 +430,7 @@ impl Default for Config {
 }
 
 #[derive(Clone)]
-struct ConfigTocCache {
+pub struct ConfigTocCache {
     config: Arc<std::sync::Mutex<Config>>,
     no_toc_cache: bool,
 }
@@ -1015,6 +1081,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match command {
                 TestCommands::Stability(params) => {
                     modules::test::stability(&link_context, config.uri.as_str(), params.iterations).await?;
+                }
+            }
+        },
+        Commands::Bootload { command } => {
+            match command {
+                BootloadCommands::Info(params) => {
+                    modules::bootloader::print_bootloader_info(&link_context, params.cold, config.uri.as_str()).await?;
+                }
+                BootloadCommands::Releases => {
+                    utils::firmware::print_releases().await?;
+                }
+                BootloadCommands::Flash(params) => {
+                  // dbg!(&params);
+
+                  let release = match &params.release {
+                    Some(Some(r)) => {
+                      let labels = utils::firmware::get_release_labels().await?;
+                      if !labels.contains(r) {
+                        println!("Release '{}' not found", r);
+                        process::exit(1);
+                      }
+                      Some(r.clone())
+                    },
+                    Some(None) => {
+                      let labels = utils::firmware::get_release_labels().await?;
+                      let selected_release = Select::new("Select a firmware release to flash:", labels)
+
+                        .prompt()
+                        .unwrap_or_else(|_| {
+                          println!("No release selected");
+                          process::exit(1);
+                        });
+                      Some(selected_release)
+                    }
+                    None => None,
+                  };
+
+                  // TODO: Doesn't work to connect again after this...
+
+                  // let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                  // let platform = cf.platform.device_type_name().await?;
+                  // cf.disconnect().await;
+
+                  let platform = "Crazyflie 2.1".to_string(); // For now we only support cf21 bootloader flashing
+
+                  // First create a list of firmwares and targets before starting the bootloading
+                  let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &params.zip, &params.bin).await?;
+
+                  let selected_target_and_types = match &params.targets {
+                    Some(Some(t)) => t.split(',').map(|s| s.trim().to_string()).collect(),
+                    Some(None) => {
+                      let available_target_and_types = upgrade.get_target_and_types();
+
+                      let selected_target_and_types = MultiSelect::new("Select targets to flash:", available_target_and_types)
+                        .prompt()
+                        .unwrap_or_else(|_| {
+                          println!("No targets selected");
+                          process::exit(1);
+                        });
+                      selected_target_and_types
+                    }
+                    None => upgrade.get_target_and_types(),
+                  };
+
+                  upgrade.filter_targets(&selected_target_and_types);
+
+                  if upgrade.get_target_and_types().is_empty() {
+                    println!("No valid targets to flash, exiting!");
+                  } else {
+                    modules::bootloader::flash(
+                      &link_context,
+                      config.uri.as_str(),
+                      toc_cache,
+                      upgrade,
+                      params.no_verify,
+                      params.cold,
+                    ).await?;
+                  }
+
+
+                  // modules::bootloader::flash_firmware(
+                  //   &link_context,
+                  //   &config.uri.as_str(),
+                  //   &release,
+                  //   params.bin,
+                  //   params.targets,
+                  //   params.no_verify,
+                  //   params.cold,
+                  // ).await?;
+
+                  // modules::bootloader::flash_firmware(&link_context, config.uri.as_str(), &params.file, params.no_verify).await?;
                 }
             }
         }

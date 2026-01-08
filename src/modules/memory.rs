@@ -1,7 +1,7 @@
 use std::process;
 
 use crazyflie_lib::{
-    subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, OwMemory, RawMemory},
+    subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, OwMemory, DeckMemory, RawMemory},
     Crazyflie,
 };
 
@@ -35,6 +35,25 @@ fn print_ow_info(ow: &OwMemory) {
     for (key, value) in ow.elements() {
         println!("    {}: {}", key, value);
     }
+}
+
+async fn print_deck_memory_info(deckmem: &DeckMemory) -> Result<(), Box<dyn std::error::Error>> {
+    for section in deckmem.sections().iter() {
+        println!("Deck Memory Section:");
+        println!("  Name: {}", section.name());
+        println!("  Started: {}", section.is_started().await?);
+        println!("  Supports Read: {}", section.supports_read());
+        println!("  Supports Write: {}", section.supports_write());
+        println!("  Supports Upgrade: {}", section.supports_upgrade());
+        println!("  Upgrade Required: {}", section.upgrade_required().await?);
+        println!("  Bootloader Active: {}", section.bootloader_active().await?);
+        println!("  Can Reset to Firmware: {}", section.can_reset_to_firmware());
+        println!("  Can Reset to Bootloader: {}", section.can_reset_to_bootloader());
+        println!("  Required Hash: {:?}", section.required_hash());
+        println!("  Required Length: {:?}", section.required_length());
+    }
+
+    Ok(())
 }
 
 pub async fn display(cf: &Crazyflie, memory: MemoryDevice) {
@@ -81,6 +100,31 @@ pub async fn display(cf: &Crazyflie, memory: MemoryDevice) {
                 }
             };
             print_ow_info(&ow_memory);
+        }
+        MemoryType::DeckMemory => {
+            let deck_memory = match cf
+                .memory
+                .open_memory::<DeckMemory>(memory.clone())
+                .await
+            {
+                Some(Ok(e)) => e,
+                Some(Err(e)) => {
+                    println!(
+                        "Could not access memory ID={} as DeckMemory: {}",
+                        memory.memory_id, e
+                    );
+                    process::exit(1);
+                }
+                None => {
+                    println!("Memory ID={} not found", memory.memory_id);
+                    process::exit(1);
+                }
+            };
+
+            if let Err(e) = print_deck_memory_info(&deck_memory).await {
+                println!("Error printing deck memory info: {}", e);
+                process::exit(1);
+            }
         }
         _ => {
             println!(
