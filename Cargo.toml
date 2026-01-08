@@ -10,6 +10,30 @@ license = "MIT OR Apache-2.0"
 keywords = ["crazyflie", "cli"]
 categories = ["hardware-support"]
 
+[package.metadata.deb]
+maintainer = "Marcus Eliasson <marcus@bitcraze.io>"
+copyright = "2026, Marcus Eliasson"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+A command-line interface tool for managing and interacting with Crazyflie drones.
+Provides logging, parameter control, memory operations, and bootloader functionality."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/cfcli", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/cfcli/", "644"],
+]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"  # tar.gz for Unix
+pkg-fmt-windows = "zip"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [[bin]]
 name = "cfcli"
 path = "src/main.rs"

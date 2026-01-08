@@ -1,4 +1,4 @@
-name: cfcli
+name: Build and test
 
 on:
   push:
