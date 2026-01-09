@@ -1120,11 +1120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                   // TODO: Doesn't work to connect again after this...
 
-                  // let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
-                  // let platform = cf.platform.device_type_name().await?;
-                  // cf.disconnect().await;
-
-                  let platform = "Crazyflie 2.1".to_string(); // For now we only support cf21 bootloader flashing
+                  let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache.clone(), args.debug).await?;
+                  let platform = cf.platform.device_type_name().await?;
+                  cf.disconnect().await;
 
                   // First create a list of firmwares and targets before starting the bootloading
                   let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &params.zip, &params.bin).await?;

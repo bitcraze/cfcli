@@ -110,6 +110,11 @@ async fn reset_to_bootloader(link: &Connection) -> Result<String, Box<dyn std::e
 }
 
 async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+
+    // Disable safelink so we can send "bootloader" messages to the nRF51
+    let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF, 0x05, 0x00].into();
+    link.send_packet(packet).await?;
+
     let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
     link.send_packet(packet).await?;
 
