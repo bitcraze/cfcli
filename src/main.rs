@@ -1093,8 +1093,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     utils::firmware::print_releases().await?;
                 }
                 BootloadCommands::Flash(params) => {
-                  // dbg!(&params);
-
                   let release = match &params.release {
                     Some(Some(r)) => {
                       let labels = utils::firmware::get_release_labels().await?;
@@ -1117,8 +1115,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     None => None,
                   };
-
-                  // TODO: Doesn't work to connect again after this...
 
                   let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache.clone(), args.debug).await?;
                   let platform = cf.platform.device_type_name().await?;
