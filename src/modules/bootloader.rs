@@ -282,8 +282,13 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
         }
     }
     cfloader.reset_to_firmware().await?;
-    // Wait for Crazyflie to start up when going from bootloader->firmware
-    sleep(Duration::from_millis(7000)).await;
+
+    if !firmware_for_decks.is_empty() {
+        println!("Wait for Crazyflie to restart...");
+        // Wait for Crazyflie to start up when going from bootloader->firmware
+        // The long wait is due to AI-deck startup delay
+        sleep(Duration::from_millis(7000)).await;
+    }
   }
 
   if !firmware_for_decks.is_empty() {
