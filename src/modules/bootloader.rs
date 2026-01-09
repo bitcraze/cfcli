@@ -135,7 +135,6 @@ async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>, 
             }
             break;
         }
-        print!(".");
     }
 
     for _ in 0..10 {
