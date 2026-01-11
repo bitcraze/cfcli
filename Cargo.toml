@@ -13,7 +13,6 @@ categories = ["hardware-support"]
 [package.metadata.deb]
 maintainer = "Marcus Eliasson <marcus@bitcraze.io>"
 copyright = "2026, Marcus Eliasson"
-license-file = ["LICENSE", "4"]
 extended-description = """\
 A command-line interface tool for managing and interacting with Crazyflie drones.
 Provides logging, parameter control, memory operations, and bootloader functionality."""
