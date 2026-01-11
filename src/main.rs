@@ -1,3 +1,4 @@
+use crate::modules::bootloader;
 use crate::utils::deckctrl::DeckConfig;
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_num::maybe_hex;
