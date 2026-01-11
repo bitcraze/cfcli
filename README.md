@@ -3,6 +3,7 @@
 This is a command line interface (CLI) for the Bitcraze Crazyflie written in Rust. It's intended to be used
 during development to quickly access various subsystems in the Crazyflie and supports features like:
 
+* Flash firmware (nRF51/STM32F4 as well as decks)
 * Get console output
 * Log variables
 * Get and set parameters
@@ -37,6 +38,7 @@ Commands:
   mem       Access to the memory subsystem
   config    Configure the Crazyflie (radio settings, etc)
   util      Various supporting utilities for the Crazyflie and its ecosystem
+  bootload  Bootload the Crazyflie and decks
   test      Run tests with the Crazyflie
   platform  Access platform functionality
   scan      List the Crazyflies found while scanning (on the selected address)
@@ -77,14 +79,19 @@ And a log variable can be printed using the following command:
 cfcli log print stabilizer.roll 100
 ```
 
-Some commands support interactively selecting parameters, like the following commands:
+A release can be flashed with:
 
 ```text
-cfcli param get
-cfcli param set
-cfcli log print
-cfcli mem display
+cfcli bootload flash --release 2025.12
 ```
+
+For a more indepth view on how to use the different commands, have a look at the documentation:
+
+* [Bootloader](/docs/bootload.md)
+* [Logging](/docs/logging.md)
+* [Console](/docs/console.md)
+* [Memory](/docs/memory.md)
+* [Platform](/docs/platform.md)
 
 ## Development
 

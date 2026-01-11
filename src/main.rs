@@ -146,6 +146,7 @@ enum Commands {
         command: UtilCommands,
     },
 
+    /// Bootload the Crazyflie and decks
     Bootload {
         #[clap(subcommand)]
         command: BootloadCommands,
