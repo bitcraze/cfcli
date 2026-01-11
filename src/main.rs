@@ -1175,7 +1175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                           (k, Some(v)) => (k.clone(), v.clone()),
                           (k, None) => {
                             let selected_target = Select::new(
-                              "Select binary to flash:",
+                              &format!("Select target for [{}]:", k),
                               bootloader::get_hardcoded_list_of_targets()
                             )
                             .prompt()
