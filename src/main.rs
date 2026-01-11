@@ -62,6 +62,43 @@ fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
   Ok(map)
 }
 
+/// Custom parser: "a=1,b=2" → { "a" => Some("1"), "b" => Some("2") }
+/// Values without '=' are stored as None: "a,b=2" → { "a" => None, "b" => Some("2") }
+/// Supports hex values with 0x prefix: "a=0x10,b=2" → { "a" => Some("16"), "b" => Some("2") }
+fn parse_key_opt_val_pairs(s: &str) -> Result<HashMap<String, Option<String>>, String> {
+  let mut map = HashMap::new();
+
+  for pair in s.split(',') {
+    let mut iter = pair.splitn(2, '=');
+    let key = iter.next().ok_or("Missing key")?.trim().to_string();
+    
+    if key.is_empty() {
+      return Err("Empty key found".into());
+    }
+
+    let value = if let Some(value_str) = iter.next() {
+      let value_str = value_str.trim();
+      // Parse hex if it starts with 0x, otherwise keep as string
+      let parsed = if let Some(hex_str) = value_str.strip_prefix("0x").or_else(|| value_str.strip_prefix("0X")) {
+        // Try to parse as hex, but keep original string if parsing fails
+        match u64::from_str_radix(hex_str, 16) {
+          Ok(num) => num.to_string(),
+          Err(_) => value_str.to_string(),
+        }
+      } else {
+        value_str.to_string()
+      };
+      Some(parsed)
+    } else {
+      None
+    };
+
+    map.insert(key, value);
+  }
+
+  Ok(map)
+}
+
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct CliArgs {
@@ -261,8 +298,8 @@ struct FlashParameters {
   /// Note that these will override any files in release or zip.
   /// 
   /// Example: stm32-fw=cf2_stm.bin,nrf51-fw=cf2_nrf.bin
-  #[clap(long, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
-  bin: Option<HashMap<String, String>>,
+  #[clap(long, value_parser = parse_key_opt_val_pairs, verbatim_doc_comment)]
+  bin: Option<HashMap<String, Option<String>>>,
   /// Comma-separated list of targets to flash, interactive selection if
   /// left blank. By default all targets found in the release/zip/bin will
   /// be flashed.
@@ -1125,12 +1162,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => None,
                   };
 
+                  // This case is special since we're not setting the key on the command-line,
+                  // we're actually setting the value and then we'll select they key here
+                  // Note that the list of tarets is hardcoded, this is because we cannot
+                  // query the Crazyflie for it, flashing new firmware might change this
+                  // until we reach the deck flashing stage.
+                  let bin_with_selections = {
+                    let mut result = HashMap::new();
+                    if let Some(bin_map) = &params.bin {
+                      for (key, value_opt) in bin_map.iter() {
+                        let (k,v) = match (key, value_opt) {
+                          (k, Some(v)) => (k.clone(), v.clone()),
+                          (k, None) => {
+                            let selected_target = Select::new(
+                              "Select binary to flash:",
+                              bootloader::get_hardcoded_list_of_targets()
+                            )
+                            .prompt()
+                            .unwrap_or_else(|_| {
+                              println!("No binary selected");
+                              process::exit(1);
+                            });
+                            (selected_target.to_string(), k.to_string())
+                          }
+                        };
+                        result.insert(k, v);
+                      }
+                    }
+                    Some(result)
+                  };
+
                   let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache.clone(), args.debug).await?;
                   let platform = cf.platform.device_type_name().await?;
                   cf.disconnect().await;
 
                   // First create a list of firmwares and targets before starting the bootloading
-                  let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &params.zip, &params.bin).await?;
+                  let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &params.zip, &bin_with_selections).await?;
 
                   let selected_target_and_types = match &params.targets {
                     Some(Some(t)) => t.split(',').map(|s| s.trim().to_string()).collect(),
