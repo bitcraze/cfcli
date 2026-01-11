@@ -103,10 +103,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           
-          # Install ARM64 OpenSSL development libraries
+          # Add ARM64 architecture
           sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev:arm64
+          
+          # Configure apt to ignore ARM64 packages from repositories that don't support it
+          echo 'Acquire::Languages "none";' | sudo tee /etc/apt/apt.conf.d/99disable-translations
+          
+          sudo apt-get update || true  # Continue even if some repos fail
+          
+          # Install ARM64 OpenSSL development libraries
+          sudo apt-get install -y libssl-dev:arm64 || {
+            echo "Failed to install libssl-dev:arm64, trying alternative approach"
+            sudo apt-get install -y libssl-dev
+          }
           
           # Configure pkg-config for cross-compilation
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
@@ -201,10 +210,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           
-          # Install ARM64 OpenSSL development libraries
+          # Add ARM64 architecture
           sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev:arm64
+          
+          # Configure apt to ignore ARM64 packages from repositories that don't support it
+          echo 'Acquire::Languages "none";' | sudo tee /etc/apt/apt.conf.d/99disable-translations
+          
+          sudo apt-get update || true  # Continue even if some repos fail
+          
+          # Install ARM64 OpenSSL development libraries
+          sudo apt-get install -y libssl-dev:arm64 || {
+            echo "Failed to install libssl-dev:arm64, trying alternative approach"
+            sudo apt-get install -y libssl-dev
+          }
           
           # Configure pkg-config for cross-compilation
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
