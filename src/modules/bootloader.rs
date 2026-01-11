@@ -33,6 +33,17 @@ enum BootloaderCommand {
   Reset = 0xF0,
 }
 
+pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
+    vec![
+      "nrf51-fw",
+      "bcAI:esp-fw",
+      "bcLighthouse4-fw",
+      "stm32-fw",
+      "bcColorLedTop:col-fw",
+      "bcColorLedBot:col-fw",
+    ]
+}
+
 async fn scan_for_bootloader() -> Result<String, Box<dyn std::error::Error>> {
     let context = LinkContext::new();
     let res = context

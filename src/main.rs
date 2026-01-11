@@ -222,6 +222,8 @@ enum BootloadCommands {
   Info(InfoParameters),
   /// List available releases
   Releases,
+  /// List of hardcoded targets
+  Targets,
   /// Flash firmware to the device
   Flash(FlashParameters),
 }
@@ -1091,6 +1093,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 BootloadCommands::Releases => {
                     utils::firmware::print_releases().await?;
+                }
+                BootloadCommands::Targets => {
+                    let targets = bootloader::get_hardcoded_list_of_targets();
+                    println!("Hardcoded targets:");
+                    for target in targets {
+                      println!("- {}", target);
+                    }
                 }
                 BootloadCommands::Flash(params) => {
                   let release = match &params.release {
