@@ -1153,19 +1153,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       params.cold,
                     ).await?;
                   }
-
-
-                  // modules::bootloader::flash_firmware(
-                  //   &link_context,
-                  //   &config.uri.as_str(),
-                  //   &release,
-                  //   params.bin,
-                  //   params.targets,
-                  //   params.no_verify,
-                  //   params.cold,
-                  // ).await?;
-
-                  // modules::bootloader::flash_firmware(&link_context, config.uri.as_str(), &params.file, params.no_verify).await?;
                 }
             }
         }

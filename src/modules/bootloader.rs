@@ -1,10 +1,11 @@
+use crazyflie_lib::Crazyflie;
 use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryType};
 use tokio::time::{sleep, timeout, Duration};
 use crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
 
 use crate::ConfigTocCache;
-use crate::utils::firmware::FirmwareUpgrade;
+use crate::utils::firmware::{Firmware, FirmwareUpgrade};
 use crate::utils::display::*;
 
 use cfloader::Bllink;
@@ -249,6 +250,58 @@ pub async fn syson(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Re
   Ok(())
 }
 
+async fn get_flashable_firmware(cf: &Crazyflie, firmwares: &[Firmware]) -> Result<Vec<Firmware>, Box<dyn std::error::Error>> {
+      let mut flashable_firmares = Vec::new(); 
+      let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
+      if !memories.is_empty() {
+        let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
+          Some(Ok(deck)) => deck,
+          Some(Err(e)) => {
+            return Err(Box::new(e));
+          }
+          None => {
+            return Err("DeckMemory not found".into());
+          }
+        };
+
+        for firmware in firmwares {
+          if firmware.target != "stm32" && firmware.target != "nrf51" {
+            let section = deck_memory.sections().iter().find(|s| s.name() == firmware.target);
+            if let Some(_section) = section {
+              flashable_firmares.push(firmware.clone());
+            }
+          } 
+        }
+
+        cf.memory.close_memory(deck_memory).await?;
+
+      }
+
+      Ok(flashable_firmares)
+}
+
+async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool, Box<dyn std::error::Error>> {
+    let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
+    if !memories.is_empty() {
+      let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
+        Some(Ok(deck)) => deck,
+        Some(Err(e)) => {
+          return Err(Box::new(e));
+        }
+        None => {
+          return Err("DeckMemory not found".into());
+        }
+      };
+
+      let section = deck_memory.sections().iter().find(|s| s.name() == "bcAI:esp-fw");
+      if let Some(_section) = section {
+        return Ok(true);
+      } 
+    }
+
+    Ok(false)
+}
+
 pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, _no_verify: bool, cold: bool) -> Result<(), Box<dyn std::error::Error>> {
 
   let firmware_for_bootloader = firmware_upgrade.get_firmware_for_bootloader();
@@ -292,45 +345,56 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
   }
 
   if !firmware_for_decks.is_empty() {
-    let link_context = crazyflie_link::LinkContext::new();
+    // We need to disconnect the Crazyflie and reconnect again after each deck flash. Inbetween
+    // reboots we also need to wait. So connect once and filter out all the decks we cannot
+    // flash.
+
     let cf = crazyflie_lib::Crazyflie::connect_from_uri(
-        &link_context,
-        uri,
-        toc_cache
+          &link_context,
+          uri,
+          toc_cache.clone()
     ).await?;
 
-    let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
-    if !memories.is_empty() {
-      let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
-        Some(Ok(deck)) => deck,
-        Some(Err(e)) => {
-          println!("Failed to open DeckMemory: {}", e);
-          return Err(Box::new(e));
-        }
-        None => {
-          println!("DeckMemory not found");
-          return Err("DeckMemory not found".into());
-        }
-      };
+    let firmware_for_decks = get_flashable_firmware(&cf, &firmware_for_decks).await?;
+    let delay = if is_aideck_attached(&cf).await? {
+      7000
+    } else {
+      3000
+    };
+    let mut flash_count_left = firmware_for_decks.len();
+    cf.disconnect().await;
 
-      for section in deck_memory.sections() {
-        let firmware = firmware_for_decks.iter().find(|fw| {
-          fw.target == section.name()
-        });
+    for firmware in &firmware_for_decks {
+      let cf = crazyflie_lib::Crazyflie::connect_from_uri(
+          &link_context,
+          uri,
+          toc_cache.clone()
+      ).await?;
 
-        if let Some(firmware) = firmware {
-          // println!("Flashing deck firmware for target: {}", firmware.target);
+      let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
+      if !memories.is_empty() {
+        let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
+          Some(Ok(deck)) => deck,
+          Some(Err(e)) => {
+            return Err(Box::new(e));
+          }
+          None => {
+            return Err("DeckMemory not found".into());
+          }
+        };
+        
+        let section = deck_memory.sections().iter().find(|s| s.name() == firmware.target);
 
-          if !section.bootloader_active().await? {
-            // println!("Bootloader not active for section: {}. Activating...", section.name());
+        if let Some(section) = section {
+
+          let bootloader_active = section.bootloader_active().await?;
+          if !bootloader_active {
             section.reset_to_bootloader().await?;
             sleep(Duration::from_millis(10)).await;
 
-            if !section.bootloader_active().await? {
-              println!("Failed to activate bootloader for section: {}", section.name());
+            let bootloader_active = section.bootloader_active().await?;
+            if !bootloader_active {
               return Err("Failed to activate bootloader for deck section".into());
-            } else {
-              // println!("Bootloader activated for section: {}", section.name());
             }
           }
 
@@ -341,15 +405,20 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
           };
           section.write_with_progress(0, &firmware.data, progress_callback).await?;
           progress_bar.finish_with_message("Deck firmware flashed successfully!");
-        } else {
-          println!("No firmware found for deck section: {}", section.name());
         }
-        
-        reboot(&link_context, uri).await?;
-        
+
+        cf.disconnect().await;
+
       }
-    } else {
-      println!("Could not find DeckMemory");
+
+      flash_count_left = flash_count_left - 1;
+
+      reboot(&link_context, uri).await?;
+
+      if flash_count_left > 0 {
+          println!("Restarting Crazyflie...");
+          sleep(Duration::from_millis(delay)).await;
+      }
     }
   }
 
