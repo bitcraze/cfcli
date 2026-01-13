@@ -108,3 +108,20 @@ For example:
 ```text
 cargo run -- select
 ```
+
+### Cross compilation
+
+Compilation for linux on other platform is possible using the [cross](https://github.com/cross-rs/cross) tool.
+
+It requires both `cross` and [`docker` or `podman`] to be installed.
+
+```bash
+# Install podman or docker ...
+# To install cross
+cargo install cross
+
+# To compile for ARM64
+cross build --target aarch64-unknown-linux-gnu
+
+# The resulting executable is now in ./target/aarch64-unknown-linux-gnu/debug/cfcli
+```
