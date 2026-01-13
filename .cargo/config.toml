@@ -1,0 +1,7 @@
+# Cross-compilation configuration for ARM64
+
+[target.aarch64-unknown-linux-gnu]
+# Use the ARM64 strip tool instead of the host's strip
+strip = { path = "aarch64-linux-gnu-strip" }
+# Linker is handled by cross tool, but can be specified if building without cross
+linker = "aarch64-linux-gnu-gcc"

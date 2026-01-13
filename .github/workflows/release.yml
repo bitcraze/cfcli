@@ -17,8 +17,9 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Get version from tag
@@ -40,14 +41,13 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.tag_name }}
-          release_name: ${{ steps.get_version.outputs.tag_name }}
+          name: ${{ steps.get_version.outputs.version }}
           draft: false
           prerelease: false
+          generate_release_notes: true
 
   build-release:
     needs: create-release
@@ -91,40 +91,24 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install OpenSSL (Linux x86_64)
+      - name: Install dependencies (Linux x86_64)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config libudev-dev
+          sudo apt-get install -y pkg-config libudev-dev
 
-      - name: Install cross-compilation tools (Linux ARM)
+      - name: Install cross-compilation tool
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          
-          # Add ARM64 architecture
-          sudo dpkg --add-architecture arm64
-          
-          # Configure apt to ignore ARM64 packages from repositories that don't support it
-          echo 'Acquire::Languages "none";' | sudo tee /etc/apt/apt.conf.d/99disable-translations
-          
-          sudo apt-get update || true  # Continue even if some repos fail
-          
-          # Install ARM64 development libraries
-          sudo apt-get install -y libssl-dev:arm64 libudev-dev:arm64 || {
-            echo "Failed to install ARM64 libraries, trying alternative approach"
-            sudo apt-get install -y libssl-dev libudev-dev
-          }
-          
-          # Configure pkg-config for cross-compilation
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-          echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
-          echo "OPENSSL_NO_VENDOR=1" >> $GITHUB_ENV
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
@@ -140,16 +124,6 @@ jobs:
           7z a ../../../${{ matrix.name }} cfcli.exe
           cd -
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}
-          asset_name: ${{ matrix.name }}
-          asset_content_type: application/octet-stream
-
       - name: Generate SHA256 checksum
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -159,15 +133,13 @@ jobs:
           fi
         shell: bash
 
-      - name: Upload Checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}.sha256
-          asset_name: ${{ matrix.name }}.sha256
-          asset_content_type: text/plain
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: |
+            ${{ matrix.name }}
+            ${{ matrix.name }}.sha256
 
   build-deb:
     needs: create-release
@@ -203,36 +175,25 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config libudev-dev
+          sudo apt-get install -y libudev-dev
 
-      - name: Install cross-compilation tools (ARM64)
+      - name: Install cross-compilation tool (ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          
-          # Add ARM64 architecture
-          sudo dpkg --add-architecture arm64
-          
-          # Configure apt to ignore ARM64 packages from repositories that don't support it
-          echo 'Acquire::Languages "none";' | sudo tee /etc/apt/apt.conf.d/99disable-translations
-          
-          sudo apt-get update || true  # Continue even if some repos fail
-          
-          # Install ARM64 development libraries
-          sudo apt-get install -y libssl-dev:arm64 libudev-dev:arm64 || {
-            echo "Failed to install ARM64 libraries, trying alternative approach"
-            sudo apt-get install -y libssl-dev libudev-dev
-          }
-          
-          # Configure pkg-config for cross-compilation
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-          echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
-          echo "OPENSSL_NO_VENDOR=1" >> $GITHUB_ENV
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build deb package
-        run: cargo deb --target ${{ matrix.target }} --no-strip
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cross build --release --target ${{ matrix.target }}
+            # For ARM64, install cross-compilation tools for cargo-deb
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update || true
+            sudo apt-get install -y binutils-aarch64-linux-gnu
+            cargo deb --target ${{ matrix.target }} --no-build --no-strip
+          else
+            cargo deb --target ${{ matrix.target }} --no-strip
+          fi
+        shell: bash
 
       - name: Find deb package
         id: find_deb
@@ -243,11 +204,7 @@ jobs:
           echo "deb_name=$DEB_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload deb package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ steps.find_deb.outputs.deb_path }}
-          asset_name: ${{ steps.find_deb.outputs.deb_name }}
-          asset_content_type: application/vnd.debian.binary-package
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: ${{ steps.find_deb.outputs.deb_path }}
