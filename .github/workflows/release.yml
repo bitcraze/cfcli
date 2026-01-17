@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   create-release:
@@ -203,8 +205,140 @@ jobs:
           echo "deb_path=$DEB_PATH" >> $GITHUB_OUTPUT
           echo "deb_name=$DEB_NAME" >> $GITHUB_OUTPUT
 
-      - name: Upload deb package
+      - name: Upload deb to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: ${{ steps.find_deb.outputs.deb_path }}
+
+      - name: Upload deb artifact for APT repo
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: ${{ steps.find_deb.outputs.deb_path }}
+          retention-days: 1
+
+  publish-apt-repo:
+    needs: build-deb
+    runs-on: ubuntu-latest
+    if: success()
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.version }}
+
+      - name: Download all deb packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          path: deb-packages
+          merge-multiple: true
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import --batch
+
+      - name: Setup APT repository structure
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          # Configuration
+          REPO_DIR="apt-repo"
+          DIST="stable"
+          COMPONENT="main"
+          
+          # Create repository structure
+          mkdir -p ${REPO_DIR}/pool/main
+          mkdir -p ${REPO_DIR}/dists/${DIST}/${COMPONENT}/binary-{amd64,arm64}
+          
+          # Copy .deb files to pool
+          cp deb-packages/*.deb ${REPO_DIR}/pool/main/
+          
+          # Generate Packages files for each architecture
+          cd ${REPO_DIR}
+          for arch in amd64 arm64; do
+            dpkg-scanpackages --arch ${arch} pool/ > dists/${DIST}/${COMPONENT}/binary-${arch}/Packages
+            gzip -kf dists/${DIST}/${COMPONENT}/binary-${arch}/Packages
+          done
+          
+          # Generate Release file
+          cd dists/${DIST}
+          cat > Release <<EOF
+          Origin: cfcli
+          Label: cfcli
+          Suite: ${DIST}
+          Codename: ${DIST}
+          Architectures: amd64 arm64
+          Components: ${COMPONENT}
+          Description: Crazyflie CLI tool repository
+          Date: $(date -Ru)
+          EOF
+          
+          # Add file hashes
+          apt-ftparchive release . >> Release
+          
+          # Sign the Release file
+          gpg --default-key ${GPG_KEY_ID} -abs -o Release.gpg Release
+          gpg --default-key ${GPG_KEY_ID} --clearsign -o InRelease Release
+          
+          cd ../../..
+
+      - name: Export GPG public key
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          gpg --armor --export ${GPG_KEY_ID} > apt-repo/cfcli-repo.gpg.key
+
+      - name: Create index.html
+        run: |
+          cat > apt-repo/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>cfcli APT Repository</title>
+              <style>
+                  body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+                  pre { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }
+                  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
+              </style>
+          </head>
+          <body>
+              <h1>cfcli APT Repository</h1>
+              <p>Official Debian/Ubuntu repository for the Crazyflie CLI tool.</p>
+              
+              <h2>Installation</h2>
+              <pre><code># Add repository GPG key
+          curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg
+
+          # Add repository
+          echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | sudo tee /etc/apt/sources.list.d/cfcli.list
+
+          # Install
+          sudo apt update
+          sudo apt install cfcli</code></pre>
+
+              <h2>Update</h2>
+              <pre><code>sudo apt update
+          sudo apt upgrade cfcli</code></pre>
+
+              <h2>Links</h2>
+              <ul>
+                  <li><a href="https://github.com/evoggy/cfcli">GitHub Repository</a></li>
+                  <li><a href="https://github.com/evoggy/cfcli/releases">Releases</a></li>
+              </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./apt-repo
+          publish_branch: gh-pages
+          force_orphan: true

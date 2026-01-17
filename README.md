@@ -17,7 +17,21 @@ use the the [Crazyflie python library](https://github.com/bitcraze/crazyflie-lib
 
 ## Installation
 
-If you would like to install the cli for general use use the following command:
+### APT repository (Debian/Ubuntu)
+
+```bash
+# Add repository GPG key
+curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg
+
+# Add repository
+echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | sudo tee /etc/apt/sources.list.d/cfcli.list
+
+# Install
+sudo apt update
+sudo apt install cfcli
+```
+
+### Cargo
 
 ```text
 cargo install cfcli
