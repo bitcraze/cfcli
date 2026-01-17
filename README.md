@@ -31,6 +31,21 @@ sudo apt update
 sudo apt install cfcli
 ```
 
+### Homebrew (OSX and Linux)
+
+To add and install run the following:
+
+```bash
+brew tap evoggy/cfcli
+brew install cfcli
+```
+
+To update run:
+
+```bash
+brew upgrade cfcli
+```
+
 ### Cargo
 
 ```text
