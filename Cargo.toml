@@ -16,9 +16,10 @@ copyright = "2026, Marcus Eliasson"
 extended-description = """\
 A command-line interface tool for managing and interacting with Crazyflie drones.
 Provides logging, parameter control, memory operations, and bootloader functionality."""
-depends = "$auto"
+depends = "$auto, curl, gnupg"
 section = "utils"
 priority = "optional"
+maintainer-scripts = "debian/"
 assets = [
     ["target/release/cfcli", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/cfcli/", "644"],

@@ -183,6 +183,74 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cargo install cross --git https://github.com/cross-rs/cross
 
+      - name: Ensure debian directory exists
+        run: mkdir -p debian
+
+      - name: Create postinst script
+        run: |
+          cat > debian/postinst <<'POSTINST_EOF'
+          #!/bin/bash
+          set -e
+
+          case "$1" in
+              configure)
+                  # Add GPG key
+                  if ! [ -f /usr/share/keyrings/cfcli-archive-keyring.gpg ]; then
+                      echo "Adding cfcli APT repository GPG key..."
+                      curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key 2>/dev/null | \
+                          gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg 2>/dev/null || true
+                  fi
+                  
+                  # Add APT source
+                  if ! [ -f /etc/apt/sources.list.d/cfcli.list ]; then
+                      echo "Adding cfcli APT repository..."
+                      echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | \
+                          tee /etc/apt/sources.list.d/cfcli.list > /dev/null
+                  fi
+                  
+                  # Update package lists
+                  if command -v apt-get >/dev/null 2>&1; then
+                      echo "Updating package lists..."
+                      apt-get update -o Dir::Etc::sourcelist="sources.list.d/cfcli.list" \
+                                    -o Dir::Etc::sourceparts="-" \
+                                    -o APT::Get::List-Cleanup="0" 2>/dev/null || true
+                  fi
+                  
+                  echo ""
+                  echo "✓ cfcli APT repository configured."
+                  echo "  Future updates will be available via: sudo apt update && sudo apt upgrade cfcli"
+                  echo ""
+                  ;;
+          esac
+
+          exit 0
+          POSTINST_EOF
+          chmod +x debian/postinst
+
+      - name: Create postrm script
+        run: |
+          cat > debian/postrm <<'POSTRM_EOF'
+          #!/bin/bash
+          set -e
+
+          case "$1" in
+              purge)
+                  # Remove APT source on purge
+                  if [ -f /etc/apt/sources.list.d/cfcli.list ]; then
+                      echo "Removing cfcli APT repository configuration..."
+                      rm -f /etc/apt/sources.list.d/cfcli.list
+                  fi
+                  
+                  # Optionally remove GPG key
+                  # Commented out to be safe - only remove if no other packages use it
+                  # rm -f /usr/share/keyrings/cfcli-archive-keyring.gpg
+                  ;;
+          esac
+
+          exit 0
+          POSTRM_EOF
+          chmod +x debian/postrm
+
       - name: Build deb package
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
