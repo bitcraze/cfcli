@@ -46,12 +46,6 @@ To update run:
 brew upgrade cfcli
 ```
 
-### Cargo
-
-```text
-cargo install cfcli
-```
-
 ## Usage
 
 To see how to use the CLI type ```cfcli``` in your terminal and you will get the following help message:
