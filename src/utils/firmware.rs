@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize, Deserializer};
 
@@ -87,12 +88,12 @@ struct FirmwareArchive {
 
 impl FirmwareArchive {
 
-    fn manifest_from_bytes(data: &[u8]) -> Result<Manifest, Box<dyn std::error::Error>> {
+    fn manifest_from_bytes(data: &[u8]) -> Result<Manifest, anyhow::Error> {
         let manifest: Manifest = serde_json::from_slice(data)?;
         Ok(manifest)
     }
 
-    pub fn from_zip(data: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_zip(data: Vec<u8>) -> Result<Self, anyhow::Error> {
         // Extract binaries from zip_data
         let cursor = std::io::Cursor::new(data);
         let mut archive = zip::ZipArchive::new(cursor)?;
@@ -107,10 +108,7 @@ impl FirmwareArchive {
         let manifest = Self::manifest_from_bytes(&manifest_data)?;
 
         if manifest.version != 2 || manifest.subversion != 1 {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Unsupported manifest version: {}.{}", manifest.version, manifest.subversion),
-            )));
+            bail!("Unsupported manifest version: {}.{}", manifest.version, manifest.subversion);
         }
 
         for i in 0..archive.len() {
@@ -147,7 +145,7 @@ impl FirmwareArchive {
     }
 }
 
-async fn download_release_zip(release: &String, platform_release: &String) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+async fn download_release_zip(release: &String, platform_release: &String) -> Result<Vec<u8>, anyhow::Error> {
     // Placeholder for downloading and extracting firmware binaries from a release zip
 
     let release_name = format!("firmware-{}-{}.zip", platform_release, release);
@@ -185,17 +183,14 @@ pub struct FirmwareUpgrade {
 
 impl FirmwareUpgrade {
 
-    fn convert_platform_to_release_name(platform: &String) -> Result<String, Box<dyn std::error::Error>> {
+    fn convert_platform_to_release_name(platform: &String) -> Result<String, anyhow::Error> {
         match platform.as_str() {
             "Crazyflie Bolt 1.1" => Ok("bolt".to_string()),
             "Crazyflie 2.1" => Ok("cf2".to_string()),
             "Crazyflie 2.1 Brushless" => Ok("cf21bl".to_string()),
             "Flapper (Bolt 1.1)" => Ok("flapper".to_string()),
             "Roadrunner 1.0" => Ok("tag".to_string()),
-            _ => Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Unknown platform: {}", platform),
-            ))),
+            _ => bail!("Unknown platform: {}", platform),
         }
     }
 
@@ -227,7 +222,7 @@ impl FirmwareUpgrade {
         self.bins.retain(|key, _| selected.contains(key));
     }
 
-    pub async fn new(platform: &String, release: &Option<String>, zip: &Option<String>, bin: &Option<HashMap<String, String>>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(platform: &String, release: &Option<String>, zip: &Option<String>, bin: &Option<HashMap<String, String>>) -> Result<Self, anyhow::Error> {
 
         let platform_release = Self::convert_platform_to_release_name(platform)?;
 
@@ -238,10 +233,7 @@ impl FirmwareUpgrade {
               let archive = FirmwareArchive::from_zip(zip_data)?;
 
               if archive.manifest.fw_platform != *platform_release {
-                  return Err(Box::new(std::io::Error::new(
-                      std::io::ErrorKind::InvalidData,
-                      format!("Release platform {} does not match connected platform {}", archive.manifest.fw_platform, platform_release),
-                  )));
+                  bail!("Release platform {} does not match connected platform {}", archive.manifest.fw_platform, platform_release);
               }
 
               archive.binaries
@@ -252,10 +244,7 @@ impl FirmwareUpgrade {
               let archive = FirmwareArchive::from_zip(zip_data)?;
 
               if archive.manifest.fw_platform != *platform_release {
-                  return Err(Box::new(std::io::Error::new(
-                      std::io::ErrorKind::InvalidData,
-                      format!("Release platform {} does not match connected platform {}", archive.manifest.fw_platform, platform_release),
-                  )));
+                  bail!("Release platform {} does not match connected platform {}", archive.manifest.fw_platform, platform_release);
               }
               archive.binaries
           },
@@ -290,7 +279,7 @@ impl FirmwareUpgrade {
     }
 }
 
-async fn get_releases() -> Result<Vec<octocrab::models::repos::Release>, Box<dyn std::error::Error>> {
+async fn get_releases() -> Result<Vec<octocrab::models::repos::Release>, anyhow::Error> {
     let octocrab = octocrab::Octocrab::builder().build()?;
     let releases = octocrab
         .repos("bitcraze", "crazyflie-release")
@@ -303,7 +292,7 @@ async fn get_releases() -> Result<Vec<octocrab::models::repos::Release>, Box<dyn
     Ok(releases.items)
 }
 
-pub async fn get_release_labels() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+pub async fn get_release_labels() -> Result<Vec<String>, anyhow::Error> {
     let releases = get_releases().await?;
     let labels = releases
         .iter()
@@ -313,7 +302,7 @@ pub async fn get_release_labels() -> Result<Vec<String>, Box<dyn std::error::Err
     Ok(labels)
 }
 
-pub async fn print_releases() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn print_releases() -> Result<(), anyhow::Error> {
     let releases = get_releases().await?;
 
     println!("Latest Crazyflie firmware releases:");

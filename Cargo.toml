@@ -46,6 +46,7 @@ flume = "0.11.1"
 num_enum = "0.7.4"
 half = "2.6.0"
 env_logger = "0.11.8"
+anyhow = "1.0"
 crazyflie-link = { version="0.3.0", default-features = false }
 crazyflie-lib = { git="https://github.com/bitcraze/crazyflie-lib-rs.git", branch="evoggy/deckmem-flashing", default-features = false }
 cfloader = { git="https://github.com/ataffanel/cfloader-rs.git", default-features = false }

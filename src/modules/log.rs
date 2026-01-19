@@ -1,6 +1,7 @@
+use anyhow::Result;
 use crazyflie_lib::Crazyflie;
 
-pub async fn list(cf: &Crazyflie) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn list(cf: &Crazyflie) -> Result<()> {
   
   println!("{0: <30} | {1: <5}", "Name", "Type");
   println!("{:-<30}-|-{:-<5}", "", "");
@@ -14,7 +15,7 @@ pub async fn list(cf: &Crazyflie) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn print(cf: &Crazyflie, names: &str, period: u64) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn print(cf: &Crazyflie, names: &str, period: u64) -> Result<()> {
 
   let mut block = cf.log.create_block().await?;
 

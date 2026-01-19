@@ -1,7 +1,7 @@
-use std::process::exit;
 use std::pin::Pin;
 use std::future::Future;
 
+use anyhow::{bail, Result};
 use crazyflie_lib::NoTocCache;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
@@ -14,7 +14,7 @@ pub trait StabilityTest {
         &'a self,
         link_context: &'a crazyflie_link::LinkContext,
         uri: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
 pub struct ReconnectTest;
@@ -29,7 +29,7 @@ impl StabilityTest for ReconnectTest {
         &'a self,
         link_context: &'a crazyflie_link::LinkContext,
         uri: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, NoTocCache).await?;
             cf.disconnect().await;
@@ -50,7 +50,7 @@ impl StabilityTest for ParamReadReadWriteTest {
         &'a self,
         link_context: &'a crazyflie_link::LinkContext,
         uri: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, NoTocCache).await?;
             let test_value = 1;
@@ -61,7 +61,7 @@ impl StabilityTest for ParamReadReadWriteTest {
             // TODO: Does this make any sense, since we cache it here there's no
             // real readback from the Crazyflie
             if new_value != test_value {
-                return Err("Param read/write mismatch".into());
+                bail!("Param read/write mismatch");
             }
 
             cf.param.set("usd.logging", old_value).await?;
@@ -69,7 +69,7 @@ impl StabilityTest for ParamReadReadWriteTest {
             let reset_value: u8 = cf.param.get("usd.logging").await?;
             
             if reset_value != old_value {
-                return Err("Param reset mismatch".into());
+                bail!("Param reset mismatch");
             }
 
             cf.disconnect().await;
@@ -90,7 +90,7 @@ impl StabilityTest for LoggingTest {
         &'a self,
         link_context: &'a crazyflie_link::LinkContext,
         uri: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, NoTocCache).await?;
             
@@ -127,7 +127,7 @@ pub async fn stability(
     link_context: &crazyflie_link::LinkContext,
     uri: &str,
     iterations: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let tests: Vec<Box<dyn StabilityTest>> = vec![
         Box::new(ReconnectTest),
         Box::new(ParamReadReadWriteTest),
@@ -142,7 +142,7 @@ async fn run_stability_tests(
     uri: &str,
     iterations: u32,
     tests: Vec<Box<dyn StabilityTest>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
   let num_tests = tests.len();
   let multi = indicatif::MultiProgress::new();
   let bars: Vec<ProgressBar> = tests
@@ -180,8 +180,7 @@ async fn run_stability_tests(
             bars[test_idx].inc(1);
         }
         Err(e) => {
-            eprintln!("Error running test {}: {}", tests[test_idx].name(), e);
-            exit(1);
+            return Err(e.into());
         }
     }
   }

@@ -1,5 +1,4 @@
-use std::process;
-
+use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::{
     subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, OwMemory, DeckMemory, RawMemory},
     Crazyflie,
@@ -37,16 +36,16 @@ fn print_ow_info(ow: &OwMemory) {
     }
 }
 
-async fn print_deck_memory_info(deckmem: &DeckMemory) -> Result<(), Box<dyn std::error::Error>> {
+async fn print_deck_memory_info(deckmem: &DeckMemory) -> Result<()> {
     for section in deckmem.sections().iter() {
         println!("Deck Memory Section:");
         println!("  Name: {}", section.name());
-        println!("  Started: {}", section.is_started().await?);
+        println!("  Started: {}", section.is_started().await.map_err(|e| anyhow!("Failed to get started status: {:?}", e))?);
         println!("  Supports Read: {}", section.supports_read());
         println!("  Supports Write: {}", section.supports_write());
         println!("  Supports Upgrade: {}", section.supports_upgrade());
-        println!("  Upgrade Required: {}", section.upgrade_required().await?);
-        println!("  Bootloader Active: {}", section.bootloader_active().await?);
+        println!("  Upgrade Required: {}", section.upgrade_required().await.map_err(|e| anyhow!("Failed to get upgrade required status: {:?}", e))?);
+        println!("  Bootloader Active: {}", section.bootloader_active().await.map_err(|e| anyhow!("Failed to get bootloader active status: {:?}", e))?);
         println!("  Can Reset to Firmware: {}", section.can_reset_to_firmware());
         println!("  Can Reset to Bootloader: {}", section.can_reset_to_bootloader());
         println!("  Required Hash: {:?}", section.required_hash());
@@ -56,7 +55,7 @@ async fn print_deck_memory_info(deckmem: &DeckMemory) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-pub async fn display(cf: &Crazyflie, memory: MemoryDevice) {
+pub async fn display(cf: &Crazyflie, memory: MemoryDevice) -> Result<()> {
     match memory.memory_type {
         MemoryType::EEPROMConfig => {
             let eeprom = match cf
@@ -65,17 +64,8 @@ pub async fn display(cf: &Crazyflie, memory: MemoryDevice) {
                 .await
             {
                 Some(Ok(e)) => e,
-                Some(Err(e)) => {
-                    println!(
-                        "Could not access memory ID={} as EEPROMConfig: {}",
-                        memory.memory_id, e
-                    );
-                    process::exit(1);
-                }
-                None => {
-                    println!("Memory ID={} not found", memory.memory_id);
-                    process::exit(1);
-                }
+                Some(Err(e)) => bail!("Could not access memory ID={} as EEPROMConfig: {}", memory.memory_id, e),
+                None => bail!("Memory ID={} not found", memory.memory_id),
             };
 
             print_eeprom_info(&eeprom);
@@ -87,17 +77,8 @@ pub async fn display(cf: &Crazyflie, memory: MemoryDevice) {
                 .await
             {
                 Some(Ok(o)) => o,
-                Some(Err(e)) => {
-                    println!(
-                        "Could not access memory ID={} as OneWire: {}",
-                        memory.memory_id, e
-                    );
-                    process::exit(1);
-                }
-                None => {
-                    println!("Memory ID={} not found", memory.memory_id);
-                    process::exit(1);
-                }
+                Some(Err(e)) => bail!("Could not access memory ID={} as OneWire: {}", memory.memory_id, e),
+                None => bail!("Memory ID={} not found", memory.memory_id),
             };
             print_ow_info(&ow_memory);
         }
@@ -108,35 +89,19 @@ pub async fn display(cf: &Crazyflie, memory: MemoryDevice) {
                 .await
             {
                 Some(Ok(e)) => e,
-                Some(Err(e)) => {
-                    println!(
-                        "Could not access memory ID={} as DeckMemory: {}",
-                        memory.memory_id, e
-                    );
-                    process::exit(1);
-                }
-                None => {
-                    println!("Memory ID={} not found", memory.memory_id);
-                    process::exit(1);
-                }
+                Some(Err(e)) => bail!("Could not access memory ID={} as DeckMemory: {}", memory.memory_id, e),
+                None => bail!("Memory ID={} not found", memory.memory_id),
             };
 
-            if let Err(e) = print_deck_memory_info(&deck_memory).await {
-                println!("Error printing deck memory info: {}", e);
-                process::exit(1);
-            }
+            print_deck_memory_info(&deck_memory).await?;
         }
-        _ => {
-            println!(
-                "Don't know how to handle memory ID={} yet, cannot display it",
-                memory.memory_id
-            );
-            process::exit(1);
-        }
+        _ => bail!("Don't know how to handle memory ID={} yet, cannot display it", memory.memory_id),
     }
+
+    Ok(())
 }
 
-pub async fn erase(cf: &Crazyflie, memory: MemoryDevice) {
+pub async fn erase(cf: &Crazyflie, memory: MemoryDevice) -> Result<()> {
     match memory.memory_type {
         MemoryType::EEPROMConfig => {
             let eeprom = match cf
@@ -145,20 +110,11 @@ pub async fn erase(cf: &Crazyflie, memory: MemoryDevice) {
                 .await
             {
                 Some(Ok(e)) => e,
-                Some(Err(e)) => {
-                    println!(
-                        "Could not access memory ID={} as RawMemory: {}",
-                        memory.memory_id, e
-                    );
-                    process::exit(1);
-                }
-                None => {
-                    println!("Memory ID={} not found", memory.memory_id);
-                    process::exit(1);
-                }
+                Some(Err(e)) => bail!("Could not access memory ID={} as RawMemory: {}", memory.memory_id, e),
+                None => bail!("Memory ID={} not found", memory.memory_id),
             };
 
-            eeprom.write(0, &vec![0xFFu8; 32]).await.unwrap();
+            eeprom.write(0, &vec![0xFFu8; 32]).await?;
             println!("EEPROMConfig memory ID={} erased.", memory.memory_id);
 
         }
@@ -169,27 +125,14 @@ pub async fn erase(cf: &Crazyflie, memory: MemoryDevice) {
                 .await
             {
                 Some(Ok(o)) => o,
-                Some(Err(e)) => {
-                    println!(
-                        "Could not access memory ID={} as RawMemory: {}",
-                        memory.memory_id, e
-                    );
-                    process::exit(1);
-                }
-                None => {
-                    println!("Memory ID={} not found", memory.memory_id);
-                    process::exit(1);
-                }
+                Some(Err(e)) => bail!("Could not access memory ID={} as RawMemory: {}", memory.memory_id, e),
+                None => bail!("Memory ID={} not found", memory.memory_id),
             };
-            ow_memory.write(0, &vec![0xFFu8; 112]).await.unwrap();
+            ow_memory.write(0, &vec![0xFFu8; 112]).await?;
             println!("OneWire memory ID={} erased.", memory.memory_id);
         }
-        _ => {
-            println!(
-                "Don't know how to handle memory ID={} yet, cannot erase it",
-                memory.memory_id
-            );
-            process::exit(1);
-        }
+        _ => bail!("Don't know how to handle memory ID={} yet, cannot erase it", memory.memory_id),
     }
+
+    Ok(())
 }

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,7 +21,7 @@ pub struct DeckConfig {
 }
 
 impl DeckConfig {
-  pub fn from_yaml(path: String) -> Result<DeckConfig, Box<dyn std::error::Error>> {
+  pub fn from_yaml(path: String) -> Result<DeckConfig, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
     let cfg: DeckConfig = serde_yaml::from_str(&content)?;
     Ok(cfg)

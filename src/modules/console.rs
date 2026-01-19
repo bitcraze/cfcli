@@ -1,3 +1,4 @@
+use anyhow::Result;
 use futures::StreamExt;
 use colored::*;
 
@@ -9,7 +10,7 @@ fn format_console_line(line: &str) -> String {
     }
 }
 
-pub async fn print(cf: &crazyflie_lib::Crazyflie, no_format: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn print(cf: &crazyflie_lib::Crazyflie, no_format: bool) -> Result<()> {
             let mut console_stream = cf.console.stream_no_history().await;
 
     while let Some(line) = console_stream.next().await {

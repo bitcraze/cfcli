@@ -11,11 +11,11 @@ use probe_rs::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::process;
 use std::sync::Arc;
 use inquire::{Select, MultiSelect};
 use indicatif::{ProgressBar, ProgressStyle};
 use crazyflie_lib::Value;
+use anyhow::{bail, Result};
 
 pub mod modules {
     pub mod log;
@@ -507,7 +507,7 @@ impl TocCache for ConfigTocCache {
     }
 }
 
-async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, measure_connect_time: bool) -> Result<crazyflie_lib::Crazyflie, Box<dyn std::error::Error>> {
+async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, measure_connect_time: bool) -> Result<crazyflie_lib::Crazyflie> {
   let spinner = ProgressBar::new_spinner();
   spinner.set_style(
     ProgressStyle::default_spinner()
@@ -532,23 +532,23 @@ async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &
   Ok(cf)
 }
 
-pub fn decode_address(address: &str) -> Result<[u8; 5], Box<dyn std::error::Error>> {
+pub fn decode_address(address: &str) -> Result<[u8; 5]> {
     match u64::from_str_radix(&address.replace("0x", ""), 16) {
         Ok(a) if a <= 0xFFFFFFFFFF => Ok(a.to_be_bytes()[3..]
             .try_into()
             .expect("Could not convert u64 to [u8; 5]")),
         Ok(_) => {
-            Err("Invalid address, please provide a valid 5 byte hexadecimal address".into())
+            bail!("Invalid address, please provide a valid 5 byte hexadecimal address")
         }
         Err(_) => {
-            Err("Invalid address, please provide a valid 5 byte hexadecimal address".into())
+            bail!("Invalid address, please provide a valid 5 byte hexadecimal address")
         }
     }
 }
 
 // Example scans for Crazyflies, connect the first one and print the log and param variables TOC.
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args = CliArgs::parse();
 
     let mut config: Config = confy::load("cf-cli", None).unwrap_or_else(|err| {
@@ -586,9 +586,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let selected_uri = match selected_uri {
                 Some(uri) => uri,
-                None => {
-                    process::exit(1);
-                }
+                None => bail!("No Crazyflie selected"),
             };
 
             config.uri = selected_uri.clone();
@@ -626,10 +624,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let available_vars = cf.log.names();
                         let selected_vars = MultiSelect::new("Select variables to log:", available_vars)
                           .prompt()
-                          .unwrap_or_else(|_| {
-                          println!("No variables selected");
-                          process::exit(1);
-                          });
+                          .map_err(|_| anyhow::anyhow!("No variables selected"))?;
                         selected_vars.join(",")
                       }
                     };
@@ -659,10 +654,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let available_vars = cf.param.names();
                         let selected_vars = MultiSelect::new("Select parameters to show:", available_vars)
                           .prompt()
-                          .unwrap_or_else(|_| {
-                          println!("No parameters selected");
-                          process::exit(1);
-                          });
+                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
                         selected_vars.join(",")
                       }
                     };                    
@@ -682,20 +674,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                           .collect();
                         let selected_vars = MultiSelect::new("Select parameters to set:", available_vars)
                           .prompt()
-                          .unwrap_or_else(|_| {
-                          println!("No parameters selected");
-                          process::exit(1);
-                          });
+                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
 
                         let mut param_map = HashMap::new();
                         for name in selected_vars {
                           let param: Value = cf.param.get(&name).await?;
                           let value: String = inquire::Text::new(&format!("[{}] {:?}:", name, param))
                             .prompt()
-                            .unwrap_or_else(|_| {
-                              println!("No value entered for parameter '{}'", name);
-                              process::exit(1);
-                            });
+                            .map_err(|_| anyhow::anyhow!("No value entered for parameter '{}'", name))?;
                           param_map.insert(name, value);
                         }
                         param_map
@@ -729,8 +715,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let probes = lister.list_all();
 
                             if probes.is_empty() {
-                                println!("No probes found, cannot flash deck");
-                                process::exit(1);
+                                bail!("No probes found, cannot flash deck");
                             }
 
                             let probe_idx = match params.probe_idx {
@@ -738,8 +723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                   if idx < probes.len() {
                                     idx
                                   } else {
-                                    println!("Invalid probe index");
-                                    process::exit(1);
+                                    bail!("Invalid probe index");
                                   }
                                 },
                                 None => {
@@ -752,28 +736,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                         let selected_option = Select::new("Select a probe:", options)
                                           .prompt()
-                                          .unwrap_or_else(|_| {
-                                            println!("No probe selected");
-                                            process::exit(1);
-                                          });
+                                          .map_err(|_| anyhow::anyhow!("No probe selected"))?;
 
                                         // Extract the probe index from the selected option
                                         let idx = selected_option
                                           .split(']')
                                           .next()
                                           .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
-                                          .unwrap_or_else(|| {
-                                            println!("Failed to parse probe index");
-                                            process::exit(1);
-                                          });
+                                          .ok_or_else(|| anyhow::anyhow!("Failed to parse probe index"))?;
                                         idx
                                     }
                                 }
                             };
 
                             if probes.is_empty() {
-                                println!("No probes found, cannot flash deck");
-                                process::exit(1);
+                                bail!("No probes found, cannot flash deck");
                             }
 
                             let address = 0x08000000 + 1024 * 30;
@@ -799,20 +776,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
                     if memories.len() != 1 {
-                      println!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
-                      process::exit(1);
+                      bail!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
                     }
 
                     let mut eeprom_memory = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
                       Some(Ok(m)) => m,
-                      Some(Err(e)) => {
-                        println!("Could not access EEPROM memory: {}", e);
-                        process::exit(1);
-                      }
-                      None => {
-                        println!("No EEPROM memory found");
-                        process::exit(1);
-                      }
+                      Some(Err(e)) => bail!("Could not access EEPROM memory: {}", e),
+                      None => bail!("No EEPROM memory found"),
                     };
 
                     for (key, value) in &var.settings {
@@ -820,10 +790,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "channel" => {
                           let channel: u8 = match value.parse() {
                             Ok(c) if c <= 125 => c,
-                            _ => {
-                              println!("Invalid channel value, must be an integer between 0 and 125");
-                              process::exit(1);
-                            }
+                            _ => bail!("Invalid channel value, must be an integer between 0 and 125"),
                           };
                           eeprom_memory.set_radio_channel(channel)?;
                           println!("Set radio channel to {}", channel);
@@ -833,10 +800,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(a) if a <= 0xFFFFFFFFFF => a.to_be_bytes()[3..]
                                 .try_into()
                                 .expect("Could not convert u64 to [u8; 5]"),
-                            _ => {
-                                println!("Invalid address, must be a 5 byte hexadecimal value (e.g. E7E7E7E7E7)");
-                                process::exit(1);
-                            }
+                            _ => bail!("Invalid address, must be a 5 byte hexadecimal value (e.g. E7E7E7E7E7)"),
                           };
                           eeprom_memory.set_radio_address(address);
                           println!("Set radio address to {:02X?}", address);
@@ -844,10 +808,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "speed" => {
                           let speed: u8 = match value.parse() {
                             Ok(s) if s <= 2 => s,
-                            _ => {
-                              println!("Invalid speed value, must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)");
-                              process::exit(1);
-                            }
+                            _ => bail!("Invalid speed value, must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)"),
                           };
                           eeprom_memory.set_radio_speed(RadioSpeed::try_from(speed)?);
                           println!("Set radio speed to {}", speed);
@@ -855,10 +816,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "pitch_trim" => {
                           let pitch_trim: f32 = match value.parse() {
                             Ok(p) if p >= -20.0 && p <= 20.0 => p,
-                            _ => {
-                              println!("Invalid pitch trim value, must be a float between -20.0 and 20.0");
-                              process::exit(1);
-                            }
+                            _ => bail!("Invalid pitch trim value, must be a float between -20.0 and 20.0"),
                           };
                           eeprom_memory.set_pitch_trim(pitch_trim);
                           println!("Set pitch trim to {}", pitch_trim);
@@ -866,10 +824,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "roll_trim" => {
                           let roll_trim: f32 = match value.parse() {
                             Ok(r) if r >= -20.0 && r <= 20.0 => r,
-                            _ => {
-                              println!("Invalid roll trim value, must be a float between -20.0 and 20.0");
-                              process::exit(1);
-                            }
+                            _ => bail!("Invalid roll trim value, must be a float between -20.0 and 20.0"),
                           };
                           eeprom_memory.set_roll_trim(roll_trim);
                           println!("Set roll trim to {}", roll_trim);
@@ -890,11 +845,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
                     if memories.len() != 1 {
-                      println!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
-                      process::exit(1);
+                      bail!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
                     }
 
-                    modules::memory::display(&cf, memories[0].clone()).await;
+                    modules::memory::display(&cf, memories[0].clone()).await?;
 
                     cf.disconnect().await;
                   }
@@ -925,14 +879,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let raw_access_memory = match cf.memory.open_memory::<RawMemory>(memories[var.id].clone()).await {
                       Some(Ok(m)) => m,
-                      Some(Err(e)) => {
-                        println!("Could not access memory ID={} as raw memory: {}", var.id, e);
-                        process::exit(1);
-                      }
-                      None => {
-                        println!("Memory ID={} not found", var.id);
-                        process::exit(1);
-                      }
+                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", var.id, e),
+                      None => bail!("Memory ID={} not found", var.id),
                     };
 
                     if let Some(output_file) = &var.output {
@@ -946,10 +894,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         progress_bar.finish_with_message(format!("Read {} bytes from memory ID={} at offset 0x{:x}", var.length, var.id, var.offset));
 
-                      std::fs::write(output_file, &data).unwrap_or_else(|e| {
-                        println!("Could not write to output file {}: {}", output_file, e);
-                        process::exit(1);
-                      });
+                      std::fs::write(output_file, &data)?;
                     } else {
                       let data = raw_access_memory.read(var.offset, var.length).await?;
                       utils::display::hex_dump(data, var.offset);
@@ -965,15 +910,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Read from input file
                         let input_file = match &var.input {
                           Some(f) => f,
-                          None => {
-                            println!("No data provided to write, please provide data via --data or --input");
-                            process::exit(1);
-                          }
+                          None => bail!("No data provided to write, please provide data via --data or --input"),
                         };
-                        std::fs::read(input_file).unwrap_or_else(|e| {
-                          println!("Could not read input file {}: {}", input_file, e);
-                          process::exit(1);
-                        })
+                        std::fs::read(input_file)?
                       }
                     };
 
@@ -983,14 +922,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let raw_access_memory = match cf.memory.open_memory::<RawMemory>(memories[var.id].clone()).await {
                       Some(Ok(m)) => m,
-                      Some(Err(e)) => {
-                        println!("Could not access memory ID={} as raw memory: {}", var.id, e);
-                        process::exit(1);
-                      }
-                      None => {
-                        println!("Memory ID={} not found", var.id);
-                        process::exit(1);
-                      }
+                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", var.id, e),
+                      None => bail!("Memory ID={} not found", var.id),
                     };
 
                     let progress_bar = utils::display::get_progressbar(data.len(), None);   
@@ -1019,27 +952,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let selected_option = Select::new("Select a memory:", options)
                           .prompt()
-                          .unwrap_or_else(|_| {
-                            println!("No memory selected");
-                            process::exit(1);
-                          });
+                          .map_err(|_| anyhow::anyhow!("No memory selected"))?;
 
                         // Extract the memory ID from the selected option
                         let selected_id = selected_option
                           .split(']')
                           .next()
                           .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
-                          .unwrap_or_else(|| {
-                            println!("Failed to parse memory ID");
-                            process::exit(1);
-                          });
+                          .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
                         selected_id
                       }
                         
                     };
 
-                    modules::memory::display(&cf, memories[selected_id].clone()).await;
+                    modules::memory::display(&cf, memories[selected_id].clone()).await?;
 
                     cf.disconnect().await;
                   }
@@ -1057,20 +984,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let selected_option = Select::new("Select a memory:", options)
                           .prompt()
-                          .unwrap_or_else(|_| {
-                            println!("No memory selected");
-                            process::exit(1);
-                          });
+                          .map_err(|_| anyhow::anyhow!("No memory selected"))?;
 
                         // Extract the memory ID from the selected option
                         let selected_id = selected_option
                           .split(']')
                           .next()
                           .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
-                          .unwrap_or_else(|| {
-                            println!("Failed to parse memory ID");
-                            process::exit(1);
-                          });
+                          .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
                         selected_id
                       }
@@ -1078,11 +999,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     if selected_id >= memories.len() {
-                      println!("Invalid memory ID selected");
-                      process::exit(1);
+                      bail!("Invalid memory ID selected");
                     }
 
-                    modules::memory::erase(&cf, memories[selected_id].clone()).await;
+                    modules::memory::erase(&cf, memories[selected_id].clone()).await?;
 
                     cf.disconnect().await;
                   }
@@ -1145,20 +1065,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(Some(r)) => {
                       let labels = utils::firmware::get_release_labels().await?;
                       if !labels.contains(r) {
-                        println!("Release '{}' not found", r);
-                        process::exit(1);
+                        bail!("Release '{}' not found", r);
                       }
                       Some(r.clone())
                     },
                     Some(None) => {
                       let labels = utils::firmware::get_release_labels().await?;
                       let selected_release = Select::new("Select a firmware release to flash:", labels)
-
                         .prompt()
-                        .unwrap_or_else(|_| {
-                          println!("No release selected");
-                          process::exit(1);
-                        });
+                        .map_err(|_| anyhow::anyhow!("No release selected"))?;
                       Some(selected_release)
                     }
                     None => None,
@@ -1181,10 +1096,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                               bootloader::get_hardcoded_list_of_targets()
                             )
                             .prompt()
-                            .unwrap_or_else(|_| {
-                              println!("No binary selected");
-                              process::exit(1);
-                            });
+                            .map_err(|_| anyhow::anyhow!("No binary selected"))?;
                             (selected_target.to_string(), k.to_string())
                           }
                         };
@@ -1208,10 +1120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                       let selected_target_and_types = MultiSelect::new("Select targets to flash:", available_target_and_types)
                         .prompt()
-                        .unwrap_or_else(|_| {
-                          println!("No targets selected");
-                          process::exit(1);
-                        });
+                        .map_err(|_| anyhow::anyhow!("No targets selected"))?;
                       selected_target_and_types
                     }
                     None => upgrade.get_target_and_types(),

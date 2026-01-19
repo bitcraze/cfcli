@@ -1,3 +1,4 @@
+use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::Crazyflie;
 use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryType};
 use tokio::time::{sleep, timeout, Duration};
@@ -44,7 +45,7 @@ pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
     ]
 }
 
-async fn scan_for_bootloader() -> Result<String, Box<dyn std::error::Error>> {
+async fn scan_for_bootloader() -> Result<String> {
     let context = LinkContext::new();
     let res = context
         .scan_selected(vec![
@@ -60,7 +61,7 @@ async fn scan_for_bootloader() -> Result<String, Box<dyn std::error::Error>> {
     }
 }
 
-async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo, Box<dyn std::error::Error>> {
+async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo> {
     for _ in 0..5 {
         let packet: Packet = vec![0xFF, target, 0x10].into();
 
@@ -83,10 +84,10 @@ async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo, Box<d
         }
     }
 
-    Err("Failed to get info".into())
+    Err(anyhow!("Failed to get info"))
 }
 
-async fn reset_to_bootloader(link: &Connection) -> Result<String, Box<dyn std::error::Error>> {
+async fn reset_to_bootloader(link: &Connection) -> Result<String> {
     let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
     link.send_packet(packet).await?;
 
@@ -95,7 +96,7 @@ async fn reset_to_bootloader(link: &Connection) -> Result<String, Box<dyn std::e
         let packet = tokio::select! {
             result = link.recv_packet() => result?,
             _ = sleep(Duration::from_millis(100)) => {
-              return Err("Disconnected: timeout waiting for response".into());
+              return Err(anyhow!("Disconnected: timeout waiting for response"));
             }
         };
         let data = packet.get_data();
@@ -121,7 +122,7 @@ async fn reset_to_bootloader(link: &Connection) -> Result<String, Box<dyn std::e
     ))
 }
 
-async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>> {
 
     // Disable safelink so we can send "bootloader" messages to the nRF51
     let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF, 0x05, 0x00].into();
@@ -135,7 +136,7 @@ async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>, 
         let packet = tokio::select! {
             result = link.recv_packet() => result?,
             _ = sleep(Duration::from_millis(100)) => {
-              return Err("Disconnected: timeout waiting for response".into());
+              return Err(anyhow!("Disconnected: timeout waiting for response"));
             }
         };
         let data = packet.get_data();
@@ -158,7 +159,7 @@ async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>, 
     Ok(new_address)
 }
 
-async fn start_bootloader(context: &LinkContext, cold: bool, uri: &str) -> Result<Connection, Box<dyn std::error::Error>> {
+async fn start_bootloader(context: &LinkContext, cold: bool, uri: &str) -> Result<Connection> {
     let uri: String = if cold {
         scan_for_bootloader().await
     } else {
@@ -173,13 +174,13 @@ async fn start_bootloader(context: &LinkContext, cold: bool, uri: &str) -> Resul
     Ok(link)
 }
 
-async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) -> Result<Bllink, Box<dyn std::error::Error>> {
+async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) -> Result<Bllink> {
     let address: Option<[u8; 5]> = match cold {
         false => {
               let link = context.open_link(&format!("{}?safelink=0", uri)).await?;
               let new_address = reset_and_get_bootloader_address(&link).await?;
               link.close().await;
-              let arr: [u8; 5] = new_address.try_into().map_err(|_| "Address must be exactly 5 bytes")?;
+              let arr: [u8; 5] = new_address.try_into().map_err(|_| anyhow!("Address must be exactly 5 bytes"))?;
               Some(arr)
         }
         true => {
@@ -192,7 +193,7 @@ async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) ->
     Ok(bllink)
 }
 
-async fn send_command(link: &Connection, cmd: BootloaderCommand, data: Option<&[u8]>) -> Result<(), Box<dyn std::error::Error>> {
+async fn send_command(link: &Connection, cmd: BootloaderCommand, data: Option<&[u8]>) -> Result<()> {
 
     let mut command = vec![0xFF, TARGET_NRF51, cmd as u8];
     if let Some(d) = data {
@@ -205,7 +206,7 @@ async fn send_command(link: &Connection, cmd: BootloaderCommand, data: Option<&[
     Ok(())
 }
 
-pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, warm: bool, uri: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, warm: bool, uri: &str) -> Result<()> {
 
   let link = start_bootloader(link_context, warm, uri).await?;
   let info = get_info(&link, TARGET_NRF51).await?;
@@ -224,7 +225,7 @@ pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, w
   Ok(())
 }
 
-pub async fn reboot(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn reboot(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
 
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::ResetInit, None).await?;
@@ -234,7 +235,7 @@ pub async fn reboot(link_context: &crazyflie_link::LinkContext, uri: &str,) -> R
   Ok(())
 }
 
-pub async fn power_off(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn power_off(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
 
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::AllOff, None).await?;
@@ -243,7 +244,7 @@ pub async fn power_off(link_context: &crazyflie_link::LinkContext, uri: &str,) -
   Ok(())
 }
 
-pub async fn sysoff(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn sysoff(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
 
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::SysOff, None).await?;
@@ -252,7 +253,7 @@ pub async fn sysoff(link_context: &crazyflie_link::LinkContext, uri: &str,) -> R
   Ok(())
 }
 
-pub async fn syson(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn syson(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
 
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::SysOn, None).await?;
@@ -261,17 +262,17 @@ pub async fn syson(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Re
   Ok(())
 }
 
-async fn get_flashable_firmware(cf: &Crazyflie, firmwares: &[Firmware]) -> Result<Vec<Firmware>, Box<dyn std::error::Error>> {
+async fn get_flashable_firmware(cf: &Crazyflie, firmwares: &[Firmware]) -> Result<Vec<Firmware>> {
       let mut flashable_firmares = Vec::new(); 
       let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
       if !memories.is_empty() {
         let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
           Some(Ok(deck)) => deck,
           Some(Err(e)) => {
-            return Err(Box::new(e));
+            return Err(anyhow!("Error: {:?}", e));
           }
           None => {
-            return Err("DeckMemory not found".into());
+            return Err(anyhow!("DeckMemory not found"));
           }
         };
 
@@ -291,16 +292,16 @@ async fn get_flashable_firmware(cf: &Crazyflie, firmwares: &[Firmware]) -> Resul
       Ok(flashable_firmares)
 }
 
-async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool, Box<dyn std::error::Error>> {
+async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool> {
     let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
     if !memories.is_empty() {
       let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
         Some(Ok(deck)) => deck,
         Some(Err(e)) => {
-          return Err(Box::new(e));
+          return Err(anyhow!("Error: {:?}", e));
         }
         None => {
-          return Err("DeckMemory not found".into());
+          bail!("DeckMemory not found");
         }
       };
 
@@ -313,7 +314,7 @@ async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool, Box<dyn std::error::
     Ok(false)
 }
 
-pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, _no_verify: bool, cold: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, _no_verify: bool, cold: bool) -> Result<()> {
 
   let firmware_for_bootloader = firmware_upgrade.get_firmware_for_bootloader();
   let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
@@ -387,10 +388,10 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
         let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
           Some(Ok(deck)) => deck,
           Some(Err(e)) => {
-            return Err(Box::new(e));
+            return Err(anyhow!("Error: {:?}", e));
           }
           None => {
-            return Err("DeckMemory not found".into());
+            return Err(anyhow!("DeckMemory not found"));
           }
         };
         
@@ -405,7 +406,7 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
 
             let bootloader_active = section.bootloader_active().await?;
             if !bootloader_active {
-              return Err("Failed to activate bootloader for deck section".into());
+              bail!("Failed to activate bootloader for deck section");
             }
           }
 
