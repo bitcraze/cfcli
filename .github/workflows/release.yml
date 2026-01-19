@@ -111,6 +111,8 @@ jobs:
             cargo build --release --target ${{ matrix.target }}
           fi
         shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static' || '' }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
