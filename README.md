@@ -17,13 +17,21 @@ use the the [Crazyflie python library](https://github.com/bitcraze/crazyflie-lib
 
 ## Installation
 
+### Standalone .deb package
+
+Download latest released `.deb` file from [GitHub Releases](https://github.com/evoggy/cfcli/releases) and install using:
+
+```bash
+sudo apt install ./cfcli_x.y.z_amd64.deb
+```
+
+This will also add the APT so you can install updates when they are released.
+
 ### APT repository (Debian/Ubuntu)
 
 ```bash
-# Add repository GPG key
-curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg
-
 # Add repository
+curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg
 echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | sudo tee /etc/apt/sources.list.d/cfcli.list
 
 # Install
