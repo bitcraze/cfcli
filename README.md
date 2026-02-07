@@ -11,6 +11,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * Configure radio settings like channel, address and speed
 * Turn the platform on/off or put it to sleep/wake it up
 * Run stability tests with the Crazyflie
+* High-level commander (takeoff, land, go-to, trajectories)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
 use the the [Crazyflie python library](https://github.com/bitcraze/crazyflie-lib-python) for that.
@@ -75,6 +76,7 @@ Commands:
   scan      List the Crazyflies found while scanning (on the selected address)
   select    Scan for Crazyflies and select which one to save for later interactions
   console   Print the console text from a Crazyflie
+  hl        High-level commander operations (takeoff, land, go-to, trajectory, etc.)
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -119,8 +121,9 @@ cfcli bootload flash --release 2025.12
 For a more indepth view on how to use the different commands, have a look at the documentation:
 
 * [Bootloader](/docs/bootload.md)
-* [Logging](/docs/logging.md)
 * [Console](/docs/console.md)
+* [High-Level Commander](/docs/high-level-commander.md)
+* [Logging](/docs/logging.md)
 * [Memory](/docs/memory.md)
 * [Platform](/docs/platform.md)
 

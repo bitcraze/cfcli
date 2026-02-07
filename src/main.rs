@@ -24,6 +24,7 @@ pub mod modules {
     pub mod bootloader;
     pub mod console;
     pub mod test;
+    pub mod trajectory;
 }
 
 pub mod utils {
@@ -61,6 +62,30 @@ fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
   }
 
   Ok(map)
+}
+
+/// Position parsed from comma-separated values: "x,y,z"
+#[derive(Debug, Clone)]
+struct Position {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+fn parse_position(s: &str) -> Result<Position, String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 3 {
+        return Err("Position must be x,y,z (comma-separated)".to_string());
+    }
+
+    let x = parts[0].trim().parse::<f32>()
+        .map_err(|_| format!("Invalid x value: {}", parts[0]))?;
+    let y = parts[1].trim().parse::<f32>()
+        .map_err(|_| format!("Invalid y value: {}", parts[1]))?;
+    let z = parts[2].trim().parse::<f32>()
+        .map_err(|_| format!("Invalid z value: {}", parts[2]))?;
+
+    Ok(Position { x, y, z })
 }
 
 /// Custom parser: "a=1,b=2" → { "a" => Some("1"), "b" => Some("2") }
@@ -176,6 +201,12 @@ enum Commands {
       /// Output raw console data without processing
       #[clap(long)]
       no_format: bool,
+    },
+
+    /// High-level commander operations (takeoff, land, go-to, trajectory, etc.)
+    Hl {
+        #[clap(subcommand)]
+        command: HlCommands,
     },
 }
 
@@ -363,6 +394,118 @@ enum PlatformCommands {
     Sleep,
     /// Wake up the platform
     Wakeup,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrajectoryCommands {
+    /// Upload a trajectory from a YAML file
+    Upload(TrajectoryUploadParameters),
+    /// Run a previously uploaded trajectory
+    Run(TrajectoryRunParameters),
+    /// Display trajectory information (memory info or file contents)
+    Display(TrajectoryDisplayParameters),
+}
+
+#[derive(Debug, Args)]
+struct TrajectoryUploadParameters {
+    /// Path to the trajectory YAML file
+    #[clap(value_parser)]
+    file: String,
+    /// Trajectory ID to assign (default: 1)
+    #[clap(long, short = 'i', default_value = "1")]
+    trajectory_id: u8,
+    /// Memory offset to write trajectory to (default: 0)
+    #[clap(long, short = 'o', default_value = "0", value_parser=maybe_hex::<u32>)]
+    offset: u32,
+}
+
+#[derive(Debug, Args)]
+struct TrajectoryRunParameters {
+    /// Trajectory ID to run
+    #[clap(value_parser)]
+    trajectory_id: u8,
+    /// Time scale factor (1.0 = normal speed, >1.0 = slower, <1.0 = faster)
+    #[clap(long, short = 's', default_value = "1.0")]
+    time_scale: f32,
+    /// Use relative position (shift trajectory to current position)
+    #[clap(long, short = 'r')]
+    relative_position: bool,
+    /// Use relative yaw (align trajectory yaw to current yaw)
+    #[clap(long, short = 'y')]
+    relative_yaw: bool,
+    /// Run trajectory in reverse
+    #[clap(long)]
+    reversed: bool,
+}
+
+#[derive(Debug, Args)]
+struct TrajectoryDisplayParameters {
+    /// Path to a trajectory YAML file to display (optional, shows memory info if omitted)
+    #[clap(value_parser)]
+    file: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum HlCommands {
+    /// Arm the Crazyflie (enable motors)
+    Arm,
+    /// Disarm the Crazyflie (disable motors)
+    Disarm,
+    /// Take off to a specified height
+    Takeoff(HlTakeoffParameters),
+    /// Land at the current position
+    Land(HlLandParameters),
+    /// Go to a specified position
+    Goto(HlGotoParameters),
+    /// Stop all high-level commands and disable motors
+    Stop,
+    /// Trajectory operations
+    Trajectory {
+        #[clap(subcommand)]
+        command: TrajectoryCommands,
+    },
+}
+
+#[derive(Debug, Args)]
+struct HlTakeoffParameters {
+    /// Target height in meters
+    #[clap(value_parser)]
+    height: f32,
+    /// Duration in seconds to reach the target height
+    #[clap(value_parser, default_value = "2.0")]
+    duration: f32,
+    /// Target yaw in degrees (omit to maintain current yaw)
+    #[clap(long)]
+    yaw: Option<f32>,
+}
+
+#[derive(Debug, Args)]
+struct HlLandParameters {
+    /// Target height in meters (typically 0.0)
+    #[clap(value_parser, default_value = "0.0")]
+    height: f32,
+    /// Duration in seconds to land
+    #[clap(value_parser, default_value = "2.0")]
+    duration: f32,
+    /// Target yaw in degrees (omit to maintain current yaw)
+    #[clap(long)]
+    yaw: Option<f32>,
+}
+
+#[derive(Debug, Args)]
+struct HlGotoParameters {
+    /// Target position as x,y,z (comma-separated)
+    #[clap(value_parser = parse_position, allow_hyphen_values = true)]
+    position: Position,
+    /// Duration in seconds to reach the target position
+    #[clap(long, short = 'd', default_value = "2.0")]
+    duration: f32,
+    /// Target yaw in degrees (default: 0)
+    #[clap(long)]
+    yaw: Option<f32>,
+    /// Use relative positioning (relative to current position)
+    #[clap(long, short = 'r')]
+    relative: bool,
 }
 
 #[derive(Debug, Args)]
@@ -557,6 +700,9 @@ async fn main() -> Result<()> {
     });
 
     let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
+
+    #[cfg(feature = "packet_capture")]
+    crazyflie_link::capture::init();
 
     let link_context = crazyflie_link::LinkContext::new();
 
@@ -787,6 +933,10 @@ async fn main() -> Result<()> {
 
                     for (key, value) in &var.settings {
                       match key.as_str() {
+                        "name" => {
+                          cf.platform.set_name(value).await?;
+                          println!("Set platform name to {}", value);
+                        }
                         "channel" => {
                           let channel: u8 = match value.parse() {
                             Ok(c) if c <= 125 => c,
@@ -1045,6 +1195,86 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Hl { command } => {
+            // Handle trajectory display with file separately (no connection needed)
+            if let HlCommands::Trajectory { command: TrajectoryCommands::Display(params) } = &command {
+                if let Some(file_path) = &params.file {
+                    modules::trajectory::display_file(file_path)?;
+                    return Ok(());
+                }
+            }
+
+            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+
+            match command {
+                HlCommands::Arm => {
+                    println!("Arming Crazyflie...");
+                    cf.platform.send_arming_request(true).await?;
+                    println!("Crazyflie armed!");
+                }
+                HlCommands::Disarm => {
+                    println!("Disarming Crazyflie...");
+                    cf.platform.send_arming_request(false).await?;
+                    println!("Crazyflie disarmed!");
+                }
+                HlCommands::Takeoff(params) => {
+                    let yaw_rad = params.yaw.map(|y| y.to_radians());
+                    println!("Taking off to {:.2}m over {:.1}s...", params.height, params.duration);
+                    cf.high_level_commander.take_off(params.height, yaw_rad, params.duration, None).await?;
+                    println!("Takeoff command sent!");
+                }
+                HlCommands::Land(params) => {
+                    let yaw_rad = params.yaw.map(|y| y.to_radians());
+                    println!("Landing to {:.2}m over {:.1}s...", params.height, params.duration);
+                    cf.high_level_commander.land(params.height, yaw_rad, params.duration, None).await?;
+                    println!("Land command sent!");
+                }
+                HlCommands::Goto(params) => {
+                    let pos = &params.position;
+                    let yaw = params.yaw.unwrap_or(0.0);
+                    let yaw_rad = yaw.to_radians();
+                    println!(
+                        "Going to ({:.2}, {:.2}, {:.2}) yaw={:.1}° over {:.1}s (relative={})...",
+                        pos.x, pos.y, pos.z, yaw, params.duration, params.relative
+                    );
+                    cf.high_level_commander.go_to(
+                        pos.x, pos.y, pos.z, yaw_rad,
+                        params.duration, params.relative, false, None
+                    ).await?;
+                    println!("Go-to command sent!");
+                }
+                HlCommands::Stop => {
+                    println!("Stopping high-level commander...");
+                    cf.high_level_commander.stop(None).await?;
+                    println!("Stop command sent!");
+                }
+                HlCommands::Trajectory { command: traj_cmd } => {
+                    match traj_cmd {
+                        TrajectoryCommands::Upload(params) => {
+                            modules::trajectory::upload(&cf, &params.file, params.trajectory_id, params.offset).await?;
+                        }
+                        TrajectoryCommands::Run(params) => {
+                            modules::trajectory::run(
+                                &cf,
+                                params.trajectory_id,
+                                params.time_scale,
+                                params.relative_position,
+                                params.relative_yaw,
+                                params.reversed,
+                            ).await?;
+                        }
+                        TrajectoryCommands::Display(params) => {
+                            // File case handled above, this is memory display
+                            if params.file.is_none() {
+                                modules::trajectory::display_memory(&cf).await?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            cf.disconnect().await;
+        }
         Commands::Bootload { command } => {
             match command {
                 BootloadCommands::Info(params) => {

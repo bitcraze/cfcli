@@ -38,6 +38,10 @@ pkg-fmt = "zip"
 name = "cfcli"
 path = "src/main.rs"
 
+[features]
+default = []
+packet_capture = ["crazyflie-link/packet_capture"]
+
 [dependencies]
 futures-util = "0.3"
 futures = "0.3"
@@ -47,8 +51,8 @@ num_enum = "0.7.4"
 half = "2.6.0"
 env_logger = "0.11.8"
 anyhow = "1.0"
-crazyflie-link = { version="0.3.0", default-features = false }
-crazyflie-lib = { git="https://github.com/bitcraze/crazyflie-lib-rs.git", branch="evoggy/deckmem-flashing", default-features = false }
+crazyflie-link = { version = "0.4.0", default-features = false }
+crazyflie-lib = { version = "0.5.1", default-features = false }
 cfloader = { git="https://github.com/ataffanel/cfloader-rs.git", default-features = false }
 clap = { version = "4.5.46", features = ["derive"] }
 
