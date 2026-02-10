@@ -25,6 +25,7 @@ pub mod modules {
     pub mod console;
     pub mod test;
     pub mod trajectory;
+    pub mod lighthouse;
 }
 
 pub mod utils {
@@ -207,6 +208,12 @@ enum Commands {
     Hl {
         #[clap(subcommand)]
         command: HlCommands,
+    },
+
+    /// Lighthouse positioning system configuration
+    Lighthouse {
+        #[clap(subcommand)]
+        command: LighthouseCommands,
     },
 }
 
@@ -443,6 +450,55 @@ struct TrajectoryDisplayParameters {
     /// Path to a trajectory YAML file to display (optional, shows memory info if omitted)
     #[clap(value_parser)]
     file: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum LighthouseCommands {
+    /// Display current lighthouse configuration
+    Display(LighthouseDisplayParameters),
+    /// Upload lighthouse configuration from a YAML file
+    Upload(LighthouseUploadParameters),
+    /// Download lighthouse configuration to a YAML file
+    Download(LighthouseDownloadParameters),
+}
+
+#[derive(Debug, Args)]
+struct LighthouseDisplayParameters {
+    /// Show only geometry data
+    #[clap(long)]
+    geometry_only: bool,
+    /// Show only calibration data
+    #[clap(long)]
+    calibration_only: bool,
+    /// Path to a lighthouse YAML file to display (optional, reads from Crazyflie if omitted)
+    #[clap(value_parser)]
+    file: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseUploadParameters {
+    /// Path to the lighthouse configuration YAML file
+    #[clap(value_parser)]
+    file: String,
+    /// Upload only geometry data (skip calibration)
+    #[clap(long)]
+    geometry_only: bool,
+    /// Upload only calibration data (skip geometry)
+    #[clap(long)]
+    calibration_only: bool,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseDownloadParameters {
+    /// Path to save the lighthouse configuration YAML file
+    #[clap(value_parser)]
+    file: String,
+    /// Download only geometry data
+    #[clap(long)]
+    geometry_only: bool,
+    /// Download only calibration data
+    #[clap(long)]
+    calibration_only: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1372,6 +1428,32 @@ async fn main() -> Result<()> {
                   }
                 }
             }
+        }
+        Commands::Lighthouse { command } => {
+            // Handle lighthouse display with file separately (no connection needed)
+            if let LighthouseCommands::Display(params) = &command {
+                if let Some(file_path) = &params.file {
+                    modules::lighthouse::display_file(file_path)?;
+                    return Ok(());
+                }
+            }
+
+            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+
+            match command {
+                LighthouseCommands::Display(params) => {
+                    // File case handled above, this is reading from Crazyflie
+                    modules::lighthouse::display(&cf, params.geometry_only, params.calibration_only).await?;
+                }
+                LighthouseCommands::Upload(params) => {
+                    modules::lighthouse::upload(&cf, &params.file, params.geometry_only, params.calibration_only).await?;
+                }
+                LighthouseCommands::Download(params) => {
+                    modules::lighthouse::download(&cf, &params.file, params.geometry_only, params.calibration_only).await?;
+                }
+            }
+
+            cf.disconnect().await;
         }
     }
 
