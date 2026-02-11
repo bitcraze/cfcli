@@ -933,10 +933,10 @@ async fn main() -> Result<()> {
 
                     for (key, value) in &var.settings {
                       match key.as_str() {
-                        "name" => {
-                          cf.platform.set_name(value).await?;
-                          println!("Set platform name to {}", value);
-                        }
+                        // "name" => {
+                        //   cf.platform.set_name(value).await?;
+                        //   println!("Set platform name to {}", value);
+                        // }
                         "channel" => {
                           let channel: u8 = match value.parse() {
                             Ok(c) if c <= 125 => c,
