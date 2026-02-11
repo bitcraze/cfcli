@@ -5,9 +5,9 @@ use crazyflie_lib::ValueType;
 use std::collections::HashMap;
 
 pub async fn list(cf: &Crazyflie) -> Result<()> {
-  
-    println!("{: <30} | {: <6} | {: <6}", "Name", "Access", "Value");
-    println!("{0:-<30}-|-{0:-<6}-|-{0:-<6}", "");
+
+    println!("{: <30} | {: <6} | {: <10} | {: <12}", "Name", "Access", "Persistent", "Value/Stored");
+    println!("{0:-<30}-|-{0:-<6}-|-{0:-<10}-|-{0:-<12}", "");
 
     for name in cf.param.names() {
         let value: crazyflie_lib::Value = cf.param.get(&name).await?;
@@ -17,7 +17,20 @@ pub async fn list(cf: &Crazyflie) -> Result<()> {
             "RO"
         };
 
-        println!("{: <30} | {: ^6} | {:?}", name, writable, value);
+        let (persistent, value_str) = if cf.param.is_persistent(&name).await? {
+            match cf.param.persistent_get_state(&name).await {
+                Ok(state) if state.is_stored => {
+                    let stored_val = state.stored_value.unwrap();
+                    ("Stored", format!("{:?}/{:?}", value, stored_val))
+                }
+                Ok(_) => ("Yes", format!("{:?}", value)),
+                Err(_) => ("Error", format!("{:?}", value)),
+            }
+        } else {
+            ("", format!("{:?}", value))
+        };
+
+        println!("{: <30} | {: ^6} | {: <10} | {}", name, writable, persistent, value_str);
     }
 
     Ok(())
@@ -25,8 +38,8 @@ pub async fn list(cf: &Crazyflie) -> Result<()> {
 
 pub async fn get(cf: &Crazyflie, names: &str) -> Result<()> {
 
-  println!("{: <30} | {: <6} | {: <6}", "Name", "Access", "Value");
-  println!("{0:-<30}-|-{0:-<6}-|-{0:-<6}", "");
+  println!("{: <30} | {: <6} | {: <10} | {: <15} | {: <15} | {: <6}", "Name", "Access", "Persistent", "Default", "Stored Value", "Value");
+  println!("{0:-<30}-|-{0:-<6}-|-{0:-<10}-|-{0:-<15}-|-{0:-<15}-|-{0:-<6}", "");
 
   let name_list: Vec<&str> = names.split(',').collect();
   for name in name_list {
@@ -36,13 +49,31 @@ pub async fn get(cf: &Crazyflie, names: &str) -> Result<()> {
     } else {
       "RO"
     };
-    println!("{: <30} | {: ^6} | {:?}", name, writable, value);
+
+    let (persistent, default_str, stored_str) = if cf.param.is_persistent(name).await? {
+      match cf.param.persistent_get_state(name).await {
+        Ok(state) => {
+          let stored = if state.is_stored { "Yes".to_string() } else { "No".to_string() };
+          let default = format!("{:?}", state.default_value);
+          let stored_val = match state.stored_value {
+            Some(v) => format!("{:?}", v),
+            None => String::new(),
+          };
+          (stored, default, stored_val)
+        }
+        Err(_) => ("Error".to_string(), String::new(), String::new()),
+      }
+    } else {
+      (String::new(), String::new(), String::new())
+    };
+
+    println!("{: <30} | {: ^6} | {: <10} | {: <15} | {: <15} | {:?}", name, writable, persistent, default_str, stored_str, value);
   }
 
   Ok(())
 }
 
-pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>) -> Result<()> {
+pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>, store: bool) -> Result<()> {
 
   for (name, value) in param_list {
     match cf.param.get_type(&name) {
@@ -92,9 +123,30 @@ pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>) -> Result
     },
     Err(e) => bail!("Failed to get type for parameter '{}': {}", name, e),
   }
-}
 
+    if store {
+      cf.param.persistent_store(name).await?;
+      println!("Stored {} to EEPROM", name);
+    }
+  }
 
   Ok(())
 }
 
+pub async fn store(cf: &Crazyflie, names: &str) -> Result<()> {
+  let name_list: Vec<&str> = names.split(',').collect();
+  for name in name_list {
+    cf.param.persistent_store(name).await?;
+    println!("Stored {} to EEPROM", name);
+  }
+  Ok(())
+}
+
+pub async fn clear(cf: &Crazyflie, names: &str) -> Result<()> {
+  let name_list: Vec<&str> = names.split(',').collect();
+  for name in name_list {
+    cf.param.persistent_clear(name).await?;
+    println!("Cleared {} from EEPROM", name);
+  }
+  Ok(())
+}

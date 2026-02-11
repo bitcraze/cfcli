@@ -254,6 +254,10 @@ enum ParamCommands {
     Get(VariableName),
     /// Set the value of a parameter
     Set(VariableNameAndValue),
+    /// Store the current value of a parameter to EEPROM
+    Store(VariableName),
+    /// Clear a stored parameter value from EEPROM (reverts to firmware default)
+    Clear(VariableName),
 }
 
 #[derive(Debug, Subcommand)]
@@ -566,7 +570,10 @@ struct VariableNameAndValue {
     /// Comma separated list of parameter value pairs (defaults to list of selection)
     /// Example: usd.logging=1,loco.mode=2
     #[clap(value_parser, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
-    params: Option<HashMap<String, String>>
+    params: Option<HashMap<String, String>>,
+    /// Store the parameter(s) to EEPROM after setting
+    #[clap(long)]
+    store: bool,
 }
 
 #[derive(Debug, Args)]
@@ -834,7 +841,51 @@ async fn main() -> Result<()> {
                       }
                     };
 
-                    modules::param::set(&cf, &param_list).await?;
+                    modules::param::set(&cf, &param_list, params.store).await?;
+                }
+                ParamCommands::Store(var) => {
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+
+                    let names = match &var.names {
+                      Some(n) => n.clone(),
+                      None => {
+                        let available_vars = cf.param.names();
+                        let mut persistent_vars = Vec::new();
+                        for name in available_vars {
+                            if cf.param.is_persistent(&name).await? {
+                                persistent_vars.push(name);
+                            }
+                        }
+                        let selected_vars = MultiSelect::new("Select parameters to store:", persistent_vars)
+                          .prompt()
+                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
+                        selected_vars.join(",")
+                      }
+                    };
+
+                    modules::param::store(&cf, &names).await?;
+                }
+                ParamCommands::Clear(var) => {
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+
+                    let names = match &var.names {
+                      Some(n) => n.clone(),
+                      None => {
+                        let available_vars = cf.param.names();
+                        let mut persistent_vars = Vec::new();
+                        for name in available_vars {
+                            if cf.param.is_persistent(&name).await? {
+                                persistent_vars.push(name);
+                            }
+                        }
+                        let selected_vars = MultiSelect::new("Select parameters to clear:", persistent_vars)
+                          .prompt()
+                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
+                        selected_vars.join(",")
+                      }
+                    };
+
+                    modules::param::clear(&cf, &names).await?;
                 }
             }
         }

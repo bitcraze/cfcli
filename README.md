@@ -125,6 +125,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [High-Level Commander](/docs/high-level-commander.md)
 * [Logging](/docs/logging.md)
 * [Memory](/docs/memory.md)
+* [Parameters](/docs/parameters.md)
 * [Platform](/docs/platform.md)
 
 ## Development
