@@ -76,7 +76,7 @@ Commands:
   scan      List the Crazyflies found while scanning (on the selected address)
   select    Scan for Crazyflies and select which one to save for later interactions
   console   Print the console text from a Crazyflie
-  hl        High-level commander operations (takeoff, land, go-to, trajectory, etc.)
+  hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
   help      Print this message or the help of the given subcommand(s)
 
 Options:

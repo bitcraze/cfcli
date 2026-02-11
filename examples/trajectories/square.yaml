@@ -12,12 +12,12 @@
 #
 # Usage:
 #   cfcli trajectory upload examples/square.yaml
-#   cfcli hl arm
-#   cfcli hl takeoff 0.5
+#   cfcli hlc arm
+#   cfcli hlc takeoff 0.5
 #   sleep 3
 #   cfcli trajectory run 1 -r   # -r for relative position
 #   sleep 9
-#   cfcli hl land
+#   cfcli hlc land
 
 segments:
   # Segment 1: (0.25, 0.25) -> (-0.25, 0.25) - move left

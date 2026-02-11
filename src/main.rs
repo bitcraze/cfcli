@@ -204,7 +204,7 @@ enum Commands {
     },
 
     /// High-level commander operations (takeoff, land, go-to, trajectory, etc.)
-    Hl {
+    Hlc {
         #[clap(subcommand)]
         command: HlCommands,
     },
@@ -1195,7 +1195,7 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Hl { command } => {
+        Commands::Hlc { command } => {
             // Handle trajectory display with file separately (no connection needed)
             if let HlCommands::Trajectory { command: TrajectoryCommands::Display(params) } = &command {
                 if let Some(file_path) = &params.file {
