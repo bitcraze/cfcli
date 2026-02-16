@@ -5,7 +5,7 @@ takeoff, landing, position control, and trajectory execution. All commands requi
 to have a valid position estimate (from a positioning system like Lighthouse or Loco).
 
 ```text
-Usage: cfcli hl <COMMAND>
+Usage: cfcli hlc <COMMAND>
 
 Commands:
   arm         Arm the Crazyflie (enable motors)
@@ -24,8 +24,8 @@ Before flying, the Crazyflie must be armed. This enables the motors and allows t
 commander to control the drone.
 
 ```text
-cfcli hl arm
-cfcli hl disarm
+cfcli hlc arm
+cfcli hlc disarm
 ```
 
 ## Takeoff
@@ -33,20 +33,20 @@ cfcli hl disarm
 Take off to a specified height. The duration specifies how long it should take to reach the target height.
 
 ```text
-cfcli hl takeoff <HEIGHT> [DURATION] [--yaw <YAW>]
+cfcli hlc takeoff <HEIGHT> [DURATION] [--yaw <YAW>]
 ```
 
 ### Takeoff Examples
 
 ```text
 # Take off to 0.5 meters over 2 seconds (default)
-cfcli hl takeoff 0.5
+cfcli hlc takeoff 0.5
 
 # Take off to 1 meter over 3 seconds
-cfcli hl takeoff 1.0 3.0
+cfcli hlc takeoff 1.0 3.0
 
 # Take off to 0.5 meters while rotating to 90 degrees yaw
-cfcli hl takeoff 0.5 --yaw 90
+cfcli hlc takeoff 0.5 --yaw 90
 ```
 
 ## Land
@@ -54,20 +54,20 @@ cfcli hl takeoff 0.5 --yaw 90
 Land at the current position. The height parameter specifies the target landing height (typically 0.0).
 
 ```text
-cfcli hl land [HEIGHT] [DURATION] [--yaw <YAW>]
+cfcli hlc land [HEIGHT] [DURATION] [--yaw <YAW>]
 ```
 
 ### Land Examples
 
 ```text
 # Land over 2 seconds (default)
-cfcli hl land
+cfcli hlc land
 
 # Land over 3 seconds
-cfcli hl land 0.0 3.0
+cfcli hlc land 0.0 3.0
 
 # Land while rotating to 0 degrees yaw
-cfcli hl land --yaw 0
+cfcli hlc land --yaw 0
 ```
 
 ## Go To Position
@@ -75,7 +75,7 @@ cfcli hl land --yaw 0
 Move to a specified position. The position is given as comma-separated x,y,z coordinates.
 
 ```text
-cfcli hl goto <POSITION> [-d <DURATION>] [--yaw <YAW>] [-r]
+cfcli hlc goto <POSITION> [-d <DURATION>] [--yaw <YAW>] [-r]
 ```
 
 The position format is `x,y,z` where `x`, `y`, `z` are coordinates in meters.
@@ -90,19 +90,19 @@ Options:
 
 ```text
 # Go to position (1, 0, 0.5) over 2 seconds
-cfcli hl goto 1.0,0.0,0.5
+cfcli hlc goto 1.0,0.0,0.5
 
 # Go to position (1, 2, 1) with 90 degree yaw over 5 seconds
-cfcli hl goto 1.0,2.0,1.0 --yaw 90 -d 5.0
+cfcli hlc goto 1.0,2.0,1.0 --yaw 90 -d 5.0
 
 # Move 0.5 meters forward relative to current position
-cfcli hl goto 0.5,0,0 -r
+cfcli hlc goto 0.5,0,0 -r
 
 # Negative coordinates are supported
-cfcli hl goto -1.0,-0.5,0.5
+cfcli hlc goto -1.0,-0.5,0.5
 
 # Rotate to 180 degrees yaw while moving
-cfcli hl goto 0.0,0.0,0.5 --yaw 180
+cfcli hlc goto 0.0,0.0,0.5 --yaw 180
 ```
 
 ## Stop
@@ -110,7 +110,7 @@ cfcli hl goto 0.0,0.0,0.5 --yaw 180
 Immediately stop all high-level commander operations and disable the motors.
 
 ```text
-cfcli hl stop
+cfcli hlc stop
 ```
 
 ## Trajectory Operations
@@ -119,7 +119,7 @@ Trajectories allow complex pre-defined flight paths to be executed. Trajectories
 as polynomial segments in a YAML file, uploaded to the Crazyflie's memory, and then executed.
 
 ```text
-Usage: cfcli hl trajectory <COMMAND>
+Usage: cfcli hlc trajectory <COMMAND>
 
 Commands:
   upload   Upload a trajectory from a YAML file
@@ -161,7 +161,7 @@ Each segment uses 132 bytes of memory on the Crazyflie.
 Upload a trajectory from a YAML file to the Crazyflie's trajectory memory.
 
 ```text
-cfcli hl trajectory upload <FILE> [-i <ID>] [-o <OFFSET>]
+cfcli hlc trajectory upload <FILE> [-i <ID>] [-o <OFFSET>]
 ```
 
 Options:
@@ -172,14 +172,14 @@ Options:
 
 ```text
 # Upload trajectory with default ID (1)
-cfcli hl trajectory upload my_trajectory.yaml
+cfcli hlc trajectory upload my_trajectory.yaml
 
 # Upload trajectory with ID 2
-cfcli hl trajectory upload figure8.yaml -i 2
+cfcli hlc trajectory upload figure8.yaml -i 2
 
 # Upload multiple trajectories at different offsets
-cfcli hl trajectory upload traj1.yaml -i 1 -o 0
-cfcli hl trajectory upload traj2.yaml -i 2 -o 1000
+cfcli hlc trajectory upload traj1.yaml -i 1 -o 0
+cfcli hlc trajectory upload traj2.yaml -i 2 -o 1000
 ```
 
 ### Run Trajectory
@@ -187,7 +187,7 @@ cfcli hl trajectory upload traj2.yaml -i 2 -o 1000
 Execute a previously uploaded trajectory.
 
 ```text
-cfcli hl trajectory run <ID> [-s <SCALE>] [-r] [-y] [--reversed]
+cfcli hlc trajectory run <ID> [-s <SCALE>] [-r] [-y] [--reversed]
 ```
 
 Options:
@@ -200,19 +200,19 @@ Options:
 
 ```text
 # Run trajectory ID 1 at normal speed
-cfcli hl trajectory run 1
+cfcli hlc trajectory run 1
 
 # Run trajectory at half speed
-cfcli hl trajectory run 1 -s 2.0
+cfcli hlc trajectory run 1 -s 2.0
 
 # Run trajectory at double speed
-cfcli hl trajectory run 1 -s 0.5
+cfcli hlc trajectory run 1 -s 0.5
 
 # Run trajectory relative to current position and yaw
-cfcli hl trajectory run 1 -r -y
+cfcli hlc trajectory run 1 -r -y
 
 # Run trajectory in reverse
-cfcli hl trajectory run 1 --reversed
+cfcli hlc trajectory run 1 --reversed
 ```
 
 ### Display Trajectory Info
@@ -221,10 +221,10 @@ Display information about a trajectory file or the Crazyflie's trajectory memory
 
 ```text
 # Display trajectory file contents
-cfcli hl trajectory display my_trajectory.yaml
+cfcli hlc trajectory display my_trajectory.yaml
 
 # Display trajectory memory info from Crazyflie
-cfcli hl trajectory display
+cfcli hlc trajectory display
 ```
 
 ## Complete Flight Example
@@ -236,32 +236,32 @@ Here's a complete example of a simple flight sequence:
 cfcli select
 
 # Arm the motors
-cfcli hl arm
+cfcli hlc arm
 
 # Take off to 0.5 meters
-cfcli hl takeoff 0.5
+cfcli hlc takeoff 0.5
 
 # Wait a moment (the command returns immediately)
 sleep 3
 
 # Move to a position
-cfcli hl goto 1.0,0.0,0.5 -d 2.0
+cfcli hlc goto 1.0,0.0,0.5 -d 2.0
 sleep 3
 
 # Move to another position
-cfcli hl goto 0.0,1.0,0.5 -d 2.0
+cfcli hlc goto 0.0,1.0,0.5 -d 2.0
 sleep 3
 
 # Return to origin
-cfcli hl goto 0.0,0.0,0.5 -d 2.0
+cfcli hlc goto 0.0,0.0,0.5 -d 2.0
 sleep 3
 
 # Land
-cfcli hl land
+cfcli hlc land
 sleep 3
 
 # Disarm (optional, landing auto-disarms after a delay)
-cfcli hl disarm
+cfcli hlc disarm
 ```
 
 ## Trajectory Flight Example
@@ -273,20 +273,20 @@ Example of uploading and running a trajectory:
 cfcli select
 
 # Check trajectory file contents
-cfcli hl trajectory display figure8.yaml
+cfcli hlc trajectory display figure8.yaml
 
 # Arm and take off
-cfcli hl arm
-cfcli hl takeoff 0.5
+cfcli hlc arm
+cfcli hlc takeoff 0.5
 sleep 3
 
 # Upload the trajectory
-cfcli hl trajectory upload figure8.yaml -i 1
+cfcli hlc trajectory upload figure8.yaml -i 1
 
 # Run the trajectory (relative to current position)
-cfcli hl trajectory run 1 -r
+cfcli hlc trajectory run 1 -r
 
 # Wait for trajectory to complete, then land
 sleep 10
-cfcli hl land
+cfcli hlc land
 ```
