@@ -211,7 +211,7 @@ enum Commands {
     },
 
     /// Lighthouse positioning system configuration
-    Lighthouse {
+    Lh {
         #[clap(subcommand)]
         command: LighthouseCommands,
     },
@@ -1429,7 +1429,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Lighthouse { command } => {
+        Commands::Lh { command } => {
             // Handle lighthouse display with file separately (no connection needed)
             if let LighthouseCommands::Display(params) = &command {
                 if let Some(file_path) = &params.file {

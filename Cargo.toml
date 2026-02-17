@@ -75,3 +75,8 @@ reqwest = { version="0.12.24", default-features = false, features = ["rustls-tls
 zip = "6.0.0"
 byteorder = "1.5.0"
 hex = "0.4.3"
+
+[patch.crates-io]
+crazyflie-link = { path = "../crazyflie-link-rs/crazyflie-link" }
+crazyflie-lib = { path = "../crazyflie-lib-rs"}
+crazyradio = { path = "../crazyradio-rs" }
