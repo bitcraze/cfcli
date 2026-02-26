@@ -204,8 +204,11 @@ enum Commands {
       no_format: bool,
     },
 
-    /// Display Loco Positioning System anchor information
-    Loco,
+    /// Loco Positioning System
+    Loco {
+        #[clap(subcommand)]
+        command: LocoCommands,
+    },
 
     /// High-level commander operations (takeoff, land, go-to, trajectory, etc.)
     Hlc {
@@ -457,6 +460,12 @@ struct TrajectoryDisplayParameters {
     /// Path to a trajectory YAML file to display (optional, shows memory info if omitted)
     #[clap(value_parser)]
     file: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum LocoCommands {
+    /// Display Loco Positioning System anchor information
+    Display,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1256,10 +1265,14 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Loco => {
-            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
-            modules::lps::display(&cf).await?;
-            cf.disconnect().await;
+        Commands::Loco { command } => {
+            match command {
+                LocoCommands::Display => {
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    modules::lps::display(&cf).await?;
+                    cf.disconnect().await;
+                }
+            }
         }
         Commands::Hlc { command } => {
             // Handle trajectory display with file separately (no connection needed)

@@ -76,6 +76,7 @@ Commands:
   scan      List the Crazyflies found while scanning (on the selected address)
   select    Scan for Crazyflies and select which one to save for later interactions
   console   Print the console text from a Crazyflie
+  loco      Loco Positioning System
   hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
   help      Print this message or the help of the given subcommand(s)
 
@@ -123,6 +124,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Bootloader](/docs/bootload.md)
 * [Console](/docs/console.md)
 * [High-Level Commander](/docs/high-level-commander.md)
+* [Loco Positioning System](/docs/loco.md)
 * [Logging](/docs/logging.md)
 * [Memory](/docs/memory.md)
 * [Parameters](/docs/parameters.md)
