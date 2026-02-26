@@ -354,6 +354,12 @@ struct FlashParameters {
   /// Use coldboot (i.e rescue mode) to flash the device
   #[clap(long, default_value_t = false)]
   cold: bool,
+  /// Platform to use when cold-booting (skips connecting to running firmware).
+  /// If not specified in cold-boot mode, you will be prompted to select one.
+  ///
+  /// Valid values: cf21, cf21bl, bolt11, flapper, tag
+  #[clap(long, verbatim_doc_comment)]
+  platform: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1396,9 +1402,42 @@ async fn main() -> Result<()> {
                     Some(result)
                   };
 
-                  let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache.clone(), args.debug).await?;
-                  let platform = cf.platform.device_type_name().await?;
-                  cf.disconnect().await;
+                  let platform = if params.cold {
+                    // In cold-boot/recovery mode the Crazyflie is not running firmware,
+                    // so we cannot connect to query the platform. Use the --platform
+                    // flag or ask the user interactively.
+                    let resolve_platform = |p: &str| -> Result<String> {
+                      match p.to_lowercase().as_str() {
+                        "cf21" => Ok("Crazyflie 2.1".to_string()),
+                        "cf21bl" => Ok("Crazyflie 2.1 Brushless".to_string()),
+                        "bolt11" => Ok("Crazyflie Bolt 1.1".to_string()),
+                        "flapper" => Ok("Flapper (Bolt 1.1)".to_string()),
+                        "tag" => Ok("Roadrunner 1.0".to_string()),
+                        _ => bail!("Unknown platform '{}'. Valid options: cf21, cf21bl, bolt11, flapper, tag", p),
+                      }
+                    };
+                    match &params.platform {
+                      Some(p) => resolve_platform(p)?,
+                      None => {
+                        let platforms = vec![
+                          "Crazyflie 2.1",
+                          "Crazyflie 2.1 Brushless",
+                          "Crazyflie Bolt 1.1",
+                          "Flapper (Bolt 1.1)",
+                          "Roadrunner 1.0",
+                        ];
+                        Select::new("Select the platform:", platforms)
+                          .prompt()
+                          .map_err(|_| anyhow::anyhow!("No platform selected"))?
+                          .to_string()
+                      }
+                    }
+                  } else {
+                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache.clone(), args.debug).await?;
+                    let platform = cf.platform.device_type_name().await?;
+                    cf.disconnect().await;
+                    platform
+                  };
 
                   // First create a list of firmwares and targets before starting the bootloading
                   let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &params.zip, &bin_with_selections).await?;

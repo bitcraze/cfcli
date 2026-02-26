@@ -206,9 +206,9 @@ async fn send_command(link: &Connection, cmd: BootloaderCommand, data: Option<&[
     Ok(())
 }
 
-pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, warm: bool, uri: &str) -> Result<()> {
+pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, cold: bool, uri: &str) -> Result<()> {
 
-  let link = start_bootloader(link_context, warm, uri).await?;
+  let link = start_bootloader(link_context, cold, uri).await?;
   let info = get_info(&link, TARGET_NRF51).await?;
 
   println!("Bootloader Info:");
