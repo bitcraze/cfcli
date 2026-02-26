@@ -25,6 +25,7 @@ pub mod modules {
     pub mod console;
     pub mod test;
     pub mod trajectory;
+    pub mod lps;
 }
 
 pub mod utils {
@@ -202,6 +203,9 @@ enum Commands {
       #[clap(long)]
       no_format: bool,
     },
+
+    /// Display Loco Positioning System anchor information
+    Loco,
 
     /// High-level commander operations (takeoff, land, go-to, trajectory, etc.)
     Hlc {
@@ -1246,6 +1250,11 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Loco => {
+            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+            modules::lps::display(&cf).await?;
+            cf.disconnect().await;
+        }
         Commands::Hlc { command } => {
             // Handle trajectory display with file separately (no connection needed)
             if let HlCommands::Trajectory { command: TrajectoryCommands::Display(params) } = &command {
