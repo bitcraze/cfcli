@@ -636,19 +636,19 @@ impl ConfigTocCache {
 }
 
 impl TocCache for ConfigTocCache {
-    fn get_toc(&self, crc32: u32) -> Option<String> {
+    fn get_toc(&self, crc32: &[u8]) -> Option<String> {
         match self.no_toc_cache {
             true => return None,
-            false => self.config.lock().unwrap().toc_cache.get(&crc32.to_string()).cloned(),
+            false => self.config.lock().unwrap().toc_cache.get(&crc32.iter().map(|b| format!("{:02x}", b)).collect::<String>()).cloned(),
         } 
     }
     
-    fn store_toc(&self, crc32: u32, toc: &str) {
+    fn store_toc(&self, crc32: &[u8], toc: &str) {
         match self.no_toc_cache {
             true => return,
             false => {
               let mut config = self.config.lock().unwrap();
-              config.toc_cache.insert(crc32.to_string(), toc.to_string());
+              config.toc_cache.insert(crc32.iter().map(|b| format!("{:02x}", b)).collect::<String>(), toc.to_string());
               confy::store("cf-cli", None, config.clone()).unwrap_or_else(|err| {
                   println!("Could not save configuration: {:?}", err);
               });              
