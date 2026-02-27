@@ -195,7 +195,7 @@ enum Commands {
     Scan(ScanOptions),
 
     /// Scan for Crazyflies and select which one to save for later interactions
-    Select(ScanOptions),
+    Select(SelectOptions),
 
     /// Print the console text from a Crazyflie
     Console {
@@ -222,6 +222,16 @@ struct ScanOptions {
     /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7)
     #[clap(value_parser, default_value = "E7E7E7E7E7")]
     address: String,
+}
+
+#[derive(Debug, Args)]
+struct SelectOptions {
+    /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7)
+    #[clap(value_parser, default_value = "E7E7E7E7E7")]
+    address: String,
+    /// Automatically select the URI if exactly one Crazyflie is found
+    #[clap(long)]
+    auto: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -742,23 +752,24 @@ async fn main() -> Result<()> {
                 println!("> {}", uri);
             }
         }
-        Commands::Select(scan_options) => {
+        Commands::Select(select_options) => {
             // Scan for Crazyflies on the default address
-            let address = decode_address(&scan_options.address)?;
+            let address = decode_address(&select_options.address)?;
             let found = link_context.scan(address).await?;
 
             if found.is_empty() {
-                println!("No Crazyflies found");
-                return Ok(());
+                bail!("No Crazyflies found");
             }
 
-            let selected_uri = Select::new("Select a link:", found.clone())
-                .prompt()
-                .ok();
-
-            let selected_uri = match selected_uri {
-                Some(uri) => uri,
-                None => bail!("No Crazyflie selected"),
+            let selected_uri = if select_options.auto {
+                if found.len() != 1 {
+                    bail!("Expected exactly one Crazyflie, found {}", found.len());
+                }
+                found[0].clone()
+            } else {
+                Select::new("Select a link:", found.clone())
+                    .prompt()
+                    .map_err(|_| anyhow::anyhow!("No Crazyflie selected"))?
             };
 
             config.uri = selected_uri.clone();

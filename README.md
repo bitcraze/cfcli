@@ -129,6 +129,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Memory](/docs/memory.md)
 * [Parameters](/docs/parameters.md)
 * [Platform](/docs/platform.md)
+* [Select](/docs/select.md)
 
 ## Development
 
