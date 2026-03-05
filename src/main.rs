@@ -290,11 +290,20 @@ enum UtilCommands {
 enum TestCommands {
     /// Stability testing
     Stability (StabilityTestParameters),
+    /// Reboot test: repeatedly reboot and check selftest and console
+    Reboot (RebootTestParameters),
 }
 
 #[derive(Debug, Args)]
 struct StabilityTestParameters {
     /// Number of iterations to run each test
+    #[clap(value_parser, default_value_t = 10)]
+    iterations: u32,
+}
+
+#[derive(Debug, Args)]
+struct RebootTestParameters {
+    /// Number of reboot iterations to run
     #[clap(value_parser, default_value_t = 10)]
     iterations: u32,
 }
@@ -1273,6 +1282,9 @@ async fn main() -> Result<()> {
             match command {
                 TestCommands::Stability(params) => {
                     modules::test::stability(&link_context, config.uri.as_str(), params.iterations).await?;
+                }
+                TestCommands::Reboot(params) => {
+                    modules::test::reboot(&link_context, config.uri.as_str(), toc_cache, params.iterations).await?;
                 }
             }
         },

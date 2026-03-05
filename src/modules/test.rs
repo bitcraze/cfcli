@@ -1,10 +1,17 @@
 use std::pin::Pin;
 use std::future::Future;
+use std::io::Write;
 
 use anyhow::{bail, Result};
 use crazyflie_lib::NoTocCache;
+use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
+use tokio::time::{sleep, timeout, Duration};
+
+use crate::ConfigTocCache;
+use crate::modules::bootloader;
 
 // Keep the trait without async_trait (cleaner!)
 pub trait StabilityTest {
@@ -188,6 +195,159 @@ async fn run_stability_tests(
   for bar in bars {
     bar.finish();
   }
-  
+
   Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RebootTestResult {
+    iteration: u32,
+    selftest_passed: bool,
+    console: String,
+}
+
+pub async fn reboot(
+    link_context: &crazyflie_link::LinkContext,
+    uri: &str,
+    toc_cache: ConfigTocCache,
+    iterations: u32,
+) -> Result<()> {
+    use colored::Colorize;
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let output_file = format!("reboot_test_results_{}.json", timestamp);
+    let output_file = output_file.as_str();
+    let mut results: Vec<RebootTestResult> = Vec::new();
+    let mut reboot_time: Option<std::time::Instant> = None;
+    let mut fail_count: u32 = 0;
+
+    let term_width = terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(80);
+    let label = "Reboot test";
+    let bar_width = term_width.saturating_sub(50 + label.len());
+
+    let bar = ProgressBar::new(iterations as u64);
+    bar.set_style(
+        ProgressStyle::default_bar()
+            .template(&format!("{} [{{elapsed_precise}}] [{{bar:{}.cyan/blue}}] {{pos}}/{{len}} {{msg}}", label, bar_width))
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    bar.enable_steady_tick(Duration::from_millis(100));
+
+    // Start by rebooting
+    bar.set_message("rebooting...".to_string());
+    bootloader::reboot(link_context, uri).await?;
+
+    for i in 1..=iterations {
+        bar.set_message(format!("connecting..."));
+
+        let connect_deadline = std::time::Instant::now() + Duration::from_secs(7);
+        let cf = loop {
+            let remaining = connect_deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break None;
+            }
+            match timeout(remaining, crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache.clone())).await {
+                Ok(Ok(cf)) => break Some(cf),
+                Ok(Err(_)) | Err(_) => {
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        };
+
+        let (passed, console_lines) = if let Some(cf) = cf {
+            bar.set_message("reading selftest...".to_string());
+
+            // Read system.selftestPassed
+            let selftest_passed: i8 = cf.param.get("system.selftestPassed").await?;
+            let passed = selftest_passed != 0;
+
+            // Collect console lines until it's time to reboot (10s since last reboot)
+            bar.set_message("collecting console...".to_string());
+            let mut console_lines: Vec<String> = Vec::new();
+            let mut line_stream = cf.console.line_stream().await;
+
+            let console_deadline = if i < iterations {
+                let since_reboot = reboot_time.map_or(Duration::ZERO, |rt| rt.elapsed());
+                let min_interval = Duration::from_secs(10);
+                if since_reboot < min_interval {
+                    min_interval - since_reboot
+                } else {
+                    Duration::from_millis(500)
+                }
+            } else {
+                Duration::from_millis(500)
+            };
+            let deadline = std::time::Instant::now() + console_deadline;
+
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match timeout(remaining, line_stream.next()).await {
+                    Ok(Some(line)) => {
+                        console_lines.push(line);
+                    }
+                    _ => {
+                        break;
+                    }
+                }
+            }
+
+            cf.disconnect().await;
+            (passed, console_lines.join("\n"))
+        } else {
+            bar.println(format!("{}", format!("  Iteration {}: connect timeout", i).red()));
+            (false, String::new())
+        };
+
+        if !passed {
+            fail_count += 1;
+        }
+
+        // Save result for this iteration
+        let result = RebootTestResult {
+            iteration: i,
+            selftest_passed: passed,
+            console: console_lines,
+        };
+        results.push(result);
+
+        // Write results to file after each iteration
+        let json = serde_json::to_string_pretty(&results)?;
+        let mut file = std::fs::File::create(output_file)?;
+        file.write_all(json.as_bytes())?;
+
+        bar.inc(1);
+
+        if fail_count > 0 {
+            bar.set_message(format!("{}", format!("{} failed", fail_count).red()));
+        } else {
+            bar.set_message(String::new());
+        }
+
+        if i < iterations {
+            bar.set_message(if fail_count > 0 {
+                format!("{} rebooting...", format!("{} failed", fail_count).red())
+            } else {
+                "rebooting...".to_string()
+            });
+            bootloader::reboot(link_context, uri).await?;
+            reboot_time = Some(std::time::Instant::now());
+        }
+    }
+
+    let pass_count = results.iter().filter(|r| r.selftest_passed).count();
+    let summary = if fail_count > 0 {
+        format!("{}/{} passed ({})", pass_count, iterations, format!("{} failed", fail_count).red())
+    } else {
+        format!("{}/{} passed", pass_count, iterations)
+    };
+    bar.finish_with_message(summary);
+    println!("Results saved to {}", output_file);
+
+    Ok(())
 }
