@@ -83,6 +83,7 @@ Commands:
 Options:
   -n, --no-toc-cache  Do not use TOC cache
   -d, --debug         Enable debug mode
+  -u, --uri <URI>     Override the URI to connect to (instead of using the config file)
   -h, --help          Print help
   -V, --version       Print version
 ```
@@ -100,7 +101,14 @@ If you have a Crazyflie on a different address than the default you can specify 
 cfcli select 0xE7E7E7E7E7
 ```
 
-Now this URI will be used in all commands until a new one is selected. For instance a parameter
+Now this URI will be used in all commands until a new one is selected. You can also override the
+selected URI for a single command using the `--uri` flag:
+
+```text
+cfcli --uri radio://0/80/2M/E7E7E7E7E7 console
+```
+
+For instance a parameter
 can be set using the following command:
 
 ```text

@@ -139,6 +139,10 @@ struct CliArgs {
     /// Enable debug mode
     #[clap(short, long, action)]
     debug: bool,
+
+    /// Override the URI to connect to (instead of using the config file)
+    #[clap(short, long)]
+    uri: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -744,6 +748,8 @@ async fn main() -> Result<()> {
         Config::default()
     });
 
+    let uri = args.uri.clone().unwrap_or(config.uri.clone());
+
     let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
 
     #[cfg(feature = "packet_capture")]
@@ -789,7 +795,7 @@ async fn main() -> Result<()> {
 
         }
         Commands::Console { no_format } => {
-            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+            let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
             modules::console::print(&cf, *no_format).await?;
 
@@ -798,7 +804,7 @@ async fn main() -> Result<()> {
         Commands::Log { command } => {
             match command {
                 LogCommands::List => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     modules::log::list(&cf).await?;
 
@@ -806,7 +812,7 @@ async fn main() -> Result<()> {
                 }
                 LogCommands::Print(var) => {
 
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
@@ -831,14 +837,14 @@ async fn main() -> Result<()> {
         Commands::Param { command } => {
             match command {
                 ParamCommands::List => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
                     modules::param::list(&cf).await?;
                 }
                 ParamCommands::Get(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -854,7 +860,7 @@ async fn main() -> Result<()> {
                     modules::param::get(&cf, &names).await?;
                 }
                 ParamCommands::Set(params) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let param_list = match &params.params {
                       Some(p) => p.clone(),
@@ -883,7 +889,7 @@ async fn main() -> Result<()> {
                     modules::param::set(&cf, &param_list, params.store).await?;
                 }
                 ParamCommands::Store(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -905,7 +911,7 @@ async fn main() -> Result<()> {
                     modules::param::store(&cf, &names).await?;
                 }
                 ParamCommands::Clear(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -1007,7 +1013,7 @@ async fn main() -> Result<()> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1080,7 +1086,7 @@ async fn main() -> Result<()> {
                     cf.disconnect().await;
                 }
                 ConfigCommands::Display => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1097,7 +1103,7 @@ async fn main() -> Result<()> {
         Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memory = cf.memory.get_memories(None);
 
@@ -1113,7 +1119,7 @@ async fn main() -> Result<()> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Read(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1156,7 +1162,7 @@ async fn main() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1179,7 +1185,7 @@ async fn main() -> Result<()> {
                     cf.disconnect().await;
                 }
                 MemoryCommands::Display(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1211,7 +1217,7 @@ async fn main() -> Result<()> {
                     cf.disconnect().await;
                   }
                 MemoryCommands::Erase(var) => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1251,7 +1257,7 @@ async fn main() -> Result<()> {
         Commands::Platform { command } => {
             match command {
                 PlatformCommands::Info => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let protocol_version = cf.platform.protocol_version().await?;
                     let firmware_version = cf.platform.firmware_version().await?;
@@ -1264,16 +1270,16 @@ async fn main() -> Result<()> {
                     cf.disconnect().await;
                 }
                 PlatformCommands::Reboot => {
-                    modules::bootloader::reboot(&link_context, config.uri.as_str()).await?;
+                    modules::bootloader::reboot(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::PowerOff => {
-                    modules::bootloader::power_off(&link_context, config.uri.as_str()).await?;
+                    modules::bootloader::power_off(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::Sleep => {
-                    modules::bootloader::sysoff(&link_context, config.uri.as_str()).await?;
+                    modules::bootloader::sysoff(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::Wakeup => {
-                    modules::bootloader::syson(&link_context, config.uri.as_str()).await?;
+                    modules::bootloader::syson(&link_context, uri.as_str()).await?;
                 }
             }
             
@@ -1281,17 +1287,17 @@ async fn main() -> Result<()> {
         Commands::Test { command } => {
             match command {
                 TestCommands::Stability(params) => {
-                    modules::test::stability(&link_context, config.uri.as_str(), params.iterations).await?;
+                    modules::test::stability(&link_context, uri.as_str(), params.iterations).await?;
                 }
                 TestCommands::Reboot(params) => {
-                    modules::test::reboot(&link_context, config.uri.as_str(), toc_cache, params.iterations).await?;
+                    modules::test::reboot(&link_context, uri.as_str(), toc_cache, params.iterations).await?;
                 }
             }
         },
         Commands::Loco { command } => {
             match command {
                 LocoCommands::Display => {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
                     modules::lps::display(&cf).await?;
                     cf.disconnect().await;
                 }
@@ -1306,7 +1312,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache, args.debug).await?;
+            let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
             match command {
                 HlCommands::Arm => {
@@ -1380,7 +1386,7 @@ async fn main() -> Result<()> {
         Commands::Bootload { command } => {
             match command {
                 BootloadCommands::Info(params) => {
-                    modules::bootloader::print_bootloader_info(&link_context, params.cold, config.uri.as_str()).await?;
+                    modules::bootloader::print_bootloader_info(&link_context, params.cold, uri.as_str()).await?;
                 }
                 BootloadCommands::Releases => {
                     utils::firmware::print_releases().await?;
@@ -1469,7 +1475,7 @@ async fn main() -> Result<()> {
                       }
                     }
                   } else {
-                    let cf = connect_with_spinner(&link_context, config.uri.as_str(), toc_cache.clone(), args.debug).await?;
+                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache.clone(), args.debug).await?;
                     let platform = cf.platform.device_type_name().await?;
                     cf.disconnect().await;
                     platform
@@ -1498,7 +1504,7 @@ async fn main() -> Result<()> {
                   } else {
                     modules::bootloader::flash(
                       &link_context,
-                      config.uri.as_str(),
+                      uri.as_str(),
                       toc_cache,
                       upgrade,
                       params.no_verify,
