@@ -10,7 +10,7 @@ fn print_eeprom_info(eeprom: &EEPROMConfigMemory) {
     println!("  Radio Speed: {}", eeprom.get_radio_speed());
     println!("  Pitch Trim: {:.4}", eeprom.get_pitch_trim());
     println!("  Roll Trim: {:.4}", eeprom.get_roll_trim());
-    println!("  Radio Address: {:02X?}", eeprom.get_radio_address());
+    println!("  Radio Address: 0x{}", eeprom.get_radio_address().iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""));
 }
 
 fn print_ow_info(ow: &OwMemory) {
