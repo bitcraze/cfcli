@@ -73,6 +73,7 @@ Commands:
   bootload  Bootload the Crazyflie and decks
   test      Run tests with the Crazyflie
   platform  Access platform functionality
+  settings  Local CLI settings (scan addresses, timeout, etc.)
   scan      List the Crazyflies found while scanning (on the selected address)
   select    Scan for Crazyflies and select which one to save for later interactions
   console   Print the console text from a Crazyflie
@@ -98,7 +99,14 @@ cfcli select
 If you have a Crazyflie on a different address than the default you can specify it while scanning or selecting:
 
 ```text
-cfcli select 0xE7E7E7E7E7
+cfcli select E7E7E7E7E7
+```
+
+You can also configure persistent scan addresses and a connection timeout using the `settings` command:
+
+```text
+cfcli settings address add E7E7E7E701
+cfcli settings timeout set 2000
 ```
 
 Now this URI will be used in all commands until a new one is selected. You can also override the
@@ -138,6 +146,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Parameters](/docs/parameters.md)
 * [Platform](/docs/platform.md)
 * [Select](/docs/select.md)
+* [Settings](/docs/settings.md)
 
 ## Development
 
