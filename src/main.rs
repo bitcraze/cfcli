@@ -374,9 +374,6 @@ struct FlashParameters {
   /// Example: stm32-fw,nrf51-fw
   #[clap(long, verbatim_doc_comment)]
   targets: Option<Option<String>>,
-  /// Do not verify flashed data
-  #[clap(long, default_value_t = false)]
-  no_verify: bool,
   /// Use coldboot (i.e rescue mode) to flash the device
   #[clap(long, default_value_t = false)]
   cold: bool,
@@ -1507,7 +1504,6 @@ async fn main() -> Result<()> {
                       uri.as_str(),
                       toc_cache,
                       upgrade,
-                      params.no_verify,
                       params.cold,
                     ).await?;
                   }

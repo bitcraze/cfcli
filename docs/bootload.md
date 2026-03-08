@@ -60,9 +60,6 @@ Options:
           
           Example: stm32-fw,nrf51-fw
 
-      --no-verify
-          Do not verify flashed data
-
       --cold
           Use coldboot (i.e rescue mode) to flash the device
 ```

@@ -314,7 +314,7 @@ async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool> {
     Ok(false)
 }
 
-pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, _no_verify: bool, cold: bool) -> Result<()> {
+pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, cold: bool) -> Result<()> {
 
   let firmware_for_bootloader = firmware_upgrade.get_firmware_for_bootloader();
   let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
