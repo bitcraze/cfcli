@@ -26,6 +26,7 @@ pub mod modules {
     pub mod test;
     pub mod trajectory;
     pub mod lps;
+    pub mod settings;
 }
 
 pub mod utils {
@@ -208,6 +209,12 @@ enum Commands {
       no_format: bool,
     },
 
+    /// Local CLI settings (scan addresses, timeout, etc.)
+    Settings {
+        #[clap(subcommand)]
+        command: SettingsCommands,
+    },
+
     /// Loco Positioning System
     Loco {
         #[clap(subcommand)]
@@ -223,16 +230,16 @@ enum Commands {
 
 #[derive(Debug, Args)]
 struct ScanOptions {
-    /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7)
-    #[clap(value_parser, default_value = "E7E7E7E7E7")]
-    address: String,
+    /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7). Overrides settings.
+    #[clap(value_parser)]
+    address: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct SelectOptions {
-    /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7)
-    #[clap(value_parser, default_value = "E7E7E7E7E7")]
-    address: String,
+    /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7). Overrides settings.
+    #[clap(value_parser)]
+    address: Option<String>,
     /// Automatically select the URI if exactly one Crazyflie is found
     #[clap(long)]
     auto: bool,
@@ -260,6 +267,58 @@ struct ConfigNameAndValue {
     /// Example: channel=10,address=E7E7E7E7E7,speed=2
     #[clap(value_parser, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
     settings: HashMap<String, String>
+}
+
+use modules::settings;
+
+#[derive(Debug, Subcommand)]
+enum SettingsCommands {
+    /// Show all current settings
+    Show,
+    /// Manage the connection timeout
+    Timeout {
+        #[clap(subcommand)]
+        command: SettingsTimeoutCommands,
+    },
+    /// Manage scan addresses
+    Address {
+        #[clap(subcommand)]
+        command: SettingsAddressCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SettingsTimeoutCommands {
+    /// Show the current timeout
+    Show,
+    /// Set the timeout in milliseconds
+    Set {
+        /// Timeout in milliseconds
+        #[clap(value_parser)]
+        timeout_ms: u32,
+    },
+    /// Reset timeout to default (1000ms)
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum SettingsAddressCommands {
+    /// List configured scan addresses
+    List,
+    /// Add a scan address (5 byte hex, e.g. E7E7E7E7E7)
+    Add {
+        /// Radio address (5 byte hex, e.g. E7E7E7E7E7)
+        #[clap(value_parser)]
+        address: String,
+    },
+    /// Remove a scan address
+    Remove {
+        /// Radio address to remove (5 byte hex, e.g. E7E7E7E7E7)
+        #[clap(value_parser)]
+        address: String,
+    },
+    /// Clear all addresses and reset to default (E7E7E7E7E7)
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -650,6 +709,14 @@ pub struct LatestCache {
 pub struct Config {
     uri: String,
     toc_cache: HashMap<String, String>,
+    #[serde(default)]
+    timeout_ms: Option<u32>,
+    #[serde(default = "default_addresses")]
+    addresses: Vec<String>,
+}
+
+fn default_addresses() -> Vec<String> {
+    vec!["E7E7E7E7E7".to_string()]
 }
 
 impl Default for Config {
@@ -658,7 +725,15 @@ impl Default for Config {
         Config {
             uri: "".to_string(),
             toc_cache: HashMap::new(),
+            timeout_ms: None,
+            addresses: default_addresses(),
         }
+    }
+}
+
+impl Config {
+    fn effective_timeout(&self) -> u32 {
+        self.timeout_ms.unwrap_or(1000)
     }
 }
 
@@ -748,7 +823,19 @@ async fn main() -> Result<()> {
         Config::default()
     });
 
-    let uri = args.uri.clone().unwrap_or(config.uri.clone());
+    let uri = {
+        let base = args.uri.clone().unwrap_or(config.uri.clone());
+        if config.timeout_ms.is_some() {
+            let timeout = config.effective_timeout();
+            if base.contains('?') {
+                format!("{}&timeout={}", base, timeout)
+            } else {
+                format!("{}?timeout={}", base, timeout)
+            }
+        } else {
+            base
+        }
+    };
 
     let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
 
@@ -759,18 +846,28 @@ async fn main() -> Result<()> {
 
     match &args.command {
         Commands::Scan(scan_options) => {
-            // Scan for Crazyflies on the default address
-            let address = decode_address(&scan_options.address)?;
-            let found = link_context.scan(address).await?;
-
-            for uri in found {
+            let addresses = match &scan_options.address {
+                Some(addr) => vec![addr.clone()],
+                None => config.addresses.clone(),
+            };
+            let mut found = Vec::new();
+            for addr_str in &addresses {
+                let address = decode_address(addr_str)?;
+                for uri in link_context.scan(address).await? {
+                    if !found.contains(&uri) {
+                        found.push(uri);
+                    }
+                }
+            }
+            for uri in &found {
                 println!("> {}", uri);
             }
         }
         Commands::Select(select_options) => {
             let selected_uri = if select_options.from_usb {
                 // Scan for USB-connected Crazyflies
-                let address = decode_address(&select_options.address)?;
+                // USB scan only needs one address since USB devices are found regardless
+                let address = decode_address("E7E7E7E7E7")?;
                 let all_found = link_context.scan(address).await?;
                 let found: Vec<_> = all_found.into_iter().filter(|uri| uri.starts_with("usb://")).collect();
 
@@ -824,9 +921,20 @@ async fn main() -> Result<()> {
 
                 radio_uri
             } else {
-                // Scan for Crazyflies on the default address
-                let address = decode_address(&select_options.address)?;
-                let found = link_context.scan(address).await?;
+                // Scan for Crazyflies on configured addresses
+                let addresses = match &select_options.address {
+                    Some(addr) => vec![addr.clone()],
+                    None => config.addresses.clone(),
+                };
+                let mut found = Vec::new();
+                for addr_str in &addresses {
+                    let address = decode_address(addr_str)?;
+                    for uri in link_context.scan(address).await? {
+                        if !found.contains(&uri) {
+                            found.push(uri);
+                        }
+                    }
+                }
 
                 if found.is_empty() {
                     bail!("No Crazyflies found");
@@ -1156,6 +1264,26 @@ async fn main() -> Result<()> {
 
                     cf.disconnect().await;
                   }
+            }
+        }
+        Commands::Settings { command } => {
+            match command {
+                SettingsCommands::Show => settings::show(&config),
+                SettingsCommands::Timeout { command: timeout_cmd } => {
+                    match timeout_cmd {
+                        SettingsTimeoutCommands::Show => settings::timeout_show(&config),
+                        SettingsTimeoutCommands::Set { timeout_ms } => settings::timeout_set(&mut config, *timeout_ms),
+                        SettingsTimeoutCommands::Clear => settings::timeout_clear(&mut config),
+                    }
+                }
+                SettingsCommands::Address { command: addr_cmd } => {
+                    match addr_cmd {
+                        SettingsAddressCommands::List => settings::address_list(&config),
+                        SettingsAddressCommands::Add { address } => settings::address_add(&mut config, address)?,
+                        SettingsAddressCommands::Remove { address } => settings::address_remove(&mut config, address),
+                        SettingsAddressCommands::Clear => settings::address_clear(&mut config),
+                    }
+                }
             }
         }
         Commands::Mem { command } => {
