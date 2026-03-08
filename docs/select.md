@@ -28,3 +28,21 @@ cfcli select --auto
 ```
 
 If zero or more than one Crazyflie is found, the command will exit with an error.
+
+## Select from USB
+
+Use the `--from-usb` flag to connect to a USB-attached Crazyflie, read its radio
+configuration (channel, speed, and address) from the EEPROM, and save the
+corresponding radio URI.
+
+```text
+cfcli select --from-usb
+```
+
+This is useful when you have a Crazyflie connected via USB and want to configure
+cfcli to connect to it over radio in subsequent commands. The command will read
+the radio channel, speed, and address from the Crazyflie's EEPROM and construct
+a `radio://` URI.
+
+If zero or more than one USB Crazyflie is found, the command will exit with an
+error.

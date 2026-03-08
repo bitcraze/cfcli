@@ -236,6 +236,9 @@ struct SelectOptions {
     /// Automatically select the URI if exactly one Crazyflie is found
     #[clap(long)]
     auto: bool,
+    /// Connect to a USB-attached Crazyflie, read its radio config, and select that radio URI
+    #[clap(long)]
+    from_usb: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -765,25 +768,83 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Select(select_options) => {
-            // Scan for Crazyflies on the default address
-            let address = decode_address(&select_options.address)?;
-            let found = link_context.scan(address).await?;
+            let selected_uri = if select_options.from_usb {
+                // Scan for USB-connected Crazyflies
+                let address = decode_address(&select_options.address)?;
+                let all_found = link_context.scan(address).await?;
+                let found: Vec<_> = all_found.into_iter().filter(|uri| uri.starts_with("usb://")).collect();
 
-            if found.is_empty() {
-                bail!("No Crazyflies found");
-            }
-
-            let selected_uri = if select_options.auto {
-                if found.len() != 1 {
-                    bail!("Expected exactly one Crazyflie, found {}", found.len());
+                if found.is_empty() {
+                    bail!("No USB Crazyflies found");
                 }
-                found[0].clone()
+                if found.len() != 1 {
+                    bail!("Expected exactly one Crazyflie on USB, found {}", found.len());
+                }
+
+                let usb_uri = &found[0];
+                println!("Found Crazyflie on USB: {}", usb_uri);
+
+                // Connect via USB and read EEPROM config
+                let cf = connect_with_spinner(&link_context, usb_uri, toc_cache, args.debug).await?;
+
+                let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
+                if memories.len() != 1 {
+                    cf.disconnect().await;
+                    bail!("No EEPROMConfig memory found or more than one ({})", memories.len());
+                }
+
+                let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
+                    Some(Ok(m)) => m,
+                    Some(Err(e)) => {
+                        cf.disconnect().await;
+                        bail!("Could not read EEPROM config: {}", e);
+                    }
+                    None => {
+                        cf.disconnect().await;
+                        bail!("No EEPROM memory found");
+                    }
+                };
+
+                let channel = eeprom.get_radio_channel();
+                let address = eeprom.get_radio_address();
+                let speed = eeprom.get_radio_speed();
+
+                let speed_str = match speed {
+                    RadioSpeed::R250Kbps => "250K",
+                    RadioSpeed::R1Mbps => "1M",
+                    RadioSpeed::R2Mbps => "2M",
+                };
+
+                let address_str = address.iter().map(|b| format!("{:02X}", b)).collect::<String>();
+                let radio_uri = format!("radio://0/{}/{}/{}", channel, speed_str, address_str);
+
+                println!("Read radio config: channel={}, speed={}, address={}", channel, speed, address_str);
+
+                cf.disconnect().await;
+
+                radio_uri
             } else {
-                Select::new("Select a link:", found.clone())
-                    .prompt()
-                    .map_err(|_| anyhow::anyhow!("No Crazyflie selected"))?
+                // Scan for Crazyflies on the default address
+                let address = decode_address(&select_options.address)?;
+                let found = link_context.scan(address).await?;
+
+                if found.is_empty() {
+                    bail!("No Crazyflies found");
+                }
+
+                if select_options.auto {
+                    if found.len() != 1 {
+                        bail!("Expected exactly one Crazyflie, found {}", found.len());
+                    }
+                    found[0].clone()
+                } else {
+                    Select::new("Select a link:", found.clone())
+                        .prompt()
+                        .map_err(|_| anyhow::anyhow!("No Crazyflie selected"))?
+                }
             };
 
+            println!("Selected: {}", selected_uri);
             config.uri = selected_uri.clone();
 
             confy::store("cf-cli", None, config).unwrap_or_else(|err| {
