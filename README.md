@@ -14,7 +14,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * High-level commander (takeoff, land, go-to, trajectories)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
-use the the [Crazyflie python library](https://github.com/bitcraze/crazyflie-lib-python) for that.
+use the the new [Crazyflie python library (v2)](https://github.com/bitcraze/crazyflie-lib-python-v2) for that.
 
 ## Installation
 
