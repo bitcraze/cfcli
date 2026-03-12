@@ -11,7 +11,7 @@ fn format_console_line(line: &str) -> String {
 }
 
 pub async fn print(cf: &crazyflie_lib::Crazyflie, no_format: bool) -> Result<()> {
-            let mut console_stream = cf.console.stream_no_history().await;
+            let mut console_stream = cf.console.stream().await;
 
     while let Some(line) = console_stream.next().await {
         if no_format {
