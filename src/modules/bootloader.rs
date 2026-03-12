@@ -327,8 +327,12 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
       for firmware in firmware_for_bootloader {
         if firmware.target == "stm32" && firmware.file_type == "fw" {
           let stm32_info = cfloader.stm32_info();
-          let start_address = stm32_info.flash_start() as u32 * stm32_info.page_size() as u32;
-          let progress_bar = get_progressbar(firmware.data.len(), Some(firmware.target.as_str()));   
+          let start_address = match &firmware.start_override {
+            Some(FlashStartOverride::Address(addr)) => *addr,
+            Some(FlashStartOverride::Page(page)) => *page as u32 * stm32_info.page_size() as u32,
+            None => stm32_info.flash_start() as u32 * stm32_info.page_size() as u32,
+          };
+          let progress_bar = get_progressbar(firmware.data.len(), Some(firmware.target.as_str()));
           let pb = progress_bar.clone();
           let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
             pb.set_position(bytes_written as u64);
@@ -338,8 +342,12 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
         }
         if firmware.target == "nrf51" && firmware.file_type == "fw" {
           let nrf51_info = cfloader.nrf51_info();
-          let start_address = nrf51_info.flash_start() as u32 * nrf51_info.page_size() as u32;
-          let progress_bar = get_progressbar(firmware.data.len(), Some(firmware.target.as_str()));   
+          let start_address = match &firmware.start_override {
+            Some(FlashStartOverride::Address(addr)) => *addr,
+            Some(FlashStartOverride::Page(page)) => *page as u32 * nrf51_info.page_size() as u32,
+            None => nrf51_info.flash_start() as u32 * nrf51_info.page_size() as u32,
+          };
+          let progress_bar = get_progressbar(firmware.data.len(), Some(firmware.target.as_str()));
           let pb = progress_bar.clone();
           let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
             pb.set_position(bytes_written as u64);

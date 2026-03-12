@@ -60,6 +60,12 @@ struct Manifest {
   files: HashMap<String, FileInfo>,
 }
 
+#[derive(Debug, Clone)]
+pub enum FlashStartOverride {
+    Address(u32),
+    Page(u16),
+}
+
 #[derive(Clone)]
 pub struct Firmware {
     pub data: Vec<u8>,
@@ -67,6 +73,7 @@ pub struct Firmware {
     pub target: String,
     pub version: String,
     pub file_type: String,
+    pub start_override: Option<FlashStartOverride>,
 }
 
 impl std::fmt::Debug for Firmware {
@@ -76,6 +83,7 @@ impl std::fmt::Debug for Firmware {
       .field("target", &self.target)
       .field("version", &self.version)
       .field("file_type", &self.file_type)
+      .field("start_override", &self.start_override)
       .field("data_size", &self.data.len())
       .finish()
   }
@@ -133,6 +141,7 @@ impl FirmwareArchive {
                   target: target.to_string(),
                   version: file_info.release.to_string(),
                   file_type: file_info.file_type.to_string(),
+                  start_override: None,
               });
             }
           }
@@ -258,15 +267,34 @@ impl FirmwareUpgrade {
         if let Some(bin_map) = bin {
             for (key, path) in bin_map {
                 let data = std::fs::read(path)?;
-                let parts: Vec<&str> = key.split('-').collect();
+
+                // Parse optional @address or @page from the key
+                // Format: target-type@0xADDRESS or target-type@PAGE
+                let (target_type_key, start_override) = if let Some((base, override_str)) = key.split_once('@') {
+                    let start_override = if let Some(hex_str) = override_str.strip_prefix("0x").or_else(|| override_str.strip_prefix("0X")) {
+                        let addr = u32::from_str_radix(hex_str, 16)
+                            .map_err(|_| anyhow::anyhow!("Invalid hex address in '{}': '{}'", key, override_str))?;
+                        Some(FlashStartOverride::Address(addr))
+                    } else {
+                        let page = override_str.parse::<u16>()
+                            .map_err(|_| anyhow::anyhow!("Invalid page number in '{}': '{}' (use 0x prefix for addresses)", key, override_str))?;
+                        Some(FlashStartOverride::Page(page))
+                    };
+                    (base.to_string(), start_override)
+                } else {
+                    (key.clone(), None)
+                };
+
+                let parts: Vec<&str> = target_type_key.split('-').collect();
                 let target = parts.get(0).unwrap().to_string();
                 let file_type = parts.get(1).unwrap_or(&"fw").to_string();
-                bins.insert(key.clone(), Firmware {
+                bins.insert(target_type_key.clone(), Firmware {
                     data,
                     file_name: path.clone(),
                     target,
                     version: "custom".to_string(),
                     file_type,
+                    start_override,
                 });
             }
         }

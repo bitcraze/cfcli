@@ -425,8 +425,12 @@ struct FlashParameters {
   zip: Option<String>,
   /// Comma-separated list of key=value pairs for targets and binary files.
   /// Note that these will override any files in release or zip.
-  /// 
+  /// Optionally append @address or @page to the target to override the
+  /// flash start location. Use 0x prefix for addresses, bare numbers for pages.
+  ///
   /// Example: stm32-fw=cf2_stm.bin,nrf51-fw=cf2_nrf.bin
+  /// Example: stm32-fw@0x08004000=custom.bin (flash at address 0x08004000)
+  /// Example: stm32-fw@16=custom.bin (flash at page 16)
   #[clap(long, value_parser = parse_key_opt_val_pairs, verbatim_doc_comment)]
   bin: Option<HashMap<String, Option<String>>>,
   /// Comma-separated list of targets to flash, interactive selection if

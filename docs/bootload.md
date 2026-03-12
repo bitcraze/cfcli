@@ -50,8 +50,12 @@ Options:
       --bin <BIN>
           Comma-separated list of key=value pairs for targets and binary files.
           Note that these will override any files in release or zip.
-          
+          Optionally append @address or @page to the target to override the
+          flash start location. Use 0x prefix for addresses, bare numbers for pages.
+
           Example: stm32-fw=cf2_stm.bin,nrf51-fw=cf2_nrf.bin
+          Example: stm32-fw@0x08004000=custom.bin (flash at address 0x08004000)
+          Example: stm32-fw@16=custom.bin (flash at page 16)
 
       --targets [<TARGETS>]
           Comma-separated list of targets to flash, interactive selection if
@@ -123,6 +127,30 @@ the ```custom-nrf51-firmware.bin``` file:
 
 ```text
 cfcli bootload flash --release 2025.12 --bin nrf51-fw=custom-nrf51-firmware.bin
+```
+
+#### Flashing at a custom address or page
+
+By default, BIN files are flashed at the start address reported by the bootloader.
+You can override this by appending `@` followed by an address or page number to the
+target key. A `0x` prefix indicates an address, a bare decimal number indicates a page.
+
+Flash the STM32 firmware at a specific address:
+
+```text
+cfcli bootload flash --bin stm32-fw@0x08004000=custom-stm.bin
+```
+
+Flash the STM32 firmware at a specific page:
+
+```text
+cfcli bootload flash --bin stm32-fw@16=custom-stm.bin
+```
+
+This can be combined with other targets as usual:
+
+```text
+cfcli bootload flash --bin stm32-fw@0x08004000=custom-stm.bin,nrf51-fw=cf2_nrf.bin
 ```
 
 #### Recovery mode boot
