@@ -707,13 +707,13 @@ dependencies = [
 
 [[package]]
 name = "crazyflie-link"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d3a9bade32635427196fcd7c9b6585764262e090f96806aac0383d8042b3954"
+checksum = "d7aa54c1b5e50767eb2a04aea44a8ae172e11ff52745a32c670bd415a206374e"
 dependencies = [
  "async-trait",
  "bitflags 2.11.0",
- "crazyradio 0.4.2",
+ "crazyradio 0.5.1",
  "flume 0.12.0",
  "futures",
  "futures-channel",
@@ -740,9 +740,9 @@ dependencies = [
 
 [[package]]
 name = "crazyradio"
-version = "0.4.2"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b3b0a3732b5ee602316c7872fd4d283d0d12fbfd90a823d229ede3606b59d94"
+checksum = "89cabf480d2a2bba8ad41426a8486be4581459ca360a522a14836cde64ead1bf"
 dependencies = [
  "flume 0.12.0",
  "rusb",
