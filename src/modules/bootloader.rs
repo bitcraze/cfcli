@@ -163,11 +163,12 @@ async fn start_bootloader(context: &LinkContext, cold: bool, uri: &str) -> Resul
     let uri: String = if cold {
         scan_for_bootloader().await
     } else {
-        let link = context.open_link(&format!("{}?safelink=0", uri)).await?;
+        let separator = if uri.contains('?') { "&" } else { "?" };
+        let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
         let uri = reset_to_bootloader(&link).await;
         link.close().await;
         sleep(Duration::from_millis(500)).await;
-        uri  
+        uri
     }?;
 
     let link = context.open_link(&uri).await?;
@@ -177,7 +178,8 @@ async fn start_bootloader(context: &LinkContext, cold: bool, uri: &str) -> Resul
 async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) -> Result<Bllink> {
     let address: Option<[u8; 5]> = match cold {
         false => {
-              let link = context.open_link(&format!("{}?safelink=0", uri)).await?;
+              let separator = if uri.contains('?') { "&" } else { "?" };
+              let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
               let new_address = reset_and_get_bootloader_address(&link).await?;
               link.close().await;
               let arr: [u8; 5] = new_address.try_into().map_err(|_| anyhow!("Address must be exactly 5 bytes"))?;
