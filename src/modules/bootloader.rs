@@ -6,11 +6,12 @@ use crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
 
 use crate::ConfigTocCache;
-use crate::utils::firmware::{Firmware, FirmwareUpgrade};
+use crate::utils::firmware::{Firmware, FirmwareUpgrade, FlashStartOverride};
 use crate::utils::display::*;
 
 use cfloader::Bllink;
 
+const TARGET_STM32: u8 = 0xFF;
 const TARGET_NRF51: u8 = 0xFE;
 
 #[derive(Debug)]
@@ -208,19 +209,35 @@ async fn send_command(link: &Connection, cmd: BootloaderCommand, data: Option<&[
     Ok(())
 }
 
+fn print_target_info(name: &str, info: &BootloaderInfo) {
+  let flash_size = info.flash_pages as u32 * info.page_size as u32;
+  let available_flash = (info.flash_pages - info.start_page) as u32 * info.page_size as u32;
+
+  println!("{} (ID: 0x{:02X}):", name, info.id);
+  println!("  Protocol Version: {}", info.protocol_version);
+  println!("  Page Size: {} bytes", info.page_size);
+  println!("  Buffer Pages: {}", info.buffer_pages);
+  println!("  Flash Pages: {}", info.flash_pages);
+  println!("  Flash Size: {} bytes ({} KB)", flash_size, flash_size / 1024);
+  println!("  Start Page: {}", info.start_page);
+  println!("  Available Flash: {} bytes ({} KB)", available_flash, available_flash / 1024);
+  println!("  CPU ID: 0x{:04X}", info.cpuid);
+}
+
 pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, cold: bool, uri: &str) -> Result<()> {
 
   let link = start_bootloader(link_context, cold, uri).await?;
-  let info = get_info(&link, TARGET_NRF51).await?;
 
   println!("Bootloader Info:");
-  println!("ID: 0x{:02X}", info.id);
-  println!("Protocol Version: {}", info.protocol_version);
-  println!("Page Size: {} bytes", info.page_size);
-  println!("Buffer Pages: {}", info.buffer_pages);
-  println!("Flash Pages: {}", info.flash_pages);
-  println!("Start Page: {}", info.start_page);
-  println!("CPU ID: 0x{:04X}", info.cpuid);
+  println!();
+
+  let stm32_info = get_info(&link, TARGET_STM32).await?;
+  print_target_info("STM32", &stm32_info);
+
+  println!();
+
+  let nrf51_info = get_info(&link, TARGET_NRF51).await?;
+  print_target_info("nRF51", &nrf51_info);
 
   link.close().await;
 
