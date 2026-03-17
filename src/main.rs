@@ -27,6 +27,7 @@ pub mod modules {
     pub mod trajectory;
     pub mod lps;
     pub mod settings;
+    pub mod crazyradio;
 }
 
 pub mod utils {
@@ -226,6 +227,12 @@ enum Commands {
         #[clap(subcommand)]
         command: HlCommands,
     },
+
+    /// Crazyradio operations (sniffer, etc.)
+    Cr {
+        #[clap(subcommand)]
+        command: CrCommands,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -319,6 +326,28 @@ enum SettingsAddressCommands {
     },
     /// Clear all addresses and reset to default (E7E7E7E7E7)
     Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum CrCommands {
+    /// Sniff broadcast packets on a given address
+    Sniff(SniffArgs),
+}
+
+#[derive(Debug, Args)]
+struct SniffArgs {
+    /// Crazyradio index (0-based)
+    #[clap(short, long, default_value_t = 0)]
+    radio: usize,
+    /// Radio channel (0-125)
+    #[clap(short, long, default_value_t = 80)]
+    channel: u8,
+    /// Datarate: 0=250K, 1=1M, 2=2M
+    #[clap(short, long, default_value_t = 2)]
+    datarate: u8,
+    /// Broadcast address (5 byte hex, e.g. E7E7E7E7E7)
+    #[clap(short, long, default_value = "E7E7E7E7E7")]
+    address: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1572,6 +1601,14 @@ async fn main() -> Result<()> {
             }
 
             cf.disconnect().await;
+        }
+        Commands::Cr { command } => {
+            match command {
+                CrCommands::Sniff(params) => {
+                    let address = decode_address(&params.address)?;
+                    modules::crazyradio::sniff(params.radio, params.channel, params.datarate, &address).await?;
+                }
+            }
         }
         Commands::Bootload { command } => {
             match command {
