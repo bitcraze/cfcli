@@ -79,6 +79,7 @@ Commands:
   console   Print the console text from a Crazyflie
   loco      Loco Positioning System
   hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
+  cr        Crazyradio operations (list, sniffer, broadcast)
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -147,6 +148,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Platform](/docs/platform.md)
 * [Select](/docs/select.md)
 * [Settings](/docs/settings.md)
+* [Crazyradio](/docs/crazyradio.md)
 
 ## Development
 
