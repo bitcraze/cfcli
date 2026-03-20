@@ -1,5 +1,69 @@
 use anyhow::{bail, Result};
 use crazyradio::{Channel, Crazyradio, Datarate};
+use std::time::Duration;
+
+const CRAZYRADIO_VID: u16 = 0x1915;
+const CRAZYRADIO_PID: u16 = 0x7777;
+
+pub fn list() -> Result<()> {
+    let devices = rusb::devices()?;
+
+    let mut found = 0u32;
+    for device in devices.iter() {
+        let desc = device.device_descriptor()?;
+        if desc.vendor_id() != CRAZYRADIO_VID || desc.product_id() != CRAZYRADIO_PID {
+            continue;
+        }
+
+        let handle = match device.open() {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Crazyradio #{found}: failed to open ({e})");
+                found += 1;
+                continue;
+            }
+        };
+
+        let languages = handle.read_languages(Duration::from_secs(1)).unwrap_or_default();
+        let lang = languages.first().copied();
+
+        let serial = lang
+            .and_then(|l| handle.read_serial_number_string(l, &desc, Duration::from_secs(1)).ok())
+            .unwrap_or_else(|| "N/A".to_string());
+
+        let product = lang
+            .and_then(|l| handle.read_product_string(l, &desc, Duration::from_secs(1)).ok())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let fw_version = desc.device_version();
+
+        let bus = device.bus_number();
+        let address = device.address();
+        let port_numbers = device.port_numbers().unwrap_or_default();
+        let port_path: String = port_numbers
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        println!("Crazyradio #{found}");
+        println!("  Serial:    {serial}");
+        println!("  Product:   {product}");
+        println!("  Firmware:  {}.{}", fw_version.major(), fw_version.minor() * 10 + fw_version.sub_minor());
+        println!("  USB bus:   {bus}, address: {address}, port path: {port_path}");
+        println!();
+
+        found += 1;
+    }
+
+    if found == 0 {
+        println!("No Crazyradios found.");
+    } else {
+        println!("{found} Crazyradio(s) found.");
+    }
+
+    Ok(())
+}
 
 pub async fn sniff(radio: usize, channel: u8, datarate: u8, address: &[u8; 5]) -> Result<()> {
     let channel = Channel::from_number(channel)

@@ -330,6 +330,8 @@ enum SettingsAddressCommands {
 
 #[derive(Debug, Subcommand)]
 enum CrCommands {
+    /// List connected Crazyradio dongles
+    List,
     /// Sniff broadcast packets on a given address
     Sniff(SniffArgs),
 }
@@ -1604,6 +1606,9 @@ async fn main() -> Result<()> {
         }
         Commands::Cr { command } => {
             match command {
+                CrCommands::List => {
+                    modules::crazyradio::list()?;
+                }
                 CrCommands::Sniff(params) => {
                     let address = decode_address(&params.address)?;
                     modules::crazyradio::sniff(params.radio, params.channel, params.datarate, &address).await?;
