@@ -334,6 +334,8 @@ enum CrCommands {
     List,
     /// Sniff broadcast packets on a given address
     Sniff(SniffArgs),
+    /// Broadcast a message on a given address (no ack)
+    Broadcast(BroadcastArgs),
 }
 
 #[derive(Debug, Args)]
@@ -350,6 +352,28 @@ struct SniffArgs {
     /// Broadcast address (5 byte hex, e.g. E7E7E7E7E7)
     #[clap(short, long, default_value = "E7E7E7E7E7")]
     address: String,
+}
+
+#[derive(Debug, Args)]
+struct BroadcastArgs {
+    /// Crazyradio index (0-based)
+    #[clap(short, long, default_value_t = 0)]
+    radio: usize,
+    /// Radio channel (0-125)
+    #[clap(short, long, default_value_t = 80)]
+    channel: u8,
+    /// Datarate: 0=250K, 1=1M, 2=2M
+    #[clap(short, long, default_value_t = 2)]
+    datarate: u8,
+    /// Broadcast address (5 byte hex, e.g. FFE7E7E7E7)
+    #[clap(short, long, default_value = "FFE7E7E7E7")]
+    address: String,
+    /// Data to broadcast (comma-separated list of bytes, supports hex with 0x prefix)
+    #[clap(long, value_delimiter = ',', value_parser=maybe_hex::<u8>)]
+    data: Option<Vec<u8>>,
+    /// File to read raw binary data from
+    #[clap(long, short = 'i')]
+    input: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1612,6 +1636,20 @@ async fn main() -> Result<()> {
                 CrCommands::Sniff(params) => {
                     let address = decode_address(&params.address)?;
                     modules::crazyradio::sniff(params.radio, params.channel, params.datarate, &address).await?;
+                }
+                CrCommands::Broadcast(params) => {
+                    let address = decode_address(&params.address)?;
+                    let data: Vec<u8> = match &params.data {
+                        Some(d) => d.clone(),
+                        None => {
+                            let input_file = match &params.input {
+                                Some(f) => f,
+                                None => bail!("No data provided, please provide data via --data or --input"),
+                            };
+                            std::fs::read(input_file)?
+                        }
+                    };
+                    modules::crazyradio::broadcast(params.radio, params.channel, params.datarate, &address, &data).await?;
                 }
             }
         }
