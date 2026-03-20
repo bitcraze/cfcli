@@ -28,9 +28,6 @@ struct BootloaderInfo {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 enum BootloaderCommand {
-  AllOff = 0x01,
-  SysOff = 0x02,
-  SysOn = 0x03,
   ResetInit = 0xFF,
   Reset = 0xF0,
 }
@@ -249,33 +246,6 @@ pub async fn reboot(link_context: &crazyflie_link::LinkContext, uri: &str,) -> R
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::ResetInit, None).await?;
   send_command(&link, BootloaderCommand::Reset, Some(&[0x01])).await?; // Reset to firmware
-  sleep(Duration::from_millis(500)).await;
-  
-  Ok(())
-}
-
-pub async fn power_off(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
-
-  let link = link_context.open_link(uri).await?;
-  send_command(&link, BootloaderCommand::AllOff, None).await?;
-  sleep(Duration::from_millis(500)).await;
-  
-  Ok(())
-}
-
-pub async fn sysoff(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
-
-  let link = link_context.open_link(uri).await?;
-  send_command(&link, BootloaderCommand::SysOff, None).await?;
-  sleep(Duration::from_millis(500)).await;
-  
-  Ok(())
-}
-
-pub async fn syson(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
-
-  let link = link_context.open_link(uri).await?;
-  send_command(&link, BootloaderCommand::SysOn, None).await?;
   sleep(Duration::from_millis(500)).await;
   
   Ok(())

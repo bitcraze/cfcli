@@ -1492,13 +1492,13 @@ async fn main() -> Result<()> {
                     modules::bootloader::reboot(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::PowerOff => {
-                    modules::bootloader::power_off(&link_context, uri.as_str()).await?;
+                    crazyflie_lib::Crazyflie::power_off_all(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::Sleep => {
-                    modules::bootloader::sysoff(&link_context, uri.as_str()).await?;
+                    crazyflie_lib::Crazyflie::power_off_stm32_domain(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::Wakeup => {
-                    modules::bootloader::syson(&link_context, uri.as_str()).await?;
+                    crazyflie_lib::Crazyflie::power_on_stm32_domain(&link_context, uri.as_str()).await?;
                 }
             }
             
