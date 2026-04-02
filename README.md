@@ -83,11 +83,12 @@ Commands:
   help      Print this message or the help of the given subcommand(s)
 
 Options:
-  -n, --no-toc-cache  Do not use TOC cache
-  -d, --debug         Enable debug mode
-  -u, --uri <URI>     Override the URI to connect to (instead of using the config file)
-  -h, --help          Print help
-  -V, --version       Print version
+  -n, --no-toc-cache      Do not use TOC cache
+  -d, --debug             Enable debug mode
+  -u, --uri <URI>         Override the URI to connect to (instead of using the config file)
+  -p, --preserve-console  Preserve console output across connections
+  -h, --help              Print help
+  -V, --version           Print version
 ```
 
 To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies
@@ -115,6 +116,14 @@ selected URI for a single command using the `--uri` flag:
 
 ```text
 cfcli --uri radio://0/80/2M/E7E7E7E7E7 console
+```
+
+You can preserve console output across connections using the `-p` flag. Console data is accumulated
+during each connection and printed when the `console` command is run:
+
+```text
+cfcli -p param set motorPowerSet.enable 1
+cfcli console
 ```
 
 For instance a parameter

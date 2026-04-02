@@ -145,6 +145,11 @@ struct CliArgs {
     /// Override the URI to connect to (instead of using the config file)
     #[clap(short, long)]
     uri: Option<String>,
+
+    /// Preserve console output across connections. Console data is accumulated
+    /// and printed when the 'console' command is run.
+    #[clap(short, long, action)]
+    preserve_console: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -858,6 +863,56 @@ async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &
   Ok(cf)
 }
 
+/// Helper macro: connect and store the Crazyflie in `connected_cf` so that
+/// the centralized cleanup at the end of main can save console + disconnect.
+macro_rules! connect_cf {
+    ($holder:expr, $link:expr, $uri:expr, $toc:expr, $debug:expr) => {{
+        $holder = Some(connect_with_spinner($link, $uri, $toc, $debug).await?);
+        $holder.as_ref().unwrap()
+    }};
+}
+
+fn console_preserve_path() -> std::path::PathBuf {
+    let config_path = confy::get_configuration_file_path("cf-cli", None)
+        .expect("Could not determine config directory");
+    config_path.with_file_name("cf-cli-console.log")
+}
+
+async fn save_console_history(cf: &crazyflie_lib::Crazyflie) -> Result<()> {
+    use futures::StreamExt;
+    use std::io::Write;
+
+    let mut stream = cf.console.stream().await;
+    if let Some(history) = stream.next().await {
+        if !history.is_empty() {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(console_preserve_path())?;
+            file.write_all(history.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn read_and_clear_console_file() -> Result<String> {
+    let path = console_preserve_path();
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    if !content.is_empty() {
+        std::fs::write(&path, "")?;
+    }
+    Ok(content)
+}
+
+async fn save_and_disconnect(cf: &crazyflie_lib::Crazyflie, preserve_console: bool) {
+    if preserve_console {
+        if let Err(e) = save_console_history(cf).await {
+            eprintln!("Warning: could not save console history: {}", e);
+        }
+    }
+    cf.disconnect().await;
+}
+
 pub fn decode_address(address: &str) -> Result<[u8; 5]> {
     match u64::from_str_radix(&address.replace("0x", ""), 16) {
         Ok(a) if a <= 0xFFFFFFFFFF => Ok(a.to_be_bytes()[3..]
@@ -903,6 +958,10 @@ async fn main() -> Result<()> {
 
     let link_context = crazyflie_link::LinkContext::new();
 
+    let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
+    let preserve_console = args.preserve_console;
+
+    let result: Result<()> = async {
     match &args.command {
         Commands::Scan(scan_options) => {
             let addresses = match &scan_options.address {
@@ -941,24 +1000,17 @@ async fn main() -> Result<()> {
                 println!("Found Crazyflie on USB: {}", usb_uri);
 
                 // Connect via USB and read EEPROM config
-                let cf = connect_with_spinner(&link_context, usb_uri, toc_cache, args.debug).await?;
+                let cf = connect_cf!(connected_cf, &link_context, usb_uri, toc_cache, args.debug);
 
                 let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
                 if memories.len() != 1 {
-                    cf.disconnect().await;
                     bail!("No EEPROMConfig memory found or more than one ({})", memories.len());
                 }
 
                 let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
                     Some(Ok(m)) => m,
-                    Some(Err(e)) => {
-                        cf.disconnect().await;
-                        bail!("Could not read EEPROM config: {}", e);
-                    }
-                    None => {
-                        cf.disconnect().await;
-                        bail!("No EEPROM memory found");
-                    }
+                    Some(Err(e)) => bail!("Could not read EEPROM config: {}", e),
+                    None => bail!("No EEPROM memory found"),
                 };
 
                 let channel = eeprom.get_radio_channel();
@@ -976,7 +1028,9 @@ async fn main() -> Result<()> {
 
                 println!("Read radio config: channel={}, speed={}, address={}", channel, speed, address_str);
 
-                cf.disconnect().await;
+                // Disconnect mid-command since we only needed this connection to read EEPROM
+                save_and_disconnect(connected_cf.as_ref().unwrap(), preserve_console).await;
+                connected_cf.take();
 
                 radio_uri
             } else {
@@ -1020,6 +1074,18 @@ async fn main() -> Result<()> {
 
         }
         Commands::Console { no_format } => {
+            let saved = read_and_clear_console_file()?;
+            if !saved.is_empty() {
+                if *no_format {
+                    print!("{}", saved);
+                } else {
+                    for line in saved.lines() {
+                        print!("{}", modules::console::format_console_line(line));
+                        println!();
+                    }
+                }
+            }
+
             let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
 
             modules::console::print(&cf, *no_format).await?;
@@ -1029,15 +1095,14 @@ async fn main() -> Result<()> {
         Commands::Log { command } => {
             match command {
                 LogCommands::List => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     modules::log::list(&cf).await?;
 
-                    cf.disconnect().await;
                 }
                 LogCommands::Print(var) => {
 
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
@@ -1055,21 +1120,20 @@ async fn main() -> Result<()> {
 
                     modules::log::print(&cf, names.as_str(), var.period as u64).await?;
 
-                    cf.disconnect().await;
                 }
             }
         }
         Commands::Param { command } => {
             match command {
                 ParamCommands::List => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
                     modules::param::list(&cf).await?;
                 }
                 ParamCommands::Get(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -1085,7 +1149,7 @@ async fn main() -> Result<()> {
                     modules::param::get(&cf, &names).await?;
                 }
                 ParamCommands::Set(params) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let param_list = match &params.params {
                       Some(p) => p.clone(),
@@ -1114,7 +1178,7 @@ async fn main() -> Result<()> {
                     modules::param::set(&cf, &param_list, params.store).await?;
                 }
                 ParamCommands::Store(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -1136,7 +1200,7 @@ async fn main() -> Result<()> {
                     modules::param::store(&cf, &names).await?;
                 }
                 ParamCommands::Clear(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -1238,7 +1302,7 @@ async fn main() -> Result<()> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1308,10 +1372,9 @@ async fn main() -> Result<()> {
 
                     eeprom_memory.commit().await?;
 
-                    cf.disconnect().await;
                 }
                 ConfigCommands::Display => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1321,7 +1384,6 @@ async fn main() -> Result<()> {
 
                     modules::memory::display(&cf, memories[0].clone()).await?;
 
-                    cf.disconnect().await;
                   }
             }
         }
@@ -1348,7 +1410,7 @@ async fn main() -> Result<()> {
         Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memory = cf.memory.get_memories(None);
 
@@ -1361,10 +1423,9 @@ async fn main() -> Result<()> {
                     }
 
 
-                    cf.disconnect().await;
                 }
                 MemoryCommands::Read(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1391,7 +1452,6 @@ async fn main() -> Result<()> {
                       utils::display::hex_dump(data, var.offset);
                     }
 
-                    cf.disconnect().await;
                 }
                 MemoryCommands::Write(var) => {
 
@@ -1407,7 +1467,7 @@ async fn main() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1427,10 +1487,9 @@ async fn main() -> Result<()> {
 
                     progress_bar.finish_with_message(format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), var.id, var.offset));
 
-                    cf.disconnect().await;
                 }
                 MemoryCommands::Display(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1459,10 +1518,9 @@ async fn main() -> Result<()> {
 
                     modules::memory::display(&cf, memories[selected_id].clone()).await?;
 
-                    cf.disconnect().await;
                   }
                 MemoryCommands::Erase(var) => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1495,14 +1553,13 @@ async fn main() -> Result<()> {
 
                     modules::memory::erase(&cf, memories[selected_id].clone()).await?;
 
-                    cf.disconnect().await;
                   }
             }
         }
         Commands::Platform { command } => {
             match command {
                 PlatformCommands::Info => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let protocol_version = cf.platform.protocol_version().await?;
                     let firmware_version = cf.platform.firmware_version().await?;
@@ -1512,7 +1569,6 @@ async fn main() -> Result<()> {
                     println!("Firmware\t: {}", firmware_version);
                     println!("CRTP protocol\t: {}", protocol_version);
 
-                    cf.disconnect().await;
                 }
                 PlatformCommands::Reboot => {
                     modules::bootloader::reboot(&link_context, uri.as_str()).await?;
@@ -1542,9 +1598,8 @@ async fn main() -> Result<()> {
         Commands::Loco { command } => {
             match command {
                 LocoCommands::Display => {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
                     modules::lps::display(&cf).await?;
-                    cf.disconnect().await;
                 }
             }
         }
@@ -1557,7 +1612,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+            let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
             match command {
                 HlCommands::Arm => {
@@ -1626,7 +1681,6 @@ async fn main() -> Result<()> {
                 }
             }
 
-            cf.disconnect().await;
         }
         Commands::Cr { command } => {
             match command {
@@ -1745,9 +1799,10 @@ async fn main() -> Result<()> {
                       }
                     }
                   } else {
-                    let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache.clone(), args.debug).await?;
+                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache.clone(), args.debug);
                     let platform = cf.platform.device_type_name().await?;
-                    cf.disconnect().await;
+                    save_and_disconnect(connected_cf.as_ref().unwrap(), preserve_console).await;
+                    connected_cf.take();
                     platform
                   };
 
@@ -1784,6 +1839,13 @@ async fn main() -> Result<()> {
             }
         }
     }
-
     Ok(())
+    }.await;
+
+    // Save console and disconnect any remaining connection
+    if let Some(ref cf) = connected_cf {
+        save_and_disconnect(cf, preserve_console).await;
+    }
+
+    result
 }

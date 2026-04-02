@@ -2,7 +2,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use colored::*;
 
-fn format_console_line(line: &str) -> String {
+pub fn format_console_line(line: &str) -> String {
     if let Some((subsystem, message)) = line.split_once(':') {
         format!("{}:{}", subsystem.bold(), message)
     } else {
