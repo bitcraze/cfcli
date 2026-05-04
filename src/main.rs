@@ -2,7 +2,7 @@ use crate::modules::bootloader;
 use crate::utils::deckctrl::DeckConfig;
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_num::maybe_hex;
-use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed, RawMemory};
+use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, RadioSpeed, RawMemory};
 use crazyflie_lib::TocCache;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
@@ -126,6 +126,108 @@ fn parse_key_opt_val_pairs(s: &str) -> Result<HashMap<String, Option<String>>, S
   }
 
   Ok(map)
+}
+
+/// A reference to a memory, parsed from the CLI.
+///
+/// Accepts either:
+///   - a numeric memory ID (decimal or `0x`-prefixed hex), e.g. `5` or `0x05`
+///   - a `MemoryType` variant name, e.g. `DeckCtrlDFU`
+///   - a type with an instance suffix to disambiguate when multiple memories
+///     of the same type exist, e.g. `DeckCtrlDFU:0`
+#[derive(Debug, Clone)]
+enum MemoryRef {
+    Id(u8),
+    Type(MemoryType, Option<usize>),
+}
+
+fn parse_memory_type(s: &str) -> Result<MemoryType, String> {
+    match s {
+        "EEPROMConfig" => Ok(MemoryType::EEPROMConfig),
+        "OneWire" => Ok(MemoryType::OneWire),
+        "DriverLed" => Ok(MemoryType::DriverLed),
+        "Loco" => Ok(MemoryType::Loco),
+        "Trajectory" => Ok(MemoryType::Trajectory),
+        "Loco2" => Ok(MemoryType::Loco2),
+        "Lighthouse" => Ok(MemoryType::Lighthouse),
+        "MemoryTester" => Ok(MemoryType::MemoryTester),
+        "MicroSD" => Ok(MemoryType::MicroSD),
+        "DriverLedTiming" => Ok(MemoryType::DriverLedTiming),
+        "App" => Ok(MemoryType::App),
+        "DeckMemory" => Ok(MemoryType::DeckMemory),
+        "DeckCtrlDFU" => Ok(MemoryType::DeckCtrlDFU),
+        "DeckCtrl" => Ok(MemoryType::DeckCtrl),
+        "DeckMultiranger" => Ok(MemoryType::DeckMultiranger),
+        "DeckPaa3905" => Ok(MemoryType::DeckPaa3905),
+        _ => Err(format!(
+            "Unknown memory type '{}'. Valid types: EEPROMConfig, OneWire, DriverLed, \
+             Loco, Trajectory, Loco2, Lighthouse, MemoryTester, MicroSD, DriverLedTiming, \
+             App, DeckMemory, DeckCtrlDFU, DeckCtrl, DeckMultiranger, DeckPaa3905",
+            s
+        )),
+    }
+}
+
+fn parse_memory_ref(s: &str) -> Result<MemoryRef, String> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        return u8::from_str_radix(hex, 16)
+            .map(MemoryRef::Id)
+            .map_err(|e| format!("Invalid hex memory ID '{}': {}", s, e));
+    }
+    if let Ok(id) = s.parse::<u8>() {
+        return Ok(MemoryRef::Id(id));
+    }
+
+    let (type_str, instance) = match s.split_once(':') {
+        Some((t, n)) => {
+            let n = n.parse::<usize>().map_err(|_| {
+                format!("Invalid instance index '{}': must be a non-negative integer", n)
+            })?;
+            (t, Some(n))
+        }
+        None => (s, None),
+    };
+    Ok(MemoryRef::Type(parse_memory_type(type_str)?, instance))
+}
+
+fn resolve_memory_ref<'a>(
+    memories: &[&'a MemoryDevice],
+    reference: &MemoryRef,
+) -> Result<&'a MemoryDevice> {
+    match reference {
+        MemoryRef::Id(id) => memories
+            .iter()
+            .find(|m| m.memory_id == *id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", id)),
+        MemoryRef::Type(mt, instance) => {
+            let matches: Vec<&MemoryDevice> = memories
+                .iter()
+                .filter(|m| m.memory_type == *mt)
+                .copied()
+                .collect();
+            match (matches.len(), instance) {
+                (0, _) => bail!("No memory of type {:?} found", mt),
+                (_, Some(idx)) => matches.get(*idx).copied().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Instance {} of type {:?} out of range ({} found)",
+                        idx,
+                        mt,
+                        matches.len()
+                    )
+                }),
+                (1, None) => Ok(matches[0]),
+                (n, None) => bail!(
+                    "Multiple memories of type {:?} ({} found), specify an instance with '{:?}:0'..'{:?}:{}'",
+                    mt,
+                    n,
+                    mt,
+                    mt,
+                    n - 1
+                ),
+            }
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -679,21 +781,23 @@ struct HlGotoParameters {
 
 #[derive(Debug, Args)]
 struct SelectMemoryParameters {
-    /// ID of memory to read
-    #[clap(value_parser, default_value = None)]
-    id: Option<usize>
+    /// Memory to operate on: numeric ID, type name (e.g. DeckCtrlDFU),
+    /// or type with instance index (e.g. DeckCtrlDFU:0). Omit to select interactively.
+    #[clap(value_parser = parse_memory_ref)]
+    mem: Option<MemoryRef>,
 }
 
 #[derive(Debug, Args)]
 struct ReadMemoryParameters {
-    /// ID of memory to read
-    #[clap(value_parser)]
-    id: usize,
+    /// Memory to read from: numeric ID, type name (e.g. DeckCtrlDFU),
+    /// or type with instance index (e.g. DeckCtrlDFU:0)
+    #[clap(value_parser = parse_memory_ref)]
+    mem: MemoryRef,
     /// Offset in bytes to start reading from
-    #[clap(value_parser, value_parser=maybe_hex::<usize>)]
+    #[clap(long, short = 's', default_value = "0", value_parser = maybe_hex::<usize>)]
     offset: usize,
     /// Length in bytes to read
-    #[clap(value_parser, value_parser=maybe_hex::<usize>)]
+    #[clap(long, short = 'n', default_value = "32", value_parser = maybe_hex::<usize>)]
     length: usize,
     /// File to save the read raw binary data into
     #[clap(long, short = 'o')]
@@ -708,11 +812,12 @@ struct ReadMemoryParameters {
         .args(&["data", "input"])
 ))]
 struct WriteMemoryParameters {
-    /// ID of memory to read
-    #[clap(value_parser)]
-    id: usize,
-    /// Offset in bytes to start reading from
-    #[clap(value_parser, value_parser=maybe_hex::<usize>)]
+    /// Memory to write to: numeric ID, type name (e.g. DeckCtrlDFU),
+    /// or type with instance index (e.g. DeckCtrlDFU:0)
+    #[clap(value_parser = parse_memory_ref)]
+    mem: MemoryRef,
+    /// Offset in bytes to start writing at
+    #[clap(long, short = 's', value_parser = maybe_hex::<usize>)]
     offset: usize,
     /// Data to write (comma-separated list of bytes)
     #[clap(long, short = 'd', value_delimiter = ',', value_parser=maybe_hex::<u8>)]
@@ -1428,23 +1533,25 @@ async fn main() -> Result<()> {
                     let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(None);
+                    let device = resolve_memory_ref(&memories, &var.mem)?.clone();
+                    let mem_id = device.memory_id;
 
-                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(memories[var.id].clone()).await {
+                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(device).await {
                       Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", var.id, e),
-                      None => bail!("Memory ID={} not found", var.id),
+                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
+                      None => bail!("Memory ID={} not found", mem_id),
                     };
 
                     if let Some(output_file) = &var.output {
 
-                        let progress_bar = utils::display::get_progressbar(var.length, None);   
+                        let progress_bar = utils::display::get_progressbar(var.length, None);
                         let pb = progress_bar.clone();
                         let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
                           pb.set_position(bytes_written as u64);
                         };
                         let data = raw_access_memory.read_with_progress(var.offset, var.length, progress_callback).await?;
 
-                        progress_bar.finish_with_message(format!("Read {} bytes from memory ID={} at offset 0x{:x}", var.length, var.id, var.offset));
+                        progress_bar.finish_with_message(format!("Read {} bytes from memory ID={} at offset 0x{:x}", var.length, mem_id, var.offset));
 
                       std::fs::write(output_file, &data)?;
                     } else {
@@ -1470,14 +1577,16 @@ async fn main() -> Result<()> {
                     let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
 
                     let memories = cf.memory.get_memories(None);
+                    let device = resolve_memory_ref(&memories, &var.mem)?.clone();
+                    let mem_id = device.memory_id;
 
-                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(memories[var.id].clone()).await {
+                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(device).await {
                       Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", var.id, e),
-                      None => bail!("Memory ID={} not found", var.id),
+                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
+                      None => bail!("Memory ID={} not found", mem_id),
                     };
 
-                    let progress_bar = utils::display::get_progressbar(data.len(), None);   
+                    let progress_bar = utils::display::get_progressbar(data.len(), None);
                     let pb = progress_bar.clone();
                     let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
                       pb.set_position(bytes_written as u64);
@@ -1485,7 +1594,7 @@ async fn main() -> Result<()> {
 
                     raw_access_memory.write_with_progress(var.offset, &data, progress_callback).await?;
 
-                    progress_bar.finish_with_message(format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), var.id, var.offset));
+                    progress_bar.finish_with_message(format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), mem_id, var.offset));
 
                 }
                 MemoryCommands::Display(var) => {
@@ -1493,8 +1602,8 @@ async fn main() -> Result<()> {
 
                     let memories = cf.memory.get_memories(None);
 
-                    let selected_id = match var.id {
-                      Some(id) => id,
+                    let device = match &var.mem {
+                      Some(reference) => resolve_memory_ref(&memories, reference)?.clone(),
                       None => {
                         let options: Vec<String> = memories.iter().map(|mem| {
                           format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
@@ -1504,19 +1613,21 @@ async fn main() -> Result<()> {
                           .prompt()
                           .map_err(|_| anyhow::anyhow!("No memory selected"))?;
 
-                        // Extract the memory ID from the selected option
                         let selected_id = selected_option
                           .split(']')
                           .next()
-                          .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
+                          .and_then(|s| s.trim_start_matches('[').parse::<u8>().ok())
                           .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
-                        selected_id
+                        memories.iter()
+                          .find(|m| m.memory_id == selected_id)
+                          .copied()
+                          .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", selected_id))?
+                          .clone()
                       }
-                        
                     };
 
-                    modules::memory::display(&cf, memories[selected_id].clone()).await?;
+                    modules::memory::display(&cf, device).await?;
 
                   }
                 MemoryCommands::Erase(var) => {
@@ -1524,8 +1635,8 @@ async fn main() -> Result<()> {
 
                     let memories = cf.memory.get_memories(None);
 
-                    let selected_id = match var.id {
-                      Some(id) => id,
+                    let device = match &var.mem {
+                      Some(reference) => resolve_memory_ref(&memories, reference)?.clone(),
                       None => {
                         let options: Vec<String> = memories.iter().map(|mem| {
                           format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
@@ -1535,23 +1646,21 @@ async fn main() -> Result<()> {
                           .prompt()
                           .map_err(|_| anyhow::anyhow!("No memory selected"))?;
 
-                        // Extract the memory ID from the selected option
                         let selected_id = selected_option
                           .split(']')
                           .next()
-                          .and_then(|s| s.trim_start_matches('[').parse::<usize>().ok())
+                          .and_then(|s| s.trim_start_matches('[').parse::<u8>().ok())
                           .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
-                        selected_id
+                        memories.iter()
+                          .find(|m| m.memory_id == selected_id)
+                          .copied()
+                          .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", selected_id))?
+                          .clone()
                       }
-                        
                     };
 
-                    if selected_id >= memories.len() {
-                      bail!("Invalid memory ID selected");
-                    }
-
-                    modules::memory::erase(&cf, memories[selected_id].clone()).await?;
+                    modules::memory::erase(&cf, device).await?;
 
                   }
             }
