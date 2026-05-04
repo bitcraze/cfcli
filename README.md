@@ -136,7 +136,7 @@ cfcli param set motorPowerSet.enable 1
 And a log variable can be printed using the following command:
 
 ```text
-cfcli log print stabilizer.roll 100
+cfcli log print stabilizer.roll -p 100
 ```
 
 A release can be flashed with:

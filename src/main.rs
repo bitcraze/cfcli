@@ -853,7 +853,7 @@ struct VariablesAndPeriod {
     #[clap(value_parser, verbatim_doc_comment)]
     names: Option<String>,
     /// The period in milliseconds to log at
-    #[clap(value_parser, default_value_t = 100)]
+    #[clap(long, short = 'p', default_value_t = 100)]
     period: u16,
 }
 

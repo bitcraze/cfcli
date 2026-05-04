@@ -24,7 +24,7 @@ Normally, console data is only available while connected. With the ```--preserve
 
 ```text
 cfcli -p param set motorPowerSet.enable 1
-cfcli -p log print stabilizer.roll 100
+cfcli -p log print stabilizer.roll --period 100
 ```
 
 When the ```console``` command is executed, any saved console history is always printed first and then cleared, followed by the live console output:

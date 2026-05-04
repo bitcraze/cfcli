@@ -38,8 +38,10 @@ where you can select which ones to log.
 To print the values of the `acc.x` and `acc.y` variables at each 10 ms use the following command:
 
 ```bash
-cfcli log print acc.x,acc.y 10
+cfcli log print acc.x,acc.y -p 10
 ```
+
+The period defaults to 100 ms if `-p`/`--period` is omitted.
 
 This will produce an output similar to this:
 
