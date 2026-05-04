@@ -673,14 +673,14 @@ enum TrajectoryCommands {
 
 #[derive(Debug, Args)]
 struct TrajectoryUploadParameters {
-    /// Path to the trajectory YAML file
-    #[clap(value_parser)]
-    file: String,
-    /// Trajectory ID to assign (default: 1)
-    #[clap(long, short = 'i', default_value = "1")]
+    /// Trajectory ID to assign
+    #[clap(value_parser, default_value = "1")]
     trajectory_id: u8,
-    /// Memory offset to write trajectory to (default: 0)
-    #[clap(long, short = 'o', default_value = "0", value_parser=maybe_hex::<u32>)]
+    /// Path to the trajectory YAML file
+    #[clap(long, short = 'i')]
+    input: String,
+    /// Memory offset to write trajectory to
+    #[clap(long, short = 's', default_value = "0", value_parser=maybe_hex::<u32>)]
     offset: u32,
 }
 
@@ -690,7 +690,7 @@ struct TrajectoryRunParameters {
     #[clap(value_parser)]
     trajectory_id: u8,
     /// Time scale factor (1.0 = normal speed, >1.0 = slower, <1.0 = faster)
-    #[clap(long, short = 's', default_value = "1.0")]
+    #[clap(long, short = 'f', default_value = "1.0")]
     time_scale: f32,
     /// Use relative position (shift trajectory to current position)
     #[clap(long, short = 'r')]
@@ -740,26 +740,26 @@ enum HlCommands {
 #[derive(Debug, Args)]
 struct HlTakeoffParameters {
     /// Target height in meters
-    #[clap(value_parser)]
+    #[clap(long, short = 'z', default_value = "0.5")]
     height: f32,
     /// Duration in seconds to reach the target height
-    #[clap(value_parser, default_value = "2.0")]
+    #[clap(long, short = 'd', default_value = "2.0")]
     duration: f32,
     /// Target yaw in degrees (omit to maintain current yaw)
-    #[clap(long)]
+    #[clap(long, short = 'y')]
     yaw: Option<f32>,
 }
 
 #[derive(Debug, Args)]
 struct HlLandParameters {
     /// Target height in meters (typically 0.0)
-    #[clap(value_parser, default_value = "0.0")]
+    #[clap(long, short = 'z', default_value = "0.0")]
     height: f32,
     /// Duration in seconds to land
-    #[clap(value_parser, default_value = "2.0")]
+    #[clap(long, short = 'd', default_value = "2.0")]
     duration: f32,
     /// Target yaw in degrees (omit to maintain current yaw)
-    #[clap(long)]
+    #[clap(long, short = 'y')]
     yaw: Option<f32>,
 }
 
@@ -772,7 +772,7 @@ struct HlGotoParameters {
     #[clap(long, short = 'd', default_value = "2.0")]
     duration: f32,
     /// Target yaw in degrees (default: 0)
-    #[clap(long)]
+    #[clap(long, short = 'y')]
     yaw: Option<f32>,
     /// Use relative positioning (relative to current position)
     #[clap(long, short = 'r')]
@@ -1768,7 +1768,7 @@ async fn main() -> Result<()> {
                 HlCommands::Trajectory { command: traj_cmd } => {
                     match traj_cmd {
                         TrajectoryCommands::Upload(params) => {
-                            modules::trajectory::upload(&cf, &params.file, params.trajectory_id, params.offset).await?;
+                            modules::trajectory::upload(&cf, &params.input, params.trajectory_id, params.offset).await?;
                         }
                         TrajectoryCommands::Run(params) => {
                             modules::trajectory::run(

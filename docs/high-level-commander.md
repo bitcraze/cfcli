@@ -33,20 +33,22 @@ cfcli hlc disarm
 Take off to a specified height. The duration specifies how long it should take to reach the target height.
 
 ```text
-cfcli hlc takeoff <HEIGHT> [DURATION] [--yaw <YAW>]
+cfcli hlc takeoff [-z <HEIGHT>] [-d <DURATION>] [-y <YAW>]
 ```
+
+Defaults: `--height 0.5`, `--duration 2.0`.
 
 ### Takeoff Examples
 
 ```text
-# Take off to 0.5 meters over 2 seconds (default)
-cfcli hlc takeoff 0.5
+# Take off to 0.5 meters over 2 seconds (defaults)
+cfcli hlc takeoff
 
 # Take off to 1 meter over 3 seconds
-cfcli hlc takeoff 1.0 3.0
+cfcli hlc takeoff -z 1.0 -d 3.0
 
 # Take off to 0.5 meters while rotating to 90 degrees yaw
-cfcli hlc takeoff 0.5 --yaw 90
+cfcli hlc takeoff --yaw 90
 ```
 
 ## Land
@@ -54,17 +56,19 @@ cfcli hlc takeoff 0.5 --yaw 90
 Land at the current position. The height parameter specifies the target landing height (typically 0.0).
 
 ```text
-cfcli hlc land [HEIGHT] [DURATION] [--yaw <YAW>]
+cfcli hlc land [-z <HEIGHT>] [-d <DURATION>] [-y <YAW>]
 ```
+
+Defaults: `--height 0.0`, `--duration 2.0`.
 
 ### Land Examples
 
 ```text
-# Land over 2 seconds (default)
+# Land over 2 seconds (defaults)
 cfcli hlc land
 
 # Land over 3 seconds
-cfcli hlc land 0.0 3.0
+cfcli hlc land -d 3.0
 
 # Land while rotating to 0 degrees yaw
 cfcli hlc land --yaw 0
@@ -75,7 +79,7 @@ cfcli hlc land --yaw 0
 Move to a specified position. The position is given as comma-separated x,y,z coordinates.
 
 ```text
-cfcli hlc goto <POSITION> [-d <DURATION>] [--yaw <YAW>] [-r]
+cfcli hlc goto <POSITION> [-d <DURATION>] [-y <YAW>] [-r]
 ```
 
 The position format is `x,y,z` where `x`, `y`, `z` are coordinates in meters.
@@ -161,25 +165,27 @@ Each segment uses 132 bytes of memory on the Crazyflie.
 Upload a trajectory from a YAML file to the Crazyflie's trajectory memory.
 
 ```text
-cfcli hlc trajectory upload <FILE> [-i <ID>] [-o <OFFSET>]
+cfcli hlc trajectory upload [ID] -i <FILE> [-s <OFFSET>]
 ```
 
 Options:
-- `-i, --trajectory-id`: Trajectory ID to assign (default: 1)
-- `-o, --offset`: Memory offset in bytes (default: 0)
+
+- `ID` (positional): Trajectory ID to assign (default: 1)
+- `-i, --input`: Path to the trajectory YAML file (required)
+- `-s, --offset`: Memory offset in bytes (default: 0)
 
 ### Upload Examples
 
 ```text
 # Upload trajectory with default ID (1)
-cfcli hlc trajectory upload my_trajectory.yaml
+cfcli hlc trajectory upload -i my_trajectory.yaml
 
 # Upload trajectory with ID 2
-cfcli hlc trajectory upload figure8.yaml -i 2
+cfcli hlc trajectory upload 2 -i figure8.yaml
 
 # Upload multiple trajectories at different offsets
-cfcli hlc trajectory upload traj1.yaml -i 1 -o 0
-cfcli hlc trajectory upload traj2.yaml -i 2 -o 1000
+cfcli hlc trajectory upload 1 -i traj1.yaml -s 0
+cfcli hlc trajectory upload 2 -i traj2.yaml -s 1000
 ```
 
 ### Run Trajectory
@@ -187,11 +193,12 @@ cfcli hlc trajectory upload traj2.yaml -i 2 -o 1000
 Execute a previously uploaded trajectory.
 
 ```text
-cfcli hlc trajectory run <ID> [-s <SCALE>] [-r] [-y] [--reversed]
+cfcli hlc trajectory run <ID> [-f <time scale>] [-r] [-y] [--reversed]
 ```
 
 Options:
-- `-s, --time-scale`: Time scale factor (1.0 = normal, >1.0 = slower, <1.0 = faster)
+
+- `-f, --time-scale`: Time scale factor (1.0 = normal, >1.0 = slower, <1.0 = faster)
 - `-r, --relative-position`: Shift trajectory to start at current position
 - `-y, --relative-yaw`: Align trajectory yaw to current heading
 - `--reversed`: Run the trajectory backwards
@@ -203,10 +210,10 @@ Options:
 cfcli hlc trajectory run 1
 
 # Run trajectory at half speed
-cfcli hlc trajectory run 1 -s 2.0
+cfcli hlc trajectory run 1 -f 2.0
 
 # Run trajectory at double speed
-cfcli hlc trajectory run 1 -s 0.5
+cfcli hlc trajectory run 1 -f 0.5
 
 # Run trajectory relative to current position and yaw
 cfcli hlc trajectory run 1 -r -y
@@ -238,8 +245,8 @@ cfcli select
 # Arm the motors
 cfcli hlc arm
 
-# Take off to 0.5 meters
-cfcli hlc takeoff 0.5
+# Take off to 0.5 meters (default)
+cfcli hlc takeoff
 
 # Wait a moment (the command returns immediately)
 sleep 3
@@ -277,11 +284,11 @@ cfcli hlc trajectory display figure8.yaml
 
 # Arm and take off
 cfcli hlc arm
-cfcli hlc takeoff 0.5
+cfcli hlc takeoff
 sleep 3
 
 # Upload the trajectory
-cfcli hlc trajectory upload figure8.yaml -i 1
+cfcli hlc trajectory upload 1 -i figure8.yaml
 
 # Run the trajectory (relative to current position)
 cfcli hlc trajectory run 1 -r
