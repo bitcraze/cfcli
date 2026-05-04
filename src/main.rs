@@ -618,8 +618,8 @@ struct DeckBinflashParameters {
     /// Input file (in yaml format) containing the full configuration
     #[clap(value_parser)]
     input: String,
-    /// Probe index (defaults to selection if more than one debugger is connected)
-    #[clap(value_parser)]
+    /// Probe index (defaults to interactive selection if more than one debugger is connected)
+    #[clap(long, short = 'p')]
     probe_idx: Option<usize>,
 }
 
