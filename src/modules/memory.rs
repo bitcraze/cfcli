@@ -36,6 +36,25 @@ fn print_ow_info(ow: &OwMemory) {
     }
 }
 
+async fn print_deck_ctrl_dfu_info(raw: &RawMemory) -> Result<()> {
+    let header = raw.read(0, 4).await?;
+
+    let version = header[0];
+    let deck_ctrl_count = header[1];
+    let status = header[2];
+
+    const STATUS_IN_DFU_MODE: u8 = 1 << 0;
+    const STATUS_CAN_ENABLE_DFU: u8 = 1 << 1;
+
+    println!("DeckCtrl DFU Memory");
+    println!("  Version        : {}", version);
+    println!("  DeckCtrl count : {}", deck_ctrl_count);
+    println!("  In DFU mode    : {}", (status & STATUS_IN_DFU_MODE) != 0);
+    println!("  Can enable DFU : {}", (status & STATUS_CAN_ENABLE_DFU) != 0);
+
+    Ok(())
+}
+
 async fn print_deck_memory_info(deckmem: &DeckMemory) -> Result<()> {
     for section in deckmem.sections().iter() {
         println!("Deck Memory Section:");
@@ -94,6 +113,18 @@ pub async fn display(cf: &Crazyflie, memory: MemoryDevice) -> Result<()> {
             };
 
             print_deck_memory_info(&deck_memory).await?;
+        }
+        MemoryType::DeckCtrlDFU => {
+            let raw = match cf
+                .memory
+                .open_memory::<RawMemory>(memory.clone())
+                .await
+            {
+                Some(Ok(r)) => r,
+                Some(Err(e)) => bail!("Could not access memory ID={} as RawMemory: {}", memory.memory_id, e),
+                None => bail!("Memory ID={} not found", memory.memory_id),
+            };
+            print_deck_ctrl_dfu_info(&raw).await?;
         }
         _ => bail!("Don't know how to handle memory ID={} yet, cannot display it", memory.memory_id),
     }
