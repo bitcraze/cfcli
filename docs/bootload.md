@@ -161,8 +161,8 @@ cfcli bootload flash --bin stm32-fw@0x08004000=custom-stm.bin,nrf51-fw=cf2_nrf.b
 
 #### Targets
 
-- `stm32-fw` — STM32 main firmware, flashed via the Crazyflie bootloader.
-- `nrf51-fw` — nRF51 radio/power firmware, flashed via the Crazyflie bootloader.
+- `stm32-fw` — STM32 main firmware, flashed via the Crazyflie bootloader. **Requires a radio URI** (USB is not supported for this target; use `select` or `--uri radio://…`).
+- `nrf51-fw` — nRF51 radio/power firmware, flashed via the Crazyflie bootloader. **Requires a radio URI** (USB is not supported for this target).
 - `bcAI:esp-fw` — AI deck ESP32 firmware, flashed via the deck memory.
 - `bcLighthouse4-fw` — Lighthouse deck firmware, flashed via the deck memory.
 - `bcColorLedTop:col-fw` — Color LED deck (top) firmware, flashed via the deck memory.

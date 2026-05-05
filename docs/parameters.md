@@ -40,6 +40,37 @@ shows whether the parameter supports EEPROM storage (`Yes`), has a value current
 stored (`Stored`), or is blank if not persistent. The `Value/Stored` column shows
 the current value, and when a value is stored, shows `value/stored`.
 
+### CSV output
+
+Adding the global `--csv` flag emits machine-readable rows with a stable
+schema. `param list` and `param get` share the same columns, so consumers can
+parse either with one parser:
+
+```bash
+cfcli --csv param list
+```
+
+```text
+name,access,persistent,default,stored_value,value
+activeMarker.back,RW,yes,1,3,3
+activeMarker.front,RW,yes,1,,1
+commander.enHighLevel,RW,no,,,0
+firmware.revision0,RO,no,,,14906
+```
+
+Columns:
+
+* `name` — `group.name`
+* `access` — `RW` or `RO`
+* `persistent` — `yes` (parameter supports EEPROM storage), `no`, or `error`
+* `default` — firmware default value (empty for non-persistent parameters)
+* `stored_value` — value currently stored in EEPROM (empty if not stored)
+* `value` — current value
+
+Values are plain numbers (e.g. `42`, `4.222874`) — not the `U8(42)` wrapper
+form used in the human-readable view — so they can be piped into other tools
+without further parsing.
+
 ## Get parameter values
 
 Read the value of one or more parameters by specifying comma-separated names:
@@ -60,6 +91,10 @@ activeMarker.back              |   RW   | Yes        | U8(1)           | U8(3)  
 The `Persistent` column shows whether a value is stored in EEPROM (`Yes`/`No`),
 `Default` shows the firmware default, and `Stored Value` shows the EEPROM value if any.
 Parameters that don't support persistence have these columns blank.
+
+`param get` also supports `--csv` and uses the same column layout as `param list`
+(see [CSV output](#csv-output) above). Unknown parameter names produce a clear
+error and exit code 20.
 
 If no names are provided, an interactive selection prompt will be shown.
 

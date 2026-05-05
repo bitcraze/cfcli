@@ -19,6 +19,20 @@ Firmware        : 2025.09.1 +100
 CRTP protocol   : 10
 ```
 
+For machine-readable output, add the global `--csv` flag. Each row is a
+`field,value` pair:
+
+```bash
+cfcli --csv platform info
+```
+
+```text
+field,value
+platform,Crazyflie 2.1
+firmware,2025.09.1 +100
+crtp_protocol,10
+```
+
 ## Power management
 
 The following commands are available for power management of the Crazyflie:

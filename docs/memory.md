@@ -49,6 +49,22 @@ Memories:
 [5] DeckCtrlDFU size=96k (0x18000/98304)
 ```
 
+For machine-readable output, add the global `--csv` flag:
+
+```bash
+cfcli --csv mem list
+```
+
+```text
+id,type,size_bytes,serial
+0,EEPROMConfig,8191,
+3,DeckCtrl,2048,2D0043000550314854363720
+5,DeckCtrlDFU,98304,
+```
+
+Columns: numeric `id`, `type` name, decimal `size_bytes`, and `serial` (hex
+string, empty when the memory has no serial).
+
 ## Reading memory
 
 `mem read` defaults to offset `0` and length `32`, so a quick peek at a memory

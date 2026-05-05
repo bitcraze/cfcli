@@ -12,6 +12,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * Turn the platform on/off or put it to sleep/wake it up
 * Run stability tests with the Crazyflie
 * High-level commander (takeoff, land, go-to, trajectories)
+* AI-agent and scripting friendly (CSV output, classified exit codes, non-interactive mode, command timeouts)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
 use the the new [Crazyflie python library (v2)](https://github.com/bitcraze/crazyflie-lib-python-v2) for that.
@@ -73,22 +74,34 @@ Commands:
   bootload  Bootload the Crazyflie and decks
   test      Run tests with the Crazyflie
   platform  Access platform functionality
-  settings  Local CLI settings (scan addresses, timeout, etc.)
   scan      List the Crazyflies found while scanning (on the selected address)
   select    Scan for Crazyflies and select which one to save for later interactions
   console   Print the console text from a Crazyflie
+  settings  Local CLI settings (scan addresses, timeout, etc.)
   loco      Loco Positioning System
   hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
-  cr        Crazyradio operations (list, sniffer, broadcast)
+  cr        Crazyradio operations (sniffer, etc.)
   help      Print this message or the help of the given subcommand(s)
 
 Options:
-  -n, --no-toc-cache      Do not use TOC cache
-  -d, --debug             Enable debug mode
-  -u, --uri <URI>         Override the URI to connect to (instead of using the config file)
-  -p, --preserve-console  Preserve console output across connections
-  -h, --help              Print help
-  -V, --version           Print version
+  -n, --no-toc-cache       Do not use TOC cache
+  -d, --debug              Enable debug mode
+  -u, --uri <URI>          Override the URI to connect to (instead of using the config file)
+  -p, --preserve-console   Preserve console output across connections, printed when the 'console' command is run
+      --timeout <TIMEOUT>  Timeout in milliseconds for the command
+      --non-interactive    Disable interactive prompts (auto-set when stdin is not a TTY)
+      --csv                Emit machine-readable CSV (for read commands that support it)
+  -h, --help               Print help
+  -V, --version            Print version
+
+Exit codes:
+   0  success
+   1  unspecified error
+   2  usage / argument error (clap)
+  10  connection failure (no Crazyflie found, link error, disconnected)
+  20  resource not found (param/log/memory by name, release name)
+  30  invalid value (range, type, malformed input)
+  40  --timeout expired on a bounded command
 ```
 
 To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies
@@ -158,6 +171,50 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Select](/docs/select.md)
 * [Settings](/docs/settings.md)
 * [Crazyradio](/docs/crazyradio.md)
+
+## Scripting / AI agent usage
+
+When `cfcli` is driven from a script or from an AI agent (rather than typed at a
+prompt) a few flags make the output predictable:
+
+* `--non-interactive` — disable interactive `Select`/`MultiSelect` pickers.
+  Auto-enabled when stdin isn't a TTY. Missing required arguments now produce
+  a clear error (exit code 30) instead of hanging waiting for keyboard input.
+* `--timeout <ms>` — global wall-clock cap for the whole command. For
+  *streaming* commands (`console`, `log print`, `cr sniff`) the timer is the
+  intended way to stop them and the command exits **0**. For all other
+  commands a timeout means the command got stuck and the command exits **40**.
+* `--csv` — machine-readable CSV output for the read commands (`scan`,
+  `param list`/`get`, `log list`/`print`, `mem list`, `platform info`). Other
+  commands ignore the flag.
+
+Exit codes:
+
+| Code | Meaning                                                        |
+|------|----------------------------------------------------------------|
+| 0    | Success                                                        |
+| 1    | Unspecified error                                              |
+| 2    | Usage / argument error (from clap)                             |
+| 10   | Connection failure (no Crazyflie found, link error, etc.)      |
+| 20   | Resource not found (param/log/memory by name, release name)    |
+| 30   | Invalid value (range, type, malformed input)                   |
+| 40   | `--timeout` expired on a bounded command                       |
+
+Worked example — read one parameter into a shell variable:
+
+```bash
+value=$(cfcli --non-interactive --timeout 5000 --csv \
+        param get motorPowerSet.enable \
+        | tail -n +2 | awk -F, '{print $6}')
+```
+
+Watch the console for 3 seconds then stop cleanly:
+
+```bash
+cfcli --timeout 3000 console
+```
+
+The same information is available from `cfcli --help` on every install.
 
 ## Development
 

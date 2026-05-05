@@ -34,3 +34,23 @@ cfcli console
 ```
 
 This is useful for capturing console debug output that was printed during other operations (e.g. parameter changes or log sessions).
+
+## Clear preserved console history
+
+The `--clear` flag deletes the preserved console history file and exits without connecting to a Crazyflie. Useful when you want to discard accumulated output between runs:
+
+```text
+cfcli console --clear
+```
+
+The file path is shown by `cfcli settings show`.
+
+## Stop streaming after a fixed duration
+
+`console` is a streaming command — by default it runs until the link is broken. Combine it with the global `--timeout` flag to stop cleanly after a fixed wall-clock duration:
+
+```text
+cfcli --timeout 3000 console
+```
+
+When `--timeout` fires on a streaming command, the process exits **0** (the timer is the intended way to stop it). This is the recommended pattern when running `cfcli console` from a script or CI step.

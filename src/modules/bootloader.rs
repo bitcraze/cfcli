@@ -6,6 +6,7 @@ use crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
 
 use crate::ConfigTocCache;
+use crate::error::CliError;
 use crate::modules::memory::{
     read_deck_ctrl_dfu_header,
     DECK_CTRL_DFU_STATUS_CAN_ENABLE_DFU,
@@ -408,7 +409,7 @@ async fn flash_deck_ctrl(
             pb.set_position(bytes_written as u64);
         };
         raw.write_with_progress(address, &fw.data, progress_callback).await?;
-        progress_bar.finish_with_message(format!("DeckCtrl {} flashed successfully!", fw.file_type));
+        finish_progress(&progress_bar, format!("DeckCtrl {} flashed successfully!", fw.file_type));
     }
 
     raw.write(DECK_CTRL_DFU_CMD_OFFSET, &[DECK_CTRL_DFU_CMD_ENTER_FIRMWARE]).await?;
@@ -425,6 +426,13 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
   let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
 
   if !firmware_for_bootloader.is_empty() {
+      // stm32-fw / nrf51-fw flashing requires the radio bootloader handshake;
+      // USB doesn't expose that path. Decks (handled below) work over USB.
+      if uri.starts_with("usb://") {
+          bail!(CliError::InvalidValue(
+              "stm32-fw / nrf51-fw flashing requires a radio URI; USB only supports deck/deck-ctrl targets".to_string()
+          ));
+      }
       let bllink = restart_and_get_bllink(link_context, uri, cold).await?;
       let mut cfloader = cfloader::CFLoader::new(bllink).await?;
       for firmware in firmware_for_bootloader {
@@ -441,7 +449,7 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
             pb.set_position(bytes_written as u64);
           };
           cfloader.flash_stm32_with_progress(start_address, &firmware.data, Some(progress_callback)).await?;
-          progress_bar.finish_with_message("STM32F405 flashed successfully!");
+          finish_progress(&progress_bar, "STM32F405 flashed successfully!");
         }
         if firmware.target == "nrf51" && firmware.file_type == "fw" {
           let nrf51_info = cfloader.nrf51_info();
@@ -456,7 +464,7 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
             pb.set_position(bytes_written as u64);
           };
           cfloader.flash_nrf51_with_progress(start_address, &firmware.data, Some(progress_callback)).await?;
-          progress_bar.finish_with_message("nRF51822 flashed successfully!");
+          finish_progress(&progress_bar, "nRF51822 flashed successfully!");
         }
     }
     cfloader.reset_to_firmware().await?;
@@ -533,7 +541,7 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
             pb.set_position(bytes_written as u64);
           };
           section.write_with_progress(0, &firmware.data, progress_callback).await?;
-          progress_bar.finish_with_message("Deck firmware flashed successfully!");
+          finish_progress(&progress_bar, "Deck firmware flashed successfully!");
         }
 
         cf.disconnect().await;

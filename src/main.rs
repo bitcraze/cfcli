@@ -11,11 +11,13 @@ use probe_rs::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::sync::Arc;
 use inquire::{Select, MultiSelect};
-use indicatif::{ProgressBar, ProgressStyle};
 use crazyflie_lib::Value;
 use anyhow::{bail, Result};
+
+pub mod error;
 
 pub mod modules {
     pub mod log;
@@ -35,6 +37,8 @@ pub mod utils {
     pub mod display;
     pub mod firmware;
 }
+
+use error::CliError;
 
 /// Custom parser: "a=1,b=2" → { "a" => "1", "b" => "2" }
 /// Supports hex values with 0x prefix: "a=0x10,b=2" → { "a" => "16", "b" => "2" }
@@ -199,7 +203,7 @@ fn resolve_memory_ref<'a>(
             .iter()
             .find(|m| m.memory_id == *id)
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", id)),
+            .ok_or_else(|| CliError::NotFound(format!("memory with ID {}", id)).into()),
         MemoryRef::Type(mt, instance) => {
             let matches: Vec<&MemoryDevice> = memories
                 .iter()
@@ -207,31 +211,38 @@ fn resolve_memory_ref<'a>(
                 .copied()
                 .collect();
             match (matches.len(), instance) {
-                (0, _) => bail!("No memory of type {:?} found", mt),
-                (_, Some(idx)) => matches.get(*idx).copied().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Instance {} of type {:?} out of range ({} found)",
-                        idx,
-                        mt,
-                        matches.len()
-                    )
-                }),
+                (0, _) => bail!(CliError::NotFound(format!("memory of type {:?}", mt))),
+                (_, Some(idx)) => match matches.get(*idx).copied() {
+                    Some(m) => Ok(m),
+                    None => bail!(CliError::InvalidValue(format!(
+                        "instance {} of type {:?} out of range ({} found)",
+                        idx, mt, matches.len()
+                    ))),
+                },
                 (1, None) => Ok(matches[0]),
-                (n, None) => bail!(
-                    "Multiple memories of type {:?} ({} found), specify an instance with '{:?}:0'..'{:?}:{}'",
-                    mt,
-                    n,
-                    mt,
-                    mt,
-                    n - 1
-                ),
+                (n, None) => bail!(CliError::InvalidValue(format!(
+                    "multiple memories of type {:?} ({} found), specify an instance with '{:?}:0'..'{:?}:{}'",
+                    mt, n, mt, mt, n - 1
+                ))),
             }
         }
     }
 }
 
+// "Exit codes:" mirrors clap's default header style (bold + underline).
+// anstream strips the ANSI escapes when stdout isn't a terminal.
+const HELP_EPILOG: &str = "\x1b[1m\x1b[4mExit codes:\x1b[0m
+   0  success
+   1  unspecified error
+   2  usage / argument error (clap)
+  10  connection failure (no Crazyflie found, link error, disconnected)
+  20  resource not found (param/log/memory by name, release name)
+  30  invalid value (range, type, malformed input)
+  40  --timeout expired on a bounded command
+";
+
 #[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
+#[clap(author, version, about, long_about = None, after_help = HELP_EPILOG)]
 struct CliArgs {
     /// Do not use TOC cache
     #[clap(short, long, action)]
@@ -248,10 +259,21 @@ struct CliArgs {
     #[clap(short, long)]
     uri: Option<String>,
 
-    /// Preserve console output across connections. Console data is accumulated
-    /// and printed when the 'console' command is run.
+    /// Preserve console output across connections, printed when the 'console' command is run
     #[clap(short, long, action)]
     preserve_console: bool,
+
+    /// Timeout in milliseconds for the command
+    #[clap(long, global = true)]
+    timeout: Option<u64>,
+
+    /// Disable interactive prompts (auto-set when stdin is not a TTY)
+    #[clap(long, global = true)]
+    non_interactive: bool,
+
+    /// Emit machine-readable CSV (for read commands that support it)
+    #[clap(long, global = true)]
+    csv: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -315,6 +337,10 @@ enum Commands {
       /// Output raw console data without processing
       #[clap(long)]
       no_format: bool,
+
+      /// Delete the preserved console history file and exit without connecting
+      #[clap(long)]
+      clear: bool,
     },
 
     /// Local CLI settings (scan addresses, timeout, etc.)
@@ -943,41 +969,56 @@ impl TocCache for ConfigTocCache {
     }
 }
 
-async fn connect_with_spinner(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, measure_connect_time: bool) -> Result<crazyflie_lib::Crazyflie> {
-  let spinner = ProgressBar::new_spinner();
-  spinner.set_style(
-    ProgressStyle::default_spinner()
-      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
-      .template("{spinner:.green} {msg}")
-      .unwrap()
-  );
-  spinner.set_message(format!("Connecting to {}...", uri));
-  spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-
-  let cf = if measure_connect_time {
-    let start = std::time::Instant::now();
-    let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache).await?;
-    let duration = start.elapsed();
-    spinner.println(format!("Connection time: {:.2?}", duration));
-    cf
-  } else {
-    crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache).await?
-  };
-
-  spinner.finish_with_message(format!("Connected to {}", uri));
-  Ok(cf)
+/// Bail with `CliError::MissingArg` when the caller would otherwise hit an
+/// interactive `inquire` prompt but the CLI is running non-interactively
+/// (`--non-interactive` set, or stdin is not a TTY). The message names the
+/// missing argument so the caller knows which flag to add.
+fn require_arg(non_interactive: bool, missing_arg: &str) -> Result<()> {
+    if non_interactive {
+        bail!(CliError::MissingArg(format!(
+            "'{}' (running non-interactively)",
+            missing_arg
+        )));
+    }
+    Ok(())
 }
 
-/// Helper macro: connect and store the Crazyflie in `connected_cf` so that
-/// the centralized cleanup at the end of main can save console + disconnect.
-macro_rules! connect_cf {
-    ($holder:expr, $link:expr, $uri:expr, $toc:expr, $debug:expr) => {{
-        $holder = Some(connect_with_spinner($link, $uri, $toc, $debug).await?);
-        $holder.as_ref().unwrap()
-    }};
+/// Streaming commands are open-ended by design (live console, periodic log
+/// stream, radio sniffer). When `--timeout` fires for one of these, that's
+/// the user/agent's intended way to stop the stream, so we exit 0. Every
+/// other command is bounded — a timeout means it got stuck, so we return
+/// `CliError::Timeout` and exit 40.
+fn is_streaming_command(cmd: &Commands) -> bool {
+    matches!(
+        cmd,
+        Commands::Console { .. }
+            | Commands::Log { command: LogCommands::Print(_) }
+            | Commands::Cr { command: CrCommands::Sniff(_) }
+    )
 }
 
-fn console_preserve_path() -> std::path::PathBuf {
+/// Connect to a Crazyflie and store the resulting handle in `holder` so the
+/// centralized cleanup at the end of `run()` can disconnect it. Returns a
+/// borrowed reference to the just-stored Crazyflie. The mutable borrow ends
+/// when this function returns; callers can immediately use the `&Crazyflie`
+/// alongside other immutable accesses to `holder`.
+async fn connect_cf<'a>(
+    holder: &'a mut Option<crazyflie_lib::Crazyflie>,
+    link_context: &crazyflie_link::LinkContext,
+    uri: &str,
+    toc_cache: ConfigTocCache,
+    measure_connect_time: bool,
+) -> Result<&'a crazyflie_lib::Crazyflie> {
+    let start = if measure_connect_time { Some(std::time::Instant::now()) } else { None };
+    let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache).await
+        .map_err(|e| CliError::Connection(format!("connecting to {}: {}", uri, e)))?;
+    if let Some(s) = start {
+        eprintln!("Connection time: {:.2?}", s.elapsed());
+    }
+    Ok(holder.insert(cf))
+}
+
+pub fn console_preserve_path() -> std::path::PathBuf {
     let config_path = confy::get_configuration_file_path("cf-cli", None)
         .expect("Could not determine config directory");
     config_path.with_file_name("cf-cli-console.log")
@@ -1023,18 +1064,26 @@ pub fn decode_address(address: &str) -> Result<[u8; 5]> {
         Ok(a) if a <= 0xFFFFFFFFFF => Ok(a.to_be_bytes()[3..]
             .try_into()
             .expect("Could not convert u64 to [u8; 5]")),
-        Ok(_) => {
-            bail!("Invalid address, please provide a valid 5 byte hexadecimal address")
-        }
-        Err(_) => {
-            bail!("Invalid address, please provide a valid 5 byte hexadecimal address")
-        }
+        _ => bail!(CliError::InvalidValue(format!(
+            "address '{}' is not a valid 5-byte hexadecimal value (e.g. E7E7E7E7E7)",
+            address
+        ))),
     }
 }
 
-// Example scans for Crazyflies, connect the first one and print the log and param variables TOC.
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    let code = match run().await {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Error: {:#}", e);
+            error::classify_exit_code(&e)
+        }
+    };
+    std::process::exit(code);
+}
+
+async fn run() -> Result<()> {
     let args = CliArgs::parse();
 
     let mut config: Config = confy::load("cf-cli", None).unwrap_or_else(|err| {
@@ -1065,8 +1114,11 @@ async fn main() -> Result<()> {
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
     let preserve_console = args.preserve_console;
+    let timeout_ms = args.timeout;
+    let non_interactive = args.non_interactive || !std::io::stdin().is_terminal();
+    let csv = args.csv;
 
-    let result: Result<()> = async {
+    let body = async {
     match &args.command {
         Commands::Scan(scan_options) => {
             let addresses = match &scan_options.address {
@@ -1082,8 +1134,15 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            for uri in &found {
-                println!("> {}", uri);
+            if csv {
+                println!("uri");
+                for uri in &found {
+                    utils::display::csv_row(&[uri]);
+                }
+            } else {
+                for uri in &found {
+                    println!("> {}", uri);
+                }
             }
         }
         Commands::Select(select_options) => {
@@ -1095,7 +1154,7 @@ async fn main() -> Result<()> {
                 let found: Vec<_> = all_found.into_iter().filter(|uri| uri.starts_with("usb://")).collect();
 
                 if found.is_empty() {
-                    bail!("No USB Crazyflies found");
+                    bail!(CliError::Connection("no USB Crazyflies found".to_string()));
                 }
                 if found.len() != 1 {
                     bail!("Expected exactly one Crazyflie on USB, found {}", found.len());
@@ -1105,7 +1164,7 @@ async fn main() -> Result<()> {
                 println!("Found Crazyflie on USB: {}", usb_uri);
 
                 // Connect via USB and read EEPROM config
-                let cf = connect_cf!(connected_cf, &link_context, usb_uri, toc_cache, args.debug);
+                let cf = connect_cf(&mut connected_cf, &link_context, usb_uri, toc_cache, args.debug).await?;
 
                 let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
                 if memories.len() != 1 {
@@ -1155,7 +1214,7 @@ async fn main() -> Result<()> {
                 }
 
                 if found.is_empty() {
-                    bail!("No Crazyflies found");
+                    bail!(CliError::Connection("no Crazyflies found on configured addresses".to_string()));
                 }
 
                 if select_options.auto {
@@ -1164,6 +1223,7 @@ async fn main() -> Result<()> {
                     }
                     found[0].clone()
                 } else {
+                    require_arg(non_interactive, "--auto")?;
                     Select::new("Select a link:", found.clone())
                         .prompt()
                         .map_err(|_| anyhow::anyhow!("No Crazyflie selected"))?
@@ -1178,7 +1238,18 @@ async fn main() -> Result<()> {
             });
 
         }
-        Commands::Console { no_format } => {
+        Commands::Console { no_format, clear } => {
+            if *clear {
+                let path = console_preserve_path();
+                if path.exists() {
+                    std::fs::remove_file(&path)?;
+                    println!("Cleared {}", path.display());
+                } else {
+                    println!("No preserved console history at {}", path.display());
+                }
+                return Ok(());
+            }
+
             let saved = read_and_clear_console_file()?;
             if !saved.is_empty() {
                 if *no_format {
@@ -1191,29 +1262,29 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let cf = connect_with_spinner(&link_context, uri.as_str(), toc_cache, args.debug).await?;
+            let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-            modules::console::print(&cf, *no_format).await?;
-
-            cf.disconnect().await;
+            modules::console::print(cf, *no_format).await?;
+            // Cleanup at end of run() handles disconnect.
         }
         Commands::Log { command } => {
             match command {
                 LogCommands::List => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-                    modules::log::list(&cf).await?;
+                    modules::log::list(&cf, csv).await?;
 
                 }
                 LogCommands::Print(var) => {
 
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
                       None => {
+                        require_arg(non_interactive, "<names>")?;
                         let available_vars = cf.log.names();
                         let selected_vars = MultiSelect::new("Select variables to log:", available_vars)
                           .prompt()
@@ -1223,7 +1294,7 @@ async fn main() -> Result<()> {
                     };
 
 
-                    modules::log::print(&cf, names.as_str(), var.period as u64).await?;
+                    modules::log::print(&cf, names.as_str(), var.period as u64, csv).await?;
 
                 }
             }
@@ -1231,34 +1302,36 @@ async fn main() -> Result<()> {
         Commands::Param { command } => {
             match command {
                 ParamCommands::List => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
-                    modules::param::list(&cf).await?;
+                    modules::param::list(&cf, csv).await?;
                 }
                 ParamCommands::Get(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
                       None => {
+                        require_arg(non_interactive, "<names>")?;
                         let available_vars = cf.param.names();
                         let selected_vars = MultiSelect::new("Select parameters to show:", available_vars)
                           .prompt()
                           .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
                         selected_vars.join(",")
                       }
-                    };                    
+                    };
 
-                    modules::param::get(&cf, &names).await?;
+                    modules::param::get(&cf, &names, csv).await?;
                 }
                 ParamCommands::Set(params) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let param_list = match &params.params {
                       Some(p) => p.clone(),
                       None => {
+                        require_arg(non_interactive, "<params>")?;
                         let available_vars = cf.param.names();
                         let available_vars: Vec<String> = available_vars
                           .into_iter()
@@ -1283,11 +1356,12 @@ async fn main() -> Result<()> {
                     modules::param::set(&cf, &param_list, params.store).await?;
                 }
                 ParamCommands::Store(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
                       None => {
+                        require_arg(non_interactive, "<names>")?;
                         let available_vars = cf.param.names();
                         let mut persistent_vars = Vec::new();
                         for name in available_vars {
@@ -1305,11 +1379,12 @@ async fn main() -> Result<()> {
                     modules::param::store(&cf, &names).await?;
                 }
                 ParamCommands::Clear(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
                       None => {
+                        require_arg(non_interactive, "<names>")?;
                         let available_vars = cf.param.names();
                         let mut persistent_vars = Vec::new();
                         for name in available_vars {
@@ -1366,6 +1441,7 @@ async fn main() -> Result<()> {
                                     if probes.len() == 1 {
                                         0 as usize
                                     } else {
+                                        require_arg(non_interactive, "--probe-idx")?;
                                         let options: Vec<String> = probes.iter().enumerate().map(|(i, p)| {
                                           format!("[{}] {} ({}:{}-{})", i, p.identifier, p.vendor_id, p.product_id, p.serial_number.as_deref().unwrap_or("N/A"))
                                         }).collect();
@@ -1407,7 +1483,7 @@ async fn main() -> Result<()> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1430,7 +1506,7 @@ async fn main() -> Result<()> {
                         "channel" => {
                           let channel: u8 = match value.parse() {
                             Ok(c) if c <= 125 => c,
-                            _ => bail!("Invalid channel value, must be an integer between 0 and 125"),
+                            _ => bail!(CliError::InvalidValue(format!("channel '{}' must be an integer between 0 and 125", value))),
                           };
                           eeprom_memory.set_radio_channel(channel)?;
                           println!("Set radio channel to {}", channel);
@@ -1440,7 +1516,7 @@ async fn main() -> Result<()> {
                             Ok(a) if a <= 0xFFFFFFFFFF => a.to_be_bytes()[3..]
                                 .try_into()
                                 .expect("Could not convert u64 to [u8; 5]"),
-                            _ => bail!("Invalid address, must be a 5 byte hexadecimal value (e.g. E7E7E7E7E7)"),
+                            _ => bail!(CliError::InvalidValue(format!("address '{}' must be a 5-byte hexadecimal value (e.g. E7E7E7E7E7)", value))),
                           };
                           eeprom_memory.set_radio_address(address);
                           println!("Set radio address to {:02X?}", address);
@@ -1448,7 +1524,7 @@ async fn main() -> Result<()> {
                         "speed" => {
                           let speed: u8 = match value.parse() {
                             Ok(s) if s <= 2 => s,
-                            _ => bail!("Invalid speed value, must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)"),
+                            _ => bail!(CliError::InvalidValue(format!("speed '{}' must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)", value))),
                           };
                           eeprom_memory.set_radio_speed(RadioSpeed::try_from(speed)?);
                           println!("Set radio speed to {}", speed);
@@ -1456,7 +1532,7 @@ async fn main() -> Result<()> {
                         "pitch_trim" => {
                           let pitch_trim: f32 = match value.parse() {
                             Ok(p) if p >= -20.0 && p <= 20.0 => p,
-                            _ => bail!("Invalid pitch trim value, must be a float between -20.0 and 20.0"),
+                            _ => bail!(CliError::InvalidValue(format!("pitch_trim '{}' must be a float between -20.0 and 20.0", value))),
                           };
                           eeprom_memory.set_pitch_trim(pitch_trim);
                           println!("Set pitch trim to {}", pitch_trim);
@@ -1464,7 +1540,7 @@ async fn main() -> Result<()> {
                         "roll_trim" => {
                           let roll_trim: f32 = match value.parse() {
                             Ok(r) if r >= -20.0 && r <= 20.0 => r,
-                            _ => bail!("Invalid roll trim value, must be a float between -20.0 and 20.0"),
+                            _ => bail!(CliError::InvalidValue(format!("roll_trim '{}' must be a float between -20.0 and 20.0", value))),
                           };
                           eeprom_memory.set_roll_trim(roll_trim);
                           println!("Set roll trim to {}", roll_trim);
@@ -1479,7 +1555,7 @@ async fn main() -> Result<()> {
 
                 }
                 ConfigCommands::Display => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1515,22 +1591,37 @@ async fn main() -> Result<()> {
         Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memory = cf.memory.get_memories(None);
 
-                    println!("Memories:");
-                    for mem in memory {
-                      let memory_serial = mem.serial.as_ref()
-                        .map(|s| format!(" (0x{})", s.iter().map(|b| format!("{:02X}", b)).collect::<String>()))
-                        .unwrap_or_default();
-                      println!("[{}] {:?} size={}k (0x{:x}/{}){}", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size, memory_serial);
+                    if csv {
+                        println!("id,type,size_bytes,serial");
+                        for mem in memory {
+                            let serial = mem.serial.as_ref()
+                                .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                .unwrap_or_default();
+                            utils::display::csv_row(&[
+                                &mem.memory_id.to_string(),
+                                &format!("{:?}", mem.memory_type),
+                                &mem.size.to_string(),
+                                &serial,
+                            ]);
+                        }
+                    } else {
+                        println!("Memories:");
+                        for mem in memory {
+                          let memory_serial = mem.serial.as_ref()
+                            .map(|s| format!(" (0x{})", s.iter().map(|b| format!("{:02X}", b)).collect::<String>()))
+                            .unwrap_or_default();
+                          println!("[{}] {:?} size={}k (0x{:x}/{}){}", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size, memory_serial);
+                        }
                     }
 
 
                 }
                 MemoryCommands::Read(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
@@ -1551,7 +1642,7 @@ async fn main() -> Result<()> {
                         };
                         let data = raw_access_memory.read_with_progress(var.offset, var.length, progress_callback).await?;
 
-                        progress_bar.finish_with_message(format!("Read {} bytes from memory ID={} at offset 0x{:x}", var.length, mem_id, var.offset));
+                        utils::display::finish_progress(&progress_bar, format!("Read {} bytes from memory ID={} at offset 0x{:x}", var.length, mem_id, var.offset));
 
                       std::fs::write(output_file, &data)?;
                     } else {
@@ -1574,7 +1665,7 @@ async fn main() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
@@ -1594,17 +1685,18 @@ async fn main() -> Result<()> {
 
                     raw_access_memory.write_with_progress(var.offset, &data, progress_callback).await?;
 
-                    progress_bar.finish_with_message(format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), mem_id, var.offset));
+                    utils::display::finish_progress(&progress_bar, format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), mem_id, var.offset));
 
                 }
                 MemoryCommands::Display(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
                     let device = match &var.mem {
                       Some(reference) => resolve_memory_ref(&memories, reference)?.clone(),
                       None => {
+                        require_arg(non_interactive, "<mem>")?;
                         let options: Vec<String> = memories.iter().map(|mem| {
                           format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
                         }).collect();
@@ -1631,13 +1723,14 @@ async fn main() -> Result<()> {
 
                   }
                 MemoryCommands::Erase(var) => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
                     let device = match &var.mem {
                       Some(reference) => resolve_memory_ref(&memories, reference)?.clone(),
                       None => {
+                        require_arg(non_interactive, "<mem>")?;
                         let options: Vec<String> = memories.iter().map(|mem| {
                           format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
                         }).collect();
@@ -1668,15 +1761,22 @@ async fn main() -> Result<()> {
         Commands::Platform { command } => {
             match command {
                 PlatformCommands::Info => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     let protocol_version = cf.platform.protocol_version().await?;
                     let firmware_version = cf.platform.firmware_version().await?;
                     let device_type_name = cf.platform.device_type_name().await?;
 
-                    println!("Platform\t: {}", device_type_name);
-                    println!("Firmware\t: {}", firmware_version);
-                    println!("CRTP protocol\t: {}", protocol_version);
+                    if csv {
+                        println!("field,value");
+                        utils::display::csv_row(&["platform", &device_type_name]);
+                        utils::display::csv_row(&["firmware", &firmware_version]);
+                        utils::display::csv_row(&["crtp_protocol", &protocol_version.to_string()]);
+                    } else {
+                        println!("Platform\t: {}", device_type_name);
+                        println!("Firmware\t: {}", firmware_version);
+                        println!("CRTP protocol\t: {}", protocol_version);
+                    }
 
                 }
                 PlatformCommands::Reboot => {
@@ -1707,7 +1807,7 @@ async fn main() -> Result<()> {
         Commands::Loco { command } => {
             match command {
                 LocoCommands::Display => {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
                     modules::lps::display(&cf).await?;
                 }
             }
@@ -1721,7 +1821,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache, args.debug);
+            let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
             match command {
                 HlCommands::Arm => {
@@ -1836,11 +1936,12 @@ async fn main() -> Result<()> {
                     Some(Some(r)) => {
                       let labels = utils::firmware::get_release_labels().await?;
                       if !labels.contains(r) {
-                        bail!("Release '{}' not found", r);
+                        bail!(CliError::NotFound(format!("release '{}'", r)));
                       }
                       Some(r.clone())
                     },
                     Some(None) => {
+                      require_arg(non_interactive, "--release <NAME>")?;
                       let labels = utils::firmware::get_release_labels().await?;
                       let selected_release = Select::new("Select a firmware release to flash:", labels)
                         .prompt()
@@ -1862,6 +1963,7 @@ async fn main() -> Result<()> {
                         let (k,v) = match (key, value_opt) {
                           (k, Some(v)) => (k.clone(), v.clone()),
                           (k, None) => {
+                            require_arg(non_interactive, "--bin target=file")?;
                             let selected_target = Select::new(
                               &format!("Select target for [{}]:", k),
                               bootloader::get_hardcoded_list_of_targets()
@@ -1894,6 +1996,7 @@ async fn main() -> Result<()> {
                     match &params.platform {
                       Some(p) => resolve_platform(p)?,
                       None => {
+                        require_arg(non_interactive, "--platform")?;
                         let platforms = vec![
                           "Crazyflie 2.1",
                           "Crazyflie 2.1 Brushless",
@@ -1908,7 +2011,7 @@ async fn main() -> Result<()> {
                       }
                     }
                   } else {
-                    let cf = connect_cf!(connected_cf, &link_context, uri.as_str(), toc_cache.clone(), args.debug);
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache.clone(), args.debug).await?;
                     let platform = cf.platform.device_type_name().await?;
                     save_and_disconnect(connected_cf.as_ref().unwrap(), preserve_console).await;
                     connected_cf.take();
@@ -1921,6 +2024,7 @@ async fn main() -> Result<()> {
                   let selected_target_and_types = match &params.targets {
                     Some(Some(t)) => t.split(',').map(|s| s.trim().to_string()).collect(),
                     Some(None) => {
+                      require_arg(non_interactive, "--targets <list>")?;
                       let available_target_and_types = upgrade.get_target_and_types();
 
                       let selected_target_and_types = MultiSelect::new("Select targets to flash:", available_target_and_types)
@@ -1949,7 +2053,23 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
-    }.await;
+    };
+
+    let result: Result<()> = if let Some(ms) = timeout_ms {
+        let deadline = std::time::Duration::from_millis(ms);
+        match tokio::time::timeout(deadline, body).await {
+            Ok(r) => r,
+            Err(_) => {
+                if is_streaming_command(&args.command) {
+                    Ok(())
+                } else {
+                    Err(CliError::Timeout(format!("command did not complete within {} ms", ms)).into())
+                }
+            }
+        }
+    } else {
+        body.await
+    };
 
     // Save console and disconnect any remaining connection
     if let Some(ref cf) = connected_cf {

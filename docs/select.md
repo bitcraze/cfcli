@@ -46,3 +46,28 @@ a `radio://` URI.
 
 If zero or more than one USB Crazyflie is found, the command will exit with an
 error.
+
+## Scan only
+
+The `scan` command lists Crazyflies found on the configured scan addresses
+without saving any selection:
+
+```bash
+cfcli scan
+```
+
+The default output is one URI per line, each prefixed with `>`. For
+machine-readable output, add the global `--csv` flag:
+
+```bash
+cfcli --csv scan
+```
+
+```text
+uri
+usb://51004F000551343036333233
+radio://0/80/2M/E7E7E7E7E7
+```
+
+The first line is a header (`uri`); each subsequent line is one discovered URI.
+An empty result (just the header line) means no Crazyflies were found.

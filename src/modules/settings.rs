@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::{Config, decode_address};
+use crate::{Config, console_preserve_path, decode_address};
 
 pub fn show(config: &Config) {
     println!("Timeout: {}ms{}", config.effective_timeout(),
@@ -8,6 +8,7 @@ pub fn show(config: &Config) {
     for addr in &config.addresses {
         println!("  {}", addr);
     }
+    println!("Preserved console history file: {}", console_preserve_path().display());
 }
 
 pub fn timeout_show(config: &Config) {

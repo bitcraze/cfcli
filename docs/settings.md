@@ -22,6 +22,8 @@ Display all current settings at once:
 cfcli settings show
 ```
 
+This prints the connection timeout, the configured scan addresses, and the path to the preserved console history file (used by the global `-p`/`--preserve-console` flag — see [Console](console.md)).
+
 ## Connection timeout
 
 The connection timeout controls how long cfcli waits when connecting to a Crazyflie.

@@ -29,6 +29,21 @@ baro.asl                       | F32
 Where the `Name` column is the variable name (group.name) and the `Type` column
 describes the data type of the variable.
 
+For machine-readable output, add the global `--csv` flag:
+
+```bash
+cfcli --csv log list
+```
+
+The first line is a header row, then one variable per line:
+
+```text
+name,type
+DTR_P2P.rx_state,U8
+DTR_P2P.tx_state,U8
+acc.x,F32
+```
+
 ## Log variables
 
 There's two ways to log variables, either specify exactly which variables to log on the
@@ -50,6 +65,37 @@ LogData { timestamp: 377433600, data: {"acc.x": F32(0.02040638), "acc.y": F32(-0
 LogData { timestamp: 377436160, data: {"acc.x": F32(0.018765358), "acc.y": F32(-0.01344875)} }
 ```
 
-We need to be able to set period without variables...
+### CSV output
+
+For piping into another tool or capturing to a file, use the global `--csv`
+flag. The first line is a header row (`timestamp_ms` plus one column per
+requested variable), and each sample is one row with plain numeric values:
+
+```bash
+cfcli --csv log print acc.x,acc.y -p 10
+```
+
+```text
+timestamp_ms,acc.x,acc.y
+377433600,0.02040638,-0.011233097
+377436160,0.018765358,-0.01344875
+```
+
+Rows are flushed per sample, so consumers see data in real time rather than in
+stdio-buffered chunks.
+
+### Stop streaming after a fixed duration
+
+`log print` is a streaming command — by default it runs until the link is
+broken. Combine it with the global `--timeout` flag to stop cleanly after a
+fixed wall-clock duration:
+
+```bash
+cfcli --timeout 3000 log print acc.x,acc.y -p 10
+```
+
+When `--timeout` fires on a streaming command, the process exits **0** (the
+timer is the intended way to stop it). This is the recommended pattern when
+running `cfcli log print` from a script or CI step.
 
 ## Set up base station (i.e set channel and download calib data?)

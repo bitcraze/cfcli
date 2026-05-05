@@ -5,7 +5,8 @@ use std::io::Write;
 use anyhow::{bail, Result};
 use crazyflie_lib::NoTocCache;
 use futures::StreamExt;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use std::io::IsTerminal;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, timeout, Duration};
@@ -152,6 +153,9 @@ async fn run_stability_tests(
 ) -> Result<()> {
   let num_tests = tests.len();
   let multi = indicatif::MultiProgress::new();
+  if !std::io::stderr().is_terminal() {
+    multi.set_draw_target(ProgressDrawTarget::hidden());
+  }
   let bars: Vec<ProgressBar> = tests
     .iter()
     .map(|test| {
@@ -234,6 +238,9 @@ pub async fn reboot(
             .unwrap()
             .progress_chars("#>-"),
     );
+    if !std::io::stderr().is_terminal() {
+        bar.set_draw_target(ProgressDrawTarget::hidden());
+    }
     bar.enable_steady_tick(Duration::from_millis(100));
 
     // Start by rebooting
