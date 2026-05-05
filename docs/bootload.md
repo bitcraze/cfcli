@@ -61,11 +61,17 @@ Options:
           Comma-separated list of targets to flash, interactive selection if
           left blank. By default all targets found in the release/zip/bin will
           be flashed.
-          
+
           Example: stm32-fw,nrf51-fw
 
       --cold
           Use coldboot (i.e rescue mode) to flash the device
+
+      --platform <PLATFORM>
+          Platform to use when cold-booting (skips connecting to running firmware).
+          If not specified in cold-boot mode, you will be prompted to select one.
+
+          Valid values: cf21, cf21bl, bolt11, flapper, tag
 ```
 
 ### Flash examples
@@ -152,6 +158,17 @@ This can be combined with other targets as usual:
 ```text
 cfcli bootload flash --bin stm32-fw@0x08004000=custom-stm.bin,nrf51-fw=cf2_nrf.bin
 ```
+
+#### Targets
+
+- `stm32-fw` — STM32 main firmware, flashed via the Crazyflie bootloader.
+- `nrf51-fw` — nRF51 radio/power firmware, flashed via the Crazyflie bootloader.
+- `bcAI:esp-fw` — AI deck ESP32 firmware, flashed via the deck memory.
+- `bcLighthouse4-fw` — Lighthouse deck firmware, flashed via the deck memory.
+- `bcColorLedTop:col-fw` — Color LED deck (top) firmware, flashed via the deck memory.
+- `bcColorLedBot:col-fw` — Color LED deck (bottom) firmware, flashed via the deck memory.
+- `deckctrl-fw` — DeckCtrl firmware, flashed via the `DeckCtrlDFU` memory. Requires exactly one DeckCtrl deck attached.
+- `deckctrl-cfg` — DeckCtrl configuration blob (as produced by `cfcli util deck-ctrl bingen`), flashed alongside the firmware.
 
 #### Recovery mode boot
 
