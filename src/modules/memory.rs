@@ -36,21 +36,32 @@ fn print_ow_info(ow: &OwMemory) {
     }
 }
 
-async fn print_deck_ctrl_dfu_info(raw: &RawMemory) -> Result<()> {
+pub const DECK_CTRL_DFU_STATUS_IN_DFU_MODE: u8 = 1 << 0;
+pub const DECK_CTRL_DFU_STATUS_CAN_ENABLE_DFU: u8 = 1 << 1;
+
+pub struct DeckCtrlDfuHeader {
+    pub version: u8,
+    pub deck_ctrl_count: u8,
+    pub status: u8,
+}
+
+pub async fn read_deck_ctrl_dfu_header(raw: &RawMemory) -> Result<DeckCtrlDfuHeader> {
     let header = raw.read(0, 4).await?;
+    Ok(DeckCtrlDfuHeader {
+        version: header[0],
+        deck_ctrl_count: header[1],
+        status: header[2],
+    })
+}
 
-    let version = header[0];
-    let deck_ctrl_count = header[1];
-    let status = header[2];
-
-    const STATUS_IN_DFU_MODE: u8 = 1 << 0;
-    const STATUS_CAN_ENABLE_DFU: u8 = 1 << 1;
+async fn print_deck_ctrl_dfu_info(raw: &RawMemory) -> Result<()> {
+    let header = read_deck_ctrl_dfu_header(raw).await?;
 
     println!("DeckCtrl DFU Memory");
-    println!("  Version        : {}", version);
-    println!("  DeckCtrl count : {}", deck_ctrl_count);
-    println!("  In DFU mode    : {}", (status & STATUS_IN_DFU_MODE) != 0);
-    println!("  Can enable DFU : {}", (status & STATUS_CAN_ENABLE_DFU) != 0);
+    println!("  Version        : {}", header.version);
+    println!("  DeckCtrl count : {}", header.deck_ctrl_count);
+    println!("  In DFU mode    : {}", (header.status & DECK_CTRL_DFU_STATUS_IN_DFU_MODE) != 0);
+    println!("  Can enable DFU : {}", (header.status & DECK_CTRL_DFU_STATUS_CAN_ENABLE_DFU) != 0);
 
     Ok(())
 }

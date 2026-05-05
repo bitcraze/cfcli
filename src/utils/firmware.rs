@@ -219,10 +219,18 @@ impl FirmwareUpgrade {
             .collect()
     }
 
+    pub fn get_firmware_for_deckctrl(&self) -> Vec<Firmware> {
+        self.bins
+            .values()
+            .filter(|fw| fw.target == "deckctrl")
+            .cloned()
+            .collect()
+    }
+
     pub fn get_firmware_for_decks(&self) -> Vec<Firmware> {
         self.bins
             .values()
-            .filter(|fw| fw.target != "stm32" && fw.target != "nrf51")
+            .filter(|fw| fw.target != "stm32" && fw.target != "nrf51" && fw.target != "deckctrl")
             .cloned()
             .collect()
     }

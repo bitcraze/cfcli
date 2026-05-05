@@ -1,13 +1,26 @@
 use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::Crazyflie;
-use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryType};
+use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryType, RawMemory};
 use tokio::time::{sleep, timeout, Duration};
 use crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
 
 use crate::ConfigTocCache;
+use crate::modules::memory::{
+    read_deck_ctrl_dfu_header,
+    DECK_CTRL_DFU_STATUS_CAN_ENABLE_DFU,
+    DECK_CTRL_DFU_STATUS_IN_DFU_MODE,
+};
 use crate::utils::firmware::{Firmware, FirmwareUpgrade, FlashStartOverride};
 use crate::utils::display::*;
+
+const DECK_CTRL_DFU_FLASH_OFFSET: usize = 0x10000;
+const DECK_CTRL_DFU_CFG_DEFAULT_OFFSET: usize = 0x17800;
+const DECK_CTRL_DFU_PAGE_SIZE: usize = 1024;
+const DECK_CTRL_DFU_CMD_OFFSET: usize = 0x03;
+const DECK_CTRL_DFU_CMD_ENTER_DFU: u8 = 0x01;
+const DECK_CTRL_DFU_CMD_ENTER_FIRMWARE: u8 = 0x02;
+const DECK_CTRL_DFU_RESET_DELAY_MS: u64 = 3000;
 
 use cfloader::Bllink;
 
@@ -40,6 +53,8 @@ pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
       "stm32-fw",
       "bcColorLedTop:col-fw",
       "bcColorLedBot:col-fw",
+      "deckctrl-fw",
+      "deckctrl-cfg",
     ]
 }
 
@@ -303,9 +318,110 @@ async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool> {
     Ok(false)
 }
 
+async fn open_deck_ctrl_dfu_raw(cf: &Crazyflie) -> Result<RawMemory> {
+    let memories = cf.memory.get_memories(Some(MemoryType::DeckCtrlDFU));
+    if memories.is_empty() {
+        bail!("DeckCtrlDFU memory not present, cannot flash DeckCtrl");
+    }
+    if memories.len() > 1 {
+        bail!("Multiple DeckCtrlDFU memories found ({}), cannot flash DeckCtrl", memories.len());
+    }
+    match cf.memory.open_memory::<RawMemory>(memories[0].clone()).await {
+        Some(Ok(m)) => Ok(m),
+        Some(Err(e)) => bail!("Could not access DeckCtrlDFU memory: {}", e),
+        None => bail!("DeckCtrlDFU memory not found"),
+    }
+}
+
+async fn flash_deck_ctrl(
+    link_context: &LinkContext,
+    uri: &str,
+    toc_cache: ConfigTocCache,
+    firmwares: &[Firmware],
+) -> Result<()> {
+    if firmwares.is_empty() {
+        return Ok(());
+    }
+
+    let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache.clone()).await?;
+    let raw = open_deck_ctrl_dfu_raw(&cf).await?;
+    let header = read_deck_ctrl_dfu_header(&raw).await?;
+
+    if header.version != 1 {
+        bail!("Unsupported DeckCtrlDFU version: {}", header.version);
+    }
+
+    let already_in_dfu = (header.status & DECK_CTRL_DFU_STATUS_IN_DFU_MODE) != 0;
+
+    if !already_in_dfu {
+        if header.deck_ctrl_count != 1 {
+            bail!(
+                "Cannot enter DFU: expected exactly one DeckCtrl deck attached, found {}",
+                header.deck_ctrl_count
+            );
+        }
+        if (header.status & DECK_CTRL_DFU_STATUS_CAN_ENABLE_DFU) == 0 {
+            bail!("Cannot enter DFU: STATUS_CAN_ENABLE_DFU is not set");
+        }
+
+        raw.write(DECK_CTRL_DFU_CMD_OFFSET, &[DECK_CTRL_DFU_CMD_ENTER_DFU]).await?;
+        cf.disconnect().await;
+        sleep(Duration::from_millis(DECK_CTRL_DFU_RESET_DELAY_MS)).await;
+    } else {
+        cf.disconnect().await;
+    }
+
+    // Reconnect — DFU entry power-cycles the Crazyflie and memory IDs may be
+    // re-enumerated, so we re-look up the memory after reconnecting.
+    let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache.clone()).await?;
+    let raw = open_deck_ctrl_dfu_raw(&cf).await?;
+    let header = read_deck_ctrl_dfu_header(&raw).await?;
+    if (header.status & DECK_CTRL_DFU_STATUS_IN_DFU_MODE) == 0 {
+        bail!("DeckCtrl did not enter DFU mode");
+    }
+
+    // Flash firmware first, then config
+    let mut sorted: Vec<&Firmware> = firmwares.iter().collect();
+    sorted.sort_by_key(|f| match f.file_type.as_str() {
+        "fw" => 0,
+        "cfg" => 1,
+        _ => 2,
+    });
+
+    for fw in sorted {
+        let address: usize = match &fw.start_override {
+            Some(FlashStartOverride::Address(addr)) => *addr as usize,
+            Some(FlashStartOverride::Page(page)) => {
+                DECK_CTRL_DFU_FLASH_OFFSET + (*page as usize) * DECK_CTRL_DFU_PAGE_SIZE
+            }
+            None => match fw.file_type.as_str() {
+                "fw" => DECK_CTRL_DFU_FLASH_OFFSET,
+                "cfg" => DECK_CTRL_DFU_CFG_DEFAULT_OFFSET,
+                other => bail!("Unknown deckctrl file type '{}', cannot pick default address", other),
+            },
+        };
+
+        let label = format!("deckctrl-{}", fw.file_type);
+        let progress_bar = get_progressbar(fw.data.len(), Some(&label));
+        let pb = progress_bar.clone();
+        let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
+            pb.set_position(bytes_written as u64);
+        };
+        raw.write_with_progress(address, &fw.data, progress_callback).await?;
+        progress_bar.finish_with_message(format!("DeckCtrl {} flashed successfully!", fw.file_type));
+    }
+
+    raw.write(DECK_CTRL_DFU_CMD_OFFSET, &[DECK_CTRL_DFU_CMD_ENTER_FIRMWARE]).await?;
+    cf.disconnect().await;
+    sleep(Duration::from_millis(DECK_CTRL_DFU_RESET_DELAY_MS)).await;
+
+    Ok(())
+}
+
 pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, cold: bool) -> Result<()> {
 
   let firmware_for_bootloader = firmware_upgrade.get_firmware_for_bootloader();
+  let firmware_for_deckctrl = firmware_upgrade.get_firmware_for_deckctrl();
   let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
 
   if !firmware_for_bootloader.is_empty() {
@@ -345,12 +461,16 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
     }
     cfloader.reset_to_firmware().await?;
 
-    if !firmware_for_decks.is_empty() {
+    if !firmware_for_decks.is_empty() || !firmware_for_deckctrl.is_empty() {
         println!("Wait for Crazyflie to restart...");
         // Wait for Crazyflie to start up when going from bootloader->firmware
         // The long wait is due to AI-deck startup delay
         sleep(Duration::from_millis(7000)).await;
     }
+  }
+
+  if !firmware_for_deckctrl.is_empty() {
+    flash_deck_ctrl(link_context, uri, toc_cache.clone(), &firmware_for_deckctrl).await?;
   }
 
   if !firmware_for_decks.is_empty() {
