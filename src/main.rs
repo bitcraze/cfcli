@@ -30,6 +30,7 @@ pub mod modules {
     pub mod lps;
     pub mod settings;
     pub mod crazyradio;
+    pub mod debug;
 }
 
 pub mod utils {
@@ -366,6 +367,25 @@ enum Commands {
         #[clap(subcommand)]
         command: CrCommands,
     },
+
+    /// Debugging utilities (assert info dumps, etc.)
+    Debug {
+        #[clap(subcommand)]
+        command: DebugCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DebugCommands {
+    /// Trigger a firmware assert-info dump on the console
+    Assert(AssertArgs),
+}
+
+#[derive(Debug, Args)]
+struct AssertArgs {
+    /// How long to wait for the assert line before giving up
+    #[clap(long, default_value_t = 1500)]
+    wait_timeout_ms: u64,
 }
 
 #[derive(Debug, Args)]
@@ -1913,6 +1933,17 @@ async fn run() -> Result<()> {
                         }
                     };
                     modules::crazyradio::broadcast(params.radio, params.channel, params.datarate, &address, &data).await?;
+                }
+            }
+        }
+        Commands::Debug { command } => {
+            match command {
+                DebugCommands::Assert(params) => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    modules::debug::assert_dump(
+                        cf,
+                        std::time::Duration::from_millis(params.wait_timeout_ms),
+                    ).await?;
                 }
             }
         }
