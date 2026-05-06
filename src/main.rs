@@ -1113,7 +1113,7 @@ async fn run() -> Result<()> {
 
     let uri = {
         let base = args.uri.clone().unwrap_or(config.uri.clone());
-        if config.timeout_ms.is_some() {
+        if config.timeout_ms.is_some() && !base.starts_with("usb://") {
             let timeout = config.effective_timeout();
             if base.contains('?') {
                 format!("{}&timeout={}", base, timeout)
