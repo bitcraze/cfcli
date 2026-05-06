@@ -3,7 +3,7 @@ use std::future::Future;
 use std::io::Write;
 
 use anyhow::{bail, Result};
-use crazyflie_lib::NoTocCache;
+use crazyflie_lib::{Crazyflie, NoTocCache};
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::IsTerminal;
@@ -13,6 +13,7 @@ use tokio::time::{sleep, timeout, Duration};
 
 use crate::ConfigTocCache;
 use crate::modules::bootloader;
+use crate::utils::display;
 
 // Keep the trait without async_trait (cleaner!)
 pub trait StabilityTest {
@@ -355,6 +356,152 @@ pub async fn reboot(
     };
     bar.finish_with_message(summary);
     println!("Results saved to {}", output_file);
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkPerfTest {
+    All,
+    Ping,
+    Uplink,
+    Downlink,
+    Echo,
+}
+
+/// CRTP max data payload — used to derive packets/sec from bytes/sec for the
+/// uplink/downlink tests (sink and source both use full-size payloads).
+const CRTP_MAX_PAYLOAD: f64 = 30.0;
+
+fn fmt_bw(bytes_per_sec: f64) -> String {
+    let kbit = bytes_per_sec * 8.0 / 1000.0;
+    let pkt = bytes_per_sec / CRTP_MAX_PAYLOAD;
+    format!("{:>7.1} kbit/s  {:>6.0} B/s  {:>6.1} pkt/s", kbit, bytes_per_sec, pkt)
+}
+
+/// Emit one bandwidth result as either an aligned human row or three CSV rows
+/// (`<prefix>_kbit_per_sec`, `<prefix>_bytes_per_sec`, `<prefix>_packets_per_sec`).
+fn emit_bandwidth(label: &str, csv_prefix: &str, n_packets: u64, bps: f64, csv: bool) {
+    let kbit = bps * 8.0 / 1000.0;
+    let pkt = bps / CRTP_MAX_PAYLOAD;
+    if csv {
+        display::csv_row(&[&format!("{}_kbit_per_sec", csv_prefix), &format!("{:.3}", kbit), "kbit/s"]);
+        display::csv_row(&[&format!("{}_bytes_per_sec", csv_prefix), &format!("{:.3}", bps), "B/s"]);
+        display::csv_row(&[&format!("{}_packets_per_sec", csv_prefix), &format!("{:.3}", pkt), "pkt/s"]);
+    } else {
+        let _ = n_packets;
+        println!("  {} {}", label, fmt_bw(bps));
+    }
+}
+
+pub async fn link_perf(
+    cf: &Crazyflie,
+    test: LinkPerfTest,
+    n_packets: u64,
+    n_pings: u32,
+    csv: bool,
+) -> Result<()> {
+    let run_ping = matches!(test, LinkPerfTest::All | LinkPerfTest::Ping);
+    let run_up = matches!(test, LinkPerfTest::All | LinkPerfTest::Uplink);
+    let run_down = matches!(test, LinkPerfTest::All | LinkPerfTest::Downlink);
+    let run_echo = matches!(test, LinkPerfTest::All | LinkPerfTest::Echo);
+
+    if csv {
+        display::csv_row(&["metric", "value", "unit"]);
+    } else {
+        println!("Link performance benchmark (CRTP link service, port 15)");
+        println!();
+    }
+
+    if run_ping {
+        if n_pings == 0 {
+            bail!("ping count must be > 0");
+        }
+        let mut samples = Vec::with_capacity(n_pings as usize);
+        for _ in 0..n_pings {
+            samples.push(cf.link_service.ping().await?);
+        }
+        let min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let avg = samples.iter().sum::<f64>() / samples.len() as f64;
+        if csv {
+            display::csv_row(&["ping_samples", &n_pings.to_string(), "count"]);
+            display::csv_row(&["ping_min_ms", &format!("{:.3}", min), "ms"]);
+            display::csv_row(&["ping_avg_ms", &format!("{:.3}", avg), "ms"]);
+            display::csv_row(&["ping_max_ms", &format!("{:.3}", max), "ms"]);
+        } else {
+            println!(
+                "  Latency   (ping, n={})    min {:.2}  avg {:.2}  max {:.2}  ms",
+                n_pings, min, avg, max
+            );
+        }
+    }
+
+    if run_up {
+        let bps = cf.link_service.test_uplink_bandwidth(n_packets).await?;
+        emit_bandwidth(&format!("Uplink    (sink, n={})  ", n_packets), "uplink", n_packets, bps, csv);
+    }
+
+    if run_down {
+        let bps = cf.link_service.test_downlink_bandwidth(n_packets).await?;
+        emit_bandwidth(&format!("Downlink  (source, n={})", n_packets), "downlink", n_packets, bps, csv);
+    }
+
+    if run_echo {
+        let res = cf.link_service.test_echo_bandwidth(n_packets).await?;
+        emit_bandwidth(&format!("Echo      (echo, n={})  ", n_packets), "echo", n_packets, res.uplink_bytes_per_sec, csv);
+    }
+
+    let stats = cf.link_service.get_statistics().await;
+    if stats.link_quality.is_some() {
+        if csv {
+            if let Some(lq) = stats.link_quality {
+                display::csv_row(&["link_quality", &format!("{:.4}", lq), "ratio"]);
+            }
+            if let Some(rssi) = stats.rssi {
+                display::csv_row(&["rssi_dbm", &format!("{:.2}", rssi), "dBm"]);
+            }
+            if let Some(r) = stats.uplink_rate {
+                display::csv_row(&["radio_uplink_rate", &format!("{:.3}", r), "pkt/s"]);
+            }
+            if let Some(r) = stats.downlink_rate {
+                display::csv_row(&["radio_downlink_rate", &format!("{:.3}", r), "pkt/s"]);
+            }
+            if let Some(r) = stats.radio_send_rate {
+                display::csv_row(&["radio_send_rate", &format!("{:.3}", r), "pkt/s"]);
+            }
+            if let Some(r) = stats.avg_retries {
+                display::csv_row(&["radio_avg_retries", &format!("{:.4}", r), "retries"]);
+            }
+            if let Some(r) = stats.power_detector_rate {
+                display::csv_row(&["radio_power_detector_rate", &format!("{:.4}", r), "ratio"]);
+            }
+        } else {
+            println!();
+            println!("Radio link statistics:");
+            if let Some(lq) = stats.link_quality {
+                println!("  link quality    {:>6.2} %", lq * 100.0);
+            }
+            if let Some(rssi) = stats.rssi {
+                println!("  rssi            {:>6.1} dBm", rssi);
+            }
+            if let Some(r) = stats.uplink_rate {
+                println!("  uplink rate     {:>6.1} pkt/s", r);
+            }
+            if let Some(r) = stats.downlink_rate {
+                println!("  downlink rate   {:>6.1} pkt/s", r);
+            }
+            if let Some(r) = stats.radio_send_rate {
+                println!("  radio send      {:>6.1} pkt/s", r);
+            }
+            if let Some(r) = stats.avg_retries {
+                println!("  avg retries     {:>6.2}", r);
+            }
+            if let Some(r) = stats.power_detector_rate {
+                println!("  power detector  {:>6.2} %", r * 100.0);
+            }
+        }
+    }
 
     Ok(())
 }

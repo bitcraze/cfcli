@@ -566,6 +566,9 @@ enum TestCommands {
     Stability (StabilityTestParameters),
     /// Reboot test: repeatedly reboot and check selftest and console
     Reboot (RebootTestParameters),
+    /// Link performance benchmark using the CRTP link service
+    /// (echo / source / sink channels on port 15)
+    LinkPerf (LinkPerfTestParameters),
 }
 
 #[derive(Debug, Args)]
@@ -580,6 +583,35 @@ struct RebootTestParameters {
     /// Number of reboot iterations to run
     #[clap(value_parser, default_value_t = 10)]
     iterations: u32,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum LinkPerfTest {
+    /// Run all tests (default)
+    All,
+    /// Ping only (round-trip latency)
+    Ping,
+    /// Uplink only (sink channel)
+    Uplink,
+    /// Downlink only (source channel)
+    Downlink,
+    /// Round-trip only (echo channel with full payload)
+    Echo,
+}
+
+#[derive(Debug, Args)]
+struct LinkPerfTestParameters {
+    /// Which test(s) to run
+    #[clap(short, long, value_enum, default_value_t = LinkPerfTest::All)]
+    test: LinkPerfTest,
+
+    /// Number of packets per bandwidth test
+    #[clap(long, value_parser, default_value_t = 1000)]
+    packets: u64,
+
+    /// Number of ping samples
+    #[clap(long, value_parser, default_value_t = 10)]
+    pings: u32,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1821,6 +1853,17 @@ async fn run() -> Result<()> {
                 }
                 TestCommands::Reboot(params) => {
                     modules::test::reboot(&link_context, uri.as_str(), toc_cache, params.iterations).await?;
+                }
+                TestCommands::LinkPerf(params) => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let test = match params.test {
+                        LinkPerfTest::All => modules::test::LinkPerfTest::All,
+                        LinkPerfTest::Ping => modules::test::LinkPerfTest::Ping,
+                        LinkPerfTest::Uplink => modules::test::LinkPerfTest::Uplink,
+                        LinkPerfTest::Downlink => modules::test::LinkPerfTest::Downlink,
+                        LinkPerfTest::Echo => modules::test::LinkPerfTest::Echo,
+                    };
+                    modules::test::link_perf(cf, test, params.packets, params.pings, csv).await?;
                 }
             }
         },

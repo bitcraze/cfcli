@@ -81,6 +81,7 @@ Commands:
   loco      Loco Positioning System
   hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
   cr        Crazyradio operations (sniffer, etc.)
+  debug     Debugging utilities (assert info dumps, etc.)
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -171,6 +172,8 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Select](/docs/select.md)
 * [Settings](/docs/settings.md)
 * [Crazyradio](/docs/crazyradio.md)
+* [Debug](/docs/debug.md)
+* [Test](/docs/test.md)
 
 ## Scripting / AI agent usage
 
