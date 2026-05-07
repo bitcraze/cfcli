@@ -50,6 +50,7 @@ pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
     vec![
       "nrf51-fw",
       "bcAI:esp-fw",
+      "bcCam:qcc",
       "bcLighthouse4-fw",
       "stm32-fw",
       "bcColorLedTop:col-fw",
@@ -510,6 +511,38 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
 
       let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
       if !memories.is_empty() {
+        // Write the new-fw-size to the deck's command region before the
+        // bulk write so the deck-side driver can erase the right region
+        // up front. The DeckMemorySection abstraction doesn't expose the
+        // command/info addresses, so do this via RawMemory: parse the
+        // info section to locate the protocol section index by name,
+        // then write 4 LE bytes at 0x1000 + idx*0x20.
+        let raw = match cf.memory.open_memory::<RawMemory>(memories[0].clone()).await {
+          Some(Ok(r)) => r,
+          Some(Err(e)) => return Err(anyhow!("Open DeckMemory as raw: {:?}", e)),
+          None => return Err(anyhow!("DeckMemory not found")),
+        };
+        let mut proto_idx: Option<usize> = None;
+        for i in 0..8usize {
+          let data = raw.read(1 + i * 0x20, 0x20).await?;
+          if data.len() < 0x20 { break; }
+          if (data[0] & 0x01) == 0 { continue; }
+          let name: String = data[14..32].iter()
+              .take_while(|&&b| b != 0)
+              .map(|&b| b as char)
+              .collect();
+          if name == firmware.target {
+            proto_idx = Some(i);
+            break;
+          }
+        }
+        if let Some(idx) = proto_idx {
+          let cmd_addr = 0x1000 + idx * 0x20;
+          let size_bytes = (firmware.data.len() as u32).to_le_bytes();
+          raw.write(cmd_addr, &size_bytes).await?;
+        }
+        cf.memory.close_memory(raw).await?;
+
         let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
           Some(Ok(deck)) => deck,
           Some(Err(e)) => {
@@ -519,7 +552,7 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
             return Err(anyhow!("DeckMemory not found"));
           }
         };
-        
+
         let section = deck_memory.sections().iter().find(|s| s.name() == firmware.target);
 
         if let Some(section) = section {
@@ -527,10 +560,19 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
           let bootloader_active = section.bootloader_active().await?;
           if !bootloader_active {
             section.reset_to_bootloader().await?;
-            sleep(Duration::from_millis(10)).await;
 
-            let bootloader_active = section.bootloader_active().await?;
-            if !bootloader_active {
+            // The deck may take a couple of seconds to complete the
+            // ROM-bootloader handshake before flipping the active bit,
+            // so poll up to 5 s instead of a single check.
+            let mut active = false;
+            for _ in 0..50 {
+              sleep(Duration::from_millis(100)).await;
+              if section.bootloader_active().await? {
+                active = true;
+                break;
+              }
+            }
+            if !active {
               bail!("Failed to activate bootloader for deck section");
             }
           }
