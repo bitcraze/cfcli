@@ -429,7 +429,9 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
   if !firmware_for_bootloader.is_empty() {
       // stm32-fw / nrf51-fw flashing requires the radio bootloader handshake;
       // USB doesn't expose that path. Decks (handled below) work over USB.
-      if uri.starts_with("usb://") {
+      // In --cold mode the URI is ignored (we scan for the rescue bootloader),
+      // so a usb:// URI is fine there.
+      if uri.starts_with("usb://") && !cold {
           bail!(CliError::InvalidValue(
               "stm32-fw / nrf51-fw flashing requires a radio URI; USB only supports deck/deck-ctrl targets".to_string()
           ));
