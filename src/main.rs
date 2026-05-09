@@ -31,6 +31,7 @@ pub mod modules {
     pub mod settings;
     pub mod crazyradio;
     pub mod debug;
+    pub mod lighthouse;
 }
 
 pub mod utils {
@@ -373,6 +374,52 @@ enum Commands {
         #[clap(subcommand)]
         command: DebugCommands,
     },
+
+    /// Lighthouse positioning system configuration
+    Lh {
+        #[clap(subcommand)]
+        command: LighthouseCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LighthouseCommands {
+    /// Base station geometry and calibration configuration
+    Config {
+        #[clap(subcommand)]
+        command: LighthouseConfigCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LighthouseConfigCommands {
+    /// Display lighthouse configuration in human-readable form
+    Display(LighthouseDisplayParameters),
+    /// Read lighthouse configuration as YAML (to file or stdout)
+    Read(LighthouseReadParameters),
+    /// Write lighthouse configuration from YAML (from file or stdin)
+    Write(LighthouseWriteParameters),
+}
+
+#[derive(Debug, Args)]
+struct LighthouseDisplayParameters {
+    /// YAML file to display (reads from Crazyflie if omitted)
+    #[clap(long, short = 'i')]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseWriteParameters {
+    /// YAML file to read configuration from (reads stdin if omitted)
+    #[clap(long, short = 'i')]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseReadParameters {
+    /// YAML file to write configuration to (writes to stdout if omitted)
+    #[clap(long, short = 'o')]
+    output: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2000,6 +2047,32 @@ async fn run() -> Result<()> {
                         cf,
                         std::time::Duration::from_millis(params.wait_timeout_ms),
                     ).await?;
+                }
+            }
+        }
+        Commands::Lh { command } => {
+            match command {
+                LighthouseCommands::Config { command } => {
+                    if let LighthouseConfigCommands::Display(params) = &command {
+                        if let Some(file_path) = &params.input {
+                            modules::lighthouse::display_file(file_path)?;
+                            return Ok(());
+                        }
+                    }
+
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+
+                    match command {
+                        LighthouseConfigCommands::Display(_) => {
+                            modules::lighthouse::display(&cf, csv, non_interactive).await?;
+                        }
+                        LighthouseConfigCommands::Write(params) => {
+                            modules::lighthouse::write(&cf, params.input.as_deref(), non_interactive).await?;
+                        }
+                        LighthouseConfigCommands::Read(params) => {
+                            modules::lighthouse::read(&cf, params.output.as_deref(), non_interactive).await?;
+                        }
+                    }
                 }
             }
         }

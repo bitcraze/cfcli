@@ -12,6 +12,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * Turn the platform on/off or put it to sleep/wake it up
 * Run stability tests with the Crazyflie
 * High-level commander (takeoff, land, go-to, trajectories)
+* Lighthouse positioning system configuration (read/write base station geometry and calibration)
 * AI-agent and scripting friendly (CSV output, classified exit codes, non-interactive mode, command timeouts)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
@@ -82,6 +83,7 @@ Commands:
   hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
   cr        Crazyradio operations (sniffer, etc.)
   debug     Debugging utilities (assert info dumps, etc.)
+  lh        Lighthouse positioning system configuration
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -164,6 +166,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Bootloader](/docs/bootload.md)
 * [Console](/docs/console.md)
 * [High-Level Commander](/docs/high-level-commander.md)
+* [Lighthouse Positioning System](/docs/lighthouse.md)
 * [Loco Positioning System](/docs/loco.md)
 * [Logging](/docs/logging.md)
 * [Memory](/docs/memory.md)
