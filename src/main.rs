@@ -569,6 +569,8 @@ enum TestCommands {
     /// Link performance benchmark using the CRTP link service
     /// (echo / source / sink channels on port 15)
     LinkPerf (LinkPerfTestParameters),
+    /// Memory tester throughput: write/read-back the firmware MemoryTester
+    MemPerf (MemPerfTestParameters),
 }
 
 #[derive(Debug, Args)]
@@ -612,6 +614,13 @@ struct LinkPerfTestParameters {
     /// Number of ping samples
     #[clap(long, value_parser, default_value_t = 10)]
     pings: u32,
+}
+
+#[derive(Debug, Args)]
+struct MemPerfTestParameters {
+    /// Length in bytes to write and read back (defaults to the full tester size, 4096)
+    #[clap(long, short = 'n', default_value = "4096", value_parser = maybe_hex::<usize>)]
+    length: usize,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1864,6 +1873,10 @@ async fn run() -> Result<()> {
                         LinkPerfTest::Echo => modules::test::LinkPerfTest::Echo,
                     };
                     modules::test::link_perf(cf, test, params.packets, params.pings, csv).await?;
+                }
+                TestCommands::MemPerf(params) => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    modules::test::mem_perf(cf, params.length, csv).await?;
                 }
             }
         },

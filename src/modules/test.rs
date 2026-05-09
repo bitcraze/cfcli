@@ -3,6 +3,7 @@ use std::future::Future;
 use std::io::Write;
 
 use anyhow::{bail, Result};
+use crazyflie_lib::subsystems::memory::{MemoryType, RawMemory};
 use crazyflie_lib::{Crazyflie, NoTocCache};
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -501,6 +502,118 @@ pub async fn link_perf(
                 println!("  power detector  {:>6.2} %", r * 100.0);
             }
         }
+    }
+
+    Ok(())
+}
+
+/// One-shot read of a single u32 log variable via a temporary 100 ms block.
+async fn read_log_u32(cf: &Crazyflie, name: &str) -> Result<u32> {
+    let mut block = cf.log.create_block().await?;
+    block.add_variable(name).await?;
+    let stream = block
+        .start(crazyflie_lib::subsystems::log::LogPeriod::from_millis(100)?)
+        .await?;
+    let data = match timeout(Duration::from_secs(2), stream.next()).await {
+        Ok(Ok(d)) => d,
+        Ok(Err(e)) => bail!("log read for {} failed: {}", name, e),
+        Err(_) => bail!("log read for {} timed out", name),
+    };
+    let value = *data
+        .data
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("log variable {} not in sample", name))?;
+    Ok(value.try_into()?)
+}
+
+/// Memory performance test against the firmware MemoryTester.
+///
+/// The firmware tester returns/expects byte `(addr & 0xff)` at every address.
+/// We write that pattern, read it back, verify both directions, and report
+/// throughput. The firmware-side write error counter (`memTst.errCntW`) is
+/// also checked to confirm the firmware accepted every byte.
+pub async fn mem_perf(
+    cf: &Crazyflie,
+    length: usize,
+    csv: bool,
+) -> Result<()> {
+    if length == 0 {
+        bail!("length must be > 0");
+    }
+
+    let memories = cf.memory.get_memories(Some(MemoryType::MemoryTester));
+    if memories.len() != 1 {
+        bail!("expected exactly one MemoryTester, found {}", memories.len());
+    }
+    let device = memories[0].clone();
+    let mem_size = device.size as usize;
+    if length > mem_size {
+        bail!("requested length {} exceeds MemoryTester size {}", length, mem_size);
+    }
+
+    // Reset the firmware-side write verification error counter
+    cf.param.set("memTst.resetW", 1u8).await?;
+
+    let raw = match cf.memory.open_memory::<RawMemory>(device).await {
+        Some(Ok(m)) => m,
+        Some(Err(e)) => bail!("Could not open MemoryTester: {}", e),
+        None => bail!("MemoryTester not found"),
+    };
+
+    let pattern: Vec<u8> = (0..length).map(|i| (i & 0xff) as u8).collect();
+
+    if !csv {
+        println!("Memory tester performance ({} bytes)", length);
+        println!();
+    }
+
+    let write_start = std::time::Instant::now();
+    raw.write(0, &pattern).await?;
+    let write_secs = write_start.elapsed().as_secs_f64();
+
+    let read_start = std::time::Instant::now();
+    let read_back = raw.read(0, length).await?;
+    let read_secs = read_start.elapsed().as_secs_f64();
+
+    if read_back != pattern {
+        let mismatch = read_back
+            .iter()
+            .zip(pattern.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or(0);
+        bail!(
+            "read-back mismatch at offset {}: expected 0x{:02x}, got 0x{:02x}",
+            mismatch, pattern[mismatch], read_back[mismatch]
+        );
+    }
+
+    let fw_err_count: u32 = read_log_u32(cf, "memTst.errCntW").await?;
+
+    let write_bps = length as f64 / write_secs;
+    let read_bps = length as f64 / read_secs;
+
+    if csv {
+        display::csv_row(&["metric", "value", "unit"]);
+        display::csv_row(&["mem_perf_bytes", &length.to_string(), "B"]);
+        display::csv_row(&["mem_perf_write_seconds", &format!("{:.3}", write_secs), "s"]);
+        display::csv_row(&["mem_perf_read_seconds", &format!("{:.3}", read_secs), "s"]);
+        emit_bandwidth("", "mem_perf_write", 0, write_bps, true);
+        emit_bandwidth("", "mem_perf_read", 0, read_bps, true);
+        display::csv_row(&["mem_perf_fw_write_errors", &fw_err_count.to_string(), "count"]);
+    } else {
+        println!("  Write {:>6} B in {:>5.2} s   {}", length, write_secs, fmt_bw(write_bps));
+        println!("  Read  {:>6} B in {:>5.2} s   {}", length, read_secs, fmt_bw(read_bps));
+        println!();
+        println!("  Read-back verified ({} bytes match expected pattern)", length);
+        if fw_err_count == 0 {
+            println!("  Firmware write errors: 0");
+        } else {
+            println!("  Firmware write errors: {} (memTst.errCntW)", fw_err_count);
+        }
+    }
+
+    if fw_err_count != 0 {
+        bail!("firmware reported {} write verification errors", fw_err_count);
     }
 
     Ok(())
