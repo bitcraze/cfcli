@@ -1181,6 +1181,10 @@ pub fn decode_address(address: &str) -> Result<[u8; 5]> {
 
 #[tokio::main]
 async fn main() {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install rustls aws-lc-rs CryptoProvider");
+
     let code = match run().await {
         Ok(()) => 0,
         Err(e) => {

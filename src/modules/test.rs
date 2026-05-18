@@ -8,7 +8,7 @@ use crazyflie_lib::{Crazyflie, NoTocCache};
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::IsTerminal;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, timeout, Duration};
 
@@ -193,7 +193,7 @@ async fn run_stability_tests(
             bars[test_idx].inc(1);
         }
         Err(e) => {
-            return Err(e.into());
+            return Err(e);
         }
     }
   }
