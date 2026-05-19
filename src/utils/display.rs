@@ -53,6 +53,7 @@ pub fn finish_progress(bar: &indicatif::ProgressBar, message: impl Into<String>)
 }
 
 pub fn get_progressbar(length: usize, label: Option<&str>) -> indicatif::ProgressBar {
+  use std::fmt::Write;
   let term_width = terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .unwrap_or(80);
@@ -62,6 +63,15 @@ pub fn get_progressbar(length: usize, label: Option<&str>) -> indicatif::Progres
       progress_bar.set_style(indicatif::ProgressStyle::default_bar()
       .template(&format!("{} [{{elapsed_precise}}] [{{bar:{}.cyan/blue}}] {{bytes}}/{{total_bytes}} ({{eta}})", label.unwrap_or(""), bar_width))
       .unwrap()
+      // Once the bar is finished, "eta 0s" is useless — swap it for the
+      // average transfer rate over the whole operation.
+      .with_key("eta", |state: &indicatif::ProgressState, w: &mut dyn Write| {
+          if state.is_finished() {
+              let _ = write!(w, "{}/s", indicatif::BinaryBytes(state.per_sec() as u64));
+          } else {
+              let _ = write!(w, "{:#}", indicatif::HumanDuration(state.eta()));
+          }
+      })
       .progress_chars("#>-"));
       if !std::io::stderr().is_terminal() {
           progress_bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
