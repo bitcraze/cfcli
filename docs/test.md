@@ -66,7 +66,7 @@ When the link is a radio (not USB) the command also prints the radio link
 statistics snapshot taken at the end of the run: link quality, RSSI, uplink /
 downlink / radio-send rate, average retries, and power-detector rate.
 
-### CSV output
+### CSV output (link-perf)
 
 The global `--csv` flag emits a `metric,value,unit` table instead of the
 human-formatted output, so results can be parsed by scripts or pasted into
@@ -90,4 +90,52 @@ uplink_packets_per_sec,93.333,pkt/s
 ...
 link_quality,0.9950,ratio
 rssi_dbm,-55.00,dBm
+```
+
+## Memory performance
+
+Benchmark the firmware `MemoryTester` memory: write a known pattern, read it
+back, verify, and report write/read throughput plus any firmware-side write
+errors. Useful for spotting regressions in the memory subsystem or the link
+that carries memory traffic.
+
+```text
+cfcli test mem-perf
+```
+
+The tester returns/expects byte `(addr & 0xff)` at every address, so the
+verification is exact. The firmware-side write-error counter
+(`memTst.errCntW`) is reset at the start of the run and read at the end to
+confirm the firmware accepted every byte.
+
+Options:
+
+* `-n, --length <BYTES>` — bytes to write and read back (default: `4096`, the
+  full MemoryTester size). Accepts hex (`0x1000`).
+
+The command fails fast if the device does not expose exactly one
+`MemoryTester`, or if the requested length exceeds the tester size.
+
+### CSV output (mem-perf)
+
+The global `--csv` flag emits a `metric,value,unit` table:
+
+```text
+cfcli --csv test mem-perf
+```
+
+Example rows:
+
+```csv
+metric,value,unit
+mem_perf_bytes,4096,B
+mem_perf_write_seconds,1.823,s
+mem_perf_read_seconds,1.215,s
+mem_perf_write_kbit_per_sec,17.974,kbit/s
+mem_perf_write_bytes_per_sec,2247.000,B/s
+mem_perf_write_packets_per_sec,74.900,pkt/s
+mem_perf_read_kbit_per_sec,26.967,kbit/s
+mem_perf_read_bytes_per_sec,3371.000,B/s
+mem_perf_read_packets_per_sec,112.367,pkt/s
+mem_perf_fw_write_errors,0,count
 ```
