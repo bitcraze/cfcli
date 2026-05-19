@@ -356,9 +356,9 @@ async fn flash_deck_ctrl(
     let already_in_dfu = (header.status & DECK_CTRL_DFU_STATUS_IN_DFU_MODE) != 0;
 
     if !already_in_dfu {
-        if header.deck_ctrl_count != 1 {
+        if header.deck_ctrl_count > 1 {
             bail!(
-                "Cannot enter DFU: expected exactly one DeckCtrl deck attached, found {}",
+                "Cannot enter DFU: expected at most one DeckCtrl deck attached, found {}",
                 header.deck_ctrl_count
             );
         }
