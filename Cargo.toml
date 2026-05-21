@@ -39,7 +39,7 @@ name = "cfcli"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["packet_capture"]
 packet_capture = ["crazyflie-link/packet_capture"]
 
 [dependencies]
