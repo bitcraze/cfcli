@@ -178,6 +178,28 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Debug](/docs/debug.md)
 * [Test](/docs/test.md)
 
+## Shell completion
+
+`cfcli` ships tab-completion for **bash**, **zsh** and **PowerShell**. It
+completes commands, flags, file paths, and dynamic values such as parameter and
+log variable names, flash targets and config keys.
+
+bash and zsh completion is installed automatically by the `.deb` and Homebrew
+packages (open a new shell after installing). For PowerShell, generate and load
+the script yourself, e.g. add to your `$PROFILE`:
+
+```powershell
+cfcli completions powershell | Out-String | Invoke-Expression
+```
+
+Parameter and log variable names depend on the connected device's firmware, so
+they are cached locally: on every successful connection `cfcli` writes the
+current Crazyflie's parameter and log variable names to `cf-cli-completion.json`
+(next to the config file). Completion reads from that cache, so it always
+reflects the **most recently connected** Crazyflie and the names are available
+instantly without querying the device. The cache is empty until the first
+successful connection.
+
 ## Scripting / AI agent usage
 
 When `cfcli` is driven from a script or from an AI agent (rather than typed at a
@@ -237,6 +259,12 @@ For example:
 ```text
 cargo run -- select
 ```
+
+### Testing shell completion
+
+Shell completion is generated at build time and installed automatically in
+released packages. To build and test it from source during development, see
+[Shell completion (development)](/docs/shell-completion.md).
 
 ### Cross compilation
 
