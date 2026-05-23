@@ -25,31 +25,32 @@ _cfcli_dynamic() {
     done
     COMPREPLY=("${_kept[@]}")
 
-    local cur prev kind line suffix
+    local cur prev kind line suffix nospace
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
     line=" ${COMP_WORDS[*]} "
 
-    # `suffix='='` for contexts where the completed token is immediately
-    # followed by '=' (param set `name=value`, flash `--bin target=file`): we
-    # append the '=' and suppress the trailing space so the cursor lands ready
-    # for the value.
+    # suffix='=' : append '=' on a single match (param set `name=value`, flash
+    #   `--bin target=file`); implies nospace.
+    # nospace=1  : just suppress the trailing space, no suffix — for
+    #   comma-separated lists (log print) so the next ',' can be typed.
     kind=""
     suffix=""
+    nospace=""
     case "$line" in
-        *" param set "*)                              kind="param-names-writable"; suffix="=" ;;
+        *" param set "*)                              kind="param-names-writable"; suffix="="; nospace=1 ;;
         *" param get "*|*" param store "*|*" param clear "*) kind="param-names" ;;
-        *" config set "*)                             kind="config-keys"; suffix="=" ;;
-        *" log print "*)                              kind="log-names" ;;
+        *" config set "*)                             kind="config-keys"; suffix="="; nospace=1 ;;
+        *" log print "*)                              kind="log-names"; nospace=1 ;;
     esac
 
     # Option values: `--targets x,y` (plain list) / `--bin t=f` (key=value),
     # space- or '='-separated.
     case "$prev" in
-        --bin)     kind="flash-targets"; suffix="=" ;;
+        --bin)     kind="flash-targets"; suffix="="; nospace=1 ;;
         --targets) kind="flash-targets" ;;
         =) case "${COMP_WORDS[COMP_CWORD-2]}" in
-               --bin)     kind="flash-targets"; suffix="=" ;;
+               --bin)     kind="flash-targets"; suffix="="; nospace=1 ;;
                --targets) kind="flash-targets" ;;
            esac ;;
     esac
@@ -61,20 +62,15 @@ _cfcli_dynamic() {
         done < <(cfcli __complete "$kind" "$cur" 2>/dev/null)
 
         if (( ${#cands[@]} > 0 )); then
-            if [[ -n "$suffix" ]]; then
-                # Append the suffix ('=') only once it resolves to a single
-                # match — that's the actual insertion. With multiple matches,
-                # list bare names (COMPREPLY drives both menu and insertion in
-                # bash) and just suppress the trailing space.
-                if (( ${#cands[@]} == 1 )); then
-                    COMPREPLY+=("${cands[0]}${suffix}")
-                else
-                    COMPREPLY+=("${cands[@]}")
-                fi
-                compopt -o nospace
+            # Append the suffix only once it resolves to a single match (that's
+            # the actual insertion); with multiple matches list bare names
+            # (COMPREPLY drives both menu and insertion in bash).
+            if [[ -n "$suffix" ]] && (( ${#cands[@]} == 1 )); then
+                COMPREPLY+=("${cands[0]}${suffix}")
             else
                 COMPREPLY+=("${cands[@]}")
             fi
+            [[ -n "$nospace" ]] && compopt -o nospace
         fi
     fi
 }
