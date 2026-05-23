@@ -345,24 +345,6 @@ enum Commands {
         #[clap(value_enum)]
         shell: clap_complete::Shell,
     },
-
-    /// Internal helper that prints dynamic completion candidates, one per
-    /// line. Called by the installed completion scripts; not meant for
-    /// direct use. Reads only local cache/config, never connects.
-    #[clap(name = "__complete", hide = true)]
-    Complete(CompleteArgs),
-}
-
-#[derive(Debug, Args)]
-struct CompleteArgs {
-    /// Which set of values to complete
-    #[clap(value_enum)]
-    kind: CompletionKind,
-    /// The partial token being completed. For comma-separated lists this may
-    /// contain earlier items and a trailing fragment (e.g. "roll,stab"); the
-    /// helper completes only the fragment after the last comma.
-    #[clap(default_value = "")]
-    partial: String,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

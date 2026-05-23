@@ -369,16 +369,16 @@ fn emit_completion_script(shell: clap_complete::Shell) {
 
 /// Print dynamic completion candidates (one per line) for the `__complete`
 /// helper. Reads only the local cache / hardcoded lists — never connects.
-fn emit_dynamic_completions(args: &CompleteArgs) {
+fn emit_dynamic_completions(kind: CompletionKind, partial: &str) {
     use std::io::Write;
 
     // Split a possibly comma-separated token into the committed prefix
     // (everything up to and including the last comma) and the fragment being
     // completed. Candidates are printed as `prefix + candidate` so the shell
     // replaces the whole word with a valid, fully-qualified token.
-    let (prefix, fragment) = match args.partial.rfind(',') {
-        Some(i) => (&args.partial[..=i], &args.partial[i + 1..]),
-        None => ("", args.partial.as_str()),
+    let (prefix, fragment) = match partial.rfind(',') {
+        Some(i) => (&partial[..=i], &partial[i + 1..]),
+        None => ("", partial),
     };
 
     // In key=value lists (e.g. `--bin target=file.bin`) the text after '=' is
@@ -387,7 +387,7 @@ fn emit_dynamic_completions(args: &CompleteArgs) {
         return;
     }
 
-    let candidates: Vec<String> = match args.kind {
+    let candidates: Vec<String> = match kind {
         CompletionKind::ParamNames => {
             load_completion_cache().param.into_iter().map(|p| p.name).collect()
         }
@@ -420,20 +420,25 @@ fn emit_dynamic_completions(args: &CompleteArgs) {
 }
 
 async fn run() -> Result<()> {
+    // The `__complete` dynamic-completion helper is dispatched before clap so
+    // it never appears as a subcommand in `--help` or the generated completion
+    // scripts. It is called only by the installed completion scripts, with
+    // known arguments, so anything unparseable just emits no candidates.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).is_some_and(|a| a == "__complete") {
+        if let Some(kind) = argv.get(2).and_then(|s| CompletionKind::from_str(s, false).ok()) {
+            emit_dynamic_completions(kind, argv.get(3).map(String::as_str).unwrap_or(""));
+        }
+        return Ok(());
+    }
+
     let args = CliArgs::parse();
 
-    // Completion subcommands are handled up front: they never connect, and
-    // `completions` needs no config at all.
-    match &args.command {
-        Commands::Completions { shell } => {
-            emit_completion_script(*shell);
-            return Ok(());
-        }
-        Commands::Complete(complete_args) => {
-            emit_dynamic_completions(complete_args);
-            return Ok(());
-        }
-        _ => {}
+    // The `completions` subcommand is handled up front: it never connects and
+    // needs no config at all.
+    if let Commands::Completions { shell } = &args.command {
+        emit_completion_script(*shell);
+        return Ok(());
     }
 
     let mut config: Config = confy::load("cf-cli", None).unwrap_or_else(|err| {
@@ -471,7 +476,7 @@ async fn run() -> Result<()> {
     let body = async {
     match &args.command {
         // Handled before connection setup via early return in run().
-        Commands::Completions { .. } | Commands::Complete(_) => unreachable!(),
+        Commands::Completions { .. } => unreachable!(),
         Commands::Scan(scan_options) => {
             let addresses = match &scan_options.address {
                 Some(addr) => vec![addr.clone()],
