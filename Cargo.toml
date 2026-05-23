@@ -46,7 +46,7 @@ path = "src/main.rs"
 
 [features]
 default = ["packet_capture"]
-packet_capture = ["crazyflie-link/packet_capture"]
+packet_capture = []
 
 [dependencies]
 futures-util = "0.3"
@@ -85,6 +85,10 @@ zip = "8.6"
 byteorder = "1.5.0"
 hex = "0.4.3"
 chrono = "0.4.44"
+
+[target.'cfg(unix)'.dependencies]
+crazyflie-link = { version = "0.4.2", default-features = false, features = ["packet_capture"] }
+crazyradio = { version = "0.6.0", features = ["async", "packet_capture"] }
 
 # Used by build.rs to generate shell-completion scripts from the same clap
 # command tree as the binary (src/cli.rs is shared via include!).

@@ -457,7 +457,7 @@ async fn run() -> Result<()> {
 
     let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
 
-    #[cfg(feature = "packet_capture")]
+    #[cfg(all(unix, feature = "packet_capture"))]
     crazyflie_link::capture::init();
 
     let link_context = crazyflie_link::LinkContext::new();
