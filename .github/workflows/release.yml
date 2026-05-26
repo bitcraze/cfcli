@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   create-release:
@@ -70,29 +68,29 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: cfcli-x86_64-unknown-linux-gnu.tar.gz
-          
+
           # Linux ARM64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             name: cfcli-aarch64-unknown-linux-gnu.tar.gz
-          
+
           # macOS x86_64
           - target: x86_64-apple-darwin
             os: macos-latest
             name: cfcli-x86_64-apple-darwin.tar.gz
-          
+
           # macOS ARM64
           - target: aarch64-apple-darwin
             os: macos-latest
             name: cfcli-aarch64-apple-darwin.tar.gz
-          
+
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             name: cfcli-x86_64-pc-windows-msvc.zip
 
     runs-on: ${{ matrix.os }}
-    
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -164,14 +162,14 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             arch: amd64
-          
+
           # Debian/Ubuntu ARM64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             arch: arm64
 
     runs-on: ${{ matrix.os }}
-    
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,28 +204,28 @@ jobs:
 
           case "$1" in
               configure)
-                  # Add GPG key
-                  if ! [ -f /usr/share/keyrings/cfcli-archive-keyring.gpg ]; then
-                      echo "Adding cfcli APT repository GPG key..."
-                      curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key 2>/dev/null | \
-                          gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg 2>/dev/null || true
+                  # Add the shared Bitcraze APT repository GPG key
+                  if ! [ -f /usr/share/keyrings/bitcraze-archive-keyring.gpg ]; then
+                      echo "Adding Bitcraze APT repository GPG key..."
+                      curl -fsSL https://packages.bitcraze.io/apt/bitcraze.gpg.key 2>/dev/null | \
+                          gpg --dearmor -o /usr/share/keyrings/bitcraze-archive-keyring.gpg 2>/dev/null || true
                   fi
-                  
-                  # Add APT source
-                  if ! [ -f /etc/apt/sources.list.d/cfcli.list ]; then
-                      echo "Adding cfcli APT repository..."
-                      echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | \
-                          tee /etc/apt/sources.list.d/cfcli.list > /dev/null
+
+                  # Add the shared Bitcraze APT source
+                  if ! [ -f /etc/apt/sources.list.d/bitcraze.list ]; then
+                      echo "Adding Bitcraze APT repository..."
+                      echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/bitcraze-archive-keyring.gpg] https://packages.bitcraze.io/apt stable main" | \
+                          tee /etc/apt/sources.list.d/bitcraze.list > /dev/null
                   fi
-                  
+
                   # Update package lists
                   if command -v apt-get >/dev/null 2>&1; then
                       echo "Updating package lists..."
-                      apt-get update -o Dir::Etc::sourcelist="sources.list.d/cfcli.list" \
+                      apt-get update -o Dir::Etc::sourcelist="sources.list.d/bitcraze.list" \
                                     -o Dir::Etc::sourceparts="-" \
                                     -o APT::Get::List-Cleanup="0" 2>/dev/null || true
                   fi
-                  
+
                   ;;
           esac
 
@@ -243,15 +241,12 @@ jobs:
 
           case "$1" in
               purge)
-                  # Remove APT source on purge
-                  if [ -f /etc/apt/sources.list.d/cfcli.list ]; then
-                      echo "Removing cfcli APT repository configuration..."
-                      rm -f /etc/apt/sources.list.d/cfcli.list
-                  fi
-                  
-                  # Optionally remove GPG key
-                  # Commented out to be safe - only remove if no other packages use it
-                  # rm -f /usr/share/keyrings/cfcli-archive-keyring.gpg
+                  # The APT source (/etc/apt/sources.list.d/bitcraze.list) and keyring
+                  # (/usr/share/keyrings/bitcraze-archive-keyring.gpg) are shared by all
+                  # Bitcraze packages, so we deliberately leave them in place on purge --
+                  # removing them could break other installed Bitcraze packages. An
+                  # orphaned, signed APT source is harmless.
+                  :
                   ;;
           esac
 
@@ -287,137 +282,21 @@ jobs:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: ${{ steps.find_deb.outputs.deb_path }}
 
-      - name: Upload deb artifact for APT repo
-        uses: actions/upload-artifact@v4
-        with:
-          name: deb-${{ matrix.arch }}
-          path: ${{ steps.find_deb.outputs.deb_path }}
-          retention-days: 1
-
-  publish-apt-repo:
+  publish-apt:
+    # Hand the freshly-released debs to the shared APT repo (bitcraze/packages),
+    # which pulls them from this release, re-signs the pool and redeploys.
     needs: [create-release, build-deb]
     runs-on: ubuntu-latest
     if: success()
-    permissions:
-      contents: write
-      pages: write
-      id-token: write
-    
     steps:
-      - uses: actions/checkout@v4
+      - name: Trigger APT repository publish
+        uses: peter-evans/repository-dispatch@v3
         with:
-          ref: ${{ needs.create-release.outputs.version }}
-
-      - name: Download all deb packages
-        uses: actions/download-artifact@v4
-        with:
-          pattern: deb-*
-          path: deb-packages
-          merge-multiple: true
-
-      - name: Import GPG key
-        run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import --batch
-
-      - name: Setup APT repository structure
-        env:
-          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
-        run: |
-          # Configuration
-          REPO_DIR="apt-repo"
-          DIST="stable"
-          COMPONENT="main"
-          
-          # Create repository structure
-          mkdir -p ${REPO_DIR}/pool/main
-          mkdir -p ${REPO_DIR}/dists/${DIST}/${COMPONENT}/binary-{amd64,arm64}
-          
-          # Copy .deb files to pool
-          cp deb-packages/*.deb ${REPO_DIR}/pool/main/
-          
-          # Generate Packages files for each architecture
-          cd ${REPO_DIR}
-          for arch in amd64 arm64; do
-            dpkg-scanpackages --arch ${arch} pool/ > dists/${DIST}/${COMPONENT}/binary-${arch}/Packages
-            gzip -kf dists/${DIST}/${COMPONENT}/binary-${arch}/Packages
-          done
-          
-          # Generate Release file
-          cd dists/${DIST}
-          cat > Release <<EOF
-          Origin: cfcli
-          Label: cfcli
-          Suite: ${DIST}
-          Codename: ${DIST}
-          Architectures: amd64 arm64
-          Components: ${COMPONENT}
-          Description: Crazyflie CLI tool repository
-          Date: $(date -Ru)
-          EOF
-          
-          # Add file hashes
-          apt-ftparchive release . >> Release
-          
-          # Sign the Release file
-          gpg --default-key ${GPG_KEY_ID} -abs -o Release.gpg Release
-          gpg --default-key ${GPG_KEY_ID} --clearsign -o InRelease Release
-          
-          cd ../../..
-
-      - name: Export GPG public key
-        env:
-          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
-        run: |
-          gpg --armor --export ${GPG_KEY_ID} > apt-repo/cfcli-repo.gpg.key
-
-      - name: Create index.html
-        run: |
-          cat > apt-repo/index.html <<'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-              <title>cfcli APT Repository</title>
-              <style>
-                  body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 0 20px; }
-                  pre { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }
-                  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
-              </style>
-          </head>
-          <body>
-              <h1>cfcli APT Repository</h1>
-              <p>Official Debian/Ubuntu repository for the Crazyflie CLI tool.</p>
-              
-              <h2>Installation</h2>
-              <pre><code># Add repository GPG key
-          curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg
-
-          # Add repository
-          echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | sudo tee /etc/apt/sources.list.d/cfcli.list
-
-          # Install
-          sudo apt update
-          sudo apt install cfcli</code></pre>
-
-              <h2>Update</h2>
-              <pre><code>sudo apt update
-          sudo apt upgrade cfcli</code></pre>
-
-              <h2>Links</h2>
-              <ul>
-                  <li><a href="https://github.com/evoggy/cfcli">GitHub Repository</a></li>
-                  <li><a href="https://github.com/evoggy/cfcli/releases">Releases</a></li>
-              </ul>
-          </body>
-          </html>
-          EOF
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./apt-repo
-          publish_branch: gh-pages
-          force_orphan: true
+          token: ${{ secrets.PACKAGING_TOKEN }}
+          repository: bitcraze/packages
+          event-type: publish-deb
+          client-payload: |
+            {"repo": "${{ github.repository }}", "tag": "${{ needs.create-release.outputs.version }}", "app": "cfcli"}
 
   update-homebrew:
     needs: [create-release, build-release]
@@ -426,62 +305,64 @@ jobs:
       - name: Checkout tap repository
         uses: actions/checkout@v4
         with:
-          repository: evoggy/homebrew-cfcli
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: homebrew-cfcli
+          repository: bitcraze/homebrew-tap
+          token: ${{ secrets.PACKAGING_TOKEN }}
+          path: homebrew-tap
 
       - name: Download release checksums
         run: |
           VERSION=${{ needs.create-release.outputs.version }}
-          cd homebrew-cfcli
-          
+          cd homebrew-tap
+
           # Download all checksums
-          curl -L -o macos-arm64.sha256 "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-aarch64-apple-darwin.tar.gz.sha256"
-          curl -L -o macos-x64.sha256 "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-x86_64-apple-darwin.tar.gz.sha256"
-          curl -L -o linux-arm64.sha256 "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-aarch64-unknown-linux-gnu.tar.gz.sha256"
-          curl -L -o linux-x64.sha256 "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-x86_64-unknown-linux-gnu.tar.gz.sha256"
+          curl -L -o macos-arm64.sha256 "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-aarch64-apple-darwin.tar.gz.sha256"
+          curl -L -o macos-x64.sha256 "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-x86_64-apple-darwin.tar.gz.sha256"
+          curl -L -o linux-arm64.sha256 "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-aarch64-unknown-linux-gnu.tar.gz.sha256"
+          curl -L -o linux-x64.sha256 "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-x86_64-unknown-linux-gnu.tar.gz.sha256"
 
       - name: Update formula
         run: |
           VERSION=${{ needs.create-release.outputs.version }}
-          cd homebrew-cfcli
-          
+          cd homebrew-tap
+
           # Extract SHA256 values (they're in format: "HASH  filename")
           MACOS_ARM64_SHA=$(awk '{print $1}' macos-arm64.sha256)
           MACOS_X64_SHA=$(awk '{print $1}' macos-x64.sha256)
           LINUX_ARM64_SHA=$(awk '{print $1}' linux-arm64.sha256)
           LINUX_X64_SHA=$(awk '{print $1}' linux-x64.sha256)
-          
+
           # Update formula with new version and checksums
           cat > Formula/cfcli.rb <<EOF
           class Cfcli < Formula
             desc "CLI tool for Crazyflie drones"
-            homepage "https://github.com/evoggy/cfcli"
+            homepage "https://github.com/bitcraze/cfcli"
             version "${VERSION}"
             license "MIT OR Apache-2.0"
 
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-aarch64-apple-darwin.tar.gz"
+                url "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-aarch64-apple-darwin.tar.gz"
                 sha256 "${MACOS_ARM64_SHA}"
               else
-                url "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-x86_64-apple-darwin.tar.gz"
+                url "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-x86_64-apple-darwin.tar.gz"
                 sha256 "${MACOS_X64_SHA}"
               end
             end
 
             on_linux do
               if Hardware::CPU.arm?
-                url "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-aarch64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-aarch64-unknown-linux-gnu.tar.gz"
                 sha256 "${LINUX_ARM64_SHA}"
               else
-                url "https://github.com/evoggy/cfcli/releases/download/${VERSION}/cfcli-x86_64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/bitcraze/cfcli/releases/download/${VERSION}/cfcli-x86_64-unknown-linux-gnu.tar.gz"
                 sha256 "${LINUX_X64_SHA}"
               end
             end
 
             def install
               bin.install "cfcli"
+              # Generate and install shell completions by invoking the binary itself.
+              generate_completions_from_executable(bin/"cfcli", "completions")
             end
 
             test do
@@ -492,7 +373,7 @@ jobs:
 
       - name: Commit and push
         run: |
-          cd homebrew-cfcli
+          cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/cfcli.rb
