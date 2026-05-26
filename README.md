@@ -22,7 +22,7 @@ use the the new [Crazyflie python library (v2)](https://github.com/bitcraze/craz
 
 ### Standalone .deb package
 
-Download latest released `.deb` file from [GitHub Releases](https://github.com/evoggy/cfcli/releases) and install using:
+Download latest released `.deb` file from [GitHub Releases](https://github.com/bitcraze/cfcli/releases) and install using:
 
 ```bash
 sudo apt install ./cfcli_x.y.z_amd64.deb
@@ -34,8 +34,8 @@ This will also add the APT so you can install updates when they are released.
 
 ```bash
 # Add repository
-curl -fsSL https://evoggy.github.io/cfcli/cfcli-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/cfcli-archive-keyring.gpg
-echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/cfcli-archive-keyring.gpg] https://evoggy.github.io/cfcli stable main" | sudo tee /etc/apt/sources.list.d/cfcli.list
+curl -fsSL https://packages.bitcraze.io/apt/bitcraze.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/bitcraze-archive-keyring.gpg
+echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/bitcraze-archive-keyring.gpg] https://packages.bitcraze.io/apt stable main" | sudo tee /etc/apt/sources.list.d/bitcraze.list
 
 # Install
 sudo apt update
@@ -47,7 +47,7 @@ sudo apt install cfcli
 To add and install run the following:
 
 ```bash
-brew tap evoggy/cfcli
+brew tap bitcraze/tap
 brew install cfcli
 ```
 
@@ -249,7 +249,7 @@ The same information is available from `cfcli --help` on every install.
 If you would like to run it from source use the following command:
 
 ```text
-git clone https://github.com/evoggy/cfcli.git
+git clone https://github.com/bitcraze/cfcli.git
 cd cfcli
 cargo run -- <args>
 ```
