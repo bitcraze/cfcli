@@ -57,9 +57,9 @@ num_enum = "0.7.4"
 half = "2.6.0"
 env_logger = "0.11.8"
 anyhow = "1.0"
-crazyflie-link = { version = "0.4.2", default-features = false }
-crazyflie-lib = { version = "0.7.1", default-features = false }
-crazyradio = { version = "0.6.0", features = ["async"] }
+crazyflie-link = { version = "0.5.0", default-features = false }
+crazyflie-lib = { version = "0.8.0", default-features = false }
+crazyradio = { version = "0.7.0", features = ["async"] }
 rusb = "0.9"
 cfloader = "0.1.0"
 clap = { version = "4.5.46", features = ["derive"] }
@@ -87,8 +87,8 @@ hex = "0.4.3"
 chrono = "0.4.44"
 
 [target.'cfg(unix)'.dependencies]
-crazyflie-link = { version = "0.4.2", default-features = false, features = ["packet_capture"] }
-crazyradio = { version = "0.6.0", features = ["async", "packet_capture"] }
+crazyflie-link = { version = "0.5.0", default-features = false, features = ["packet_capture"] }
+crazyradio = { version = "0.7.0", features = ["async", "packet_capture"] }
 
 # Used by build.rs to generate shell-completion scripts from the same clap
 # command tree as the binary (src/cli.rs is shared via include!).
