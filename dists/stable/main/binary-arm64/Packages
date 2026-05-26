@@ -1,0 +1,20 @@
+Package: cfcli
+Version: 0.11.0-1
+Architecture: arm64
+Maintainer: Marcus Eliasson <marcus@bitcraze.io>
+Installed-Size: 26596
+Depends: curl, gnupg
+Filename: pool/main/cfcli_0.11.0-1_arm64.deb
+Size: 5733608
+MD5sum: 3f5e980cffbc659e546d8a6651b730c2
+SHA1: 56b4b6b59af1658407b8c99e9f5bb690d14840c6
+SHA256: f95cc8bc24d54aa4d25b6511d3f5c1a197ecfd067d0873c59656b23c119fefb8
+Section: utils
+Priority: optional
+Homepage: https://github.com/evoggy/cfcli
+Description: Crazyflie command-line client
+ A command-line interface tool for managing and interacting with Crazyflie
+ drones.
+ Provides logging, parameter control, memory operations, and bootloader
+ functionality.
+
