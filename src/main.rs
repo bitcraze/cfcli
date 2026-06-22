@@ -45,6 +45,71 @@ use modules::settings;
 
 include!("cli.rs");
 
+fn single_explicit_target_for_bare_bin(
+    bin: &Option<HashMap<String, Option<String>>>,
+    targets: &Option<Option<String>>,
+) -> Option<String> {
+    let bin_map = bin.as_ref()?;
+    if bin_map.len() != 1 {
+        return None;
+    }
+
+    let (_bin_path, selected_target) = bin_map.iter().next()?;
+    if selected_target.is_some() {
+        return None;
+    }
+
+    let target_arg = match targets {
+        Some(Some(target_arg)) => target_arg,
+        _ => return None,
+    };
+
+    let mut target_names = target_arg
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
+    let target = target_names.next()?;
+    if target_names.next().is_some() {
+        return None;
+    }
+
+    Some(target.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_bare_bin_uses_single_explicit_target() {
+        let mut bin = HashMap::new();
+        bin.insert("lighthouse.bin".to_string(), None);
+        let targets = Some(Some("bcLighthouse4-fw".to_string()));
+
+        assert_eq!(
+            single_explicit_target_for_bare_bin(&Some(bin), &targets),
+            Some("bcLighthouse4-fw".to_string())
+        );
+    }
+
+    #[test]
+    fn single_bare_bin_does_not_use_multiple_explicit_targets() {
+        let mut bin = HashMap::new();
+        bin.insert("lighthouse.bin".to_string(), None);
+        let targets = Some(Some("bcLighthouse4-fw,stm32-fw".to_string()));
+
+        assert_eq!(single_explicit_target_for_bare_bin(&Some(bin), &targets), None);
+    }
+
+    #[test]
+    fn keyed_bin_does_not_get_rewritten_from_targets() {
+        let mut bin = HashMap::new();
+        bin.insert("bcLighthouse4-fw".to_string(), Some("lighthouse.bin".to_string()));
+        let targets = Some(Some("bcLighthouse4-fw".to_string()));
+
+        assert_eq!(single_explicit_target_for_bare_bin(&Some(bin), &targets), None);
+    }
+}
 
 impl MemoryTypeArg {
     /// Convert to the `crazyflie_lib` memory type. Defined here (not on the
@@ -1367,19 +1432,25 @@ async fn run() -> Result<()> {
                   // until we reach the deck flashing stage.
                   let bin_with_selections = {
                     let mut result = HashMap::new();
+                    let target_from_single_bare_bin =
+                      single_explicit_target_for_bare_bin(&params.bin, &params.targets);
                     if let Some(bin_map) = &params.bin {
                       for (key, value_opt) in bin_map.iter() {
                         let (k,v) = match (key, value_opt) {
                           (k, Some(v)) => (k.clone(), v.clone()),
                           (k, None) => {
-                            require_arg(non_interactive, "--bin target=file")?;
-                            let selected_target = Select::new(
-                              &format!("Select target for [{}]:", k),
-                              bootloader::get_hardcoded_list_of_targets()
-                            )
-                            .prompt()
-                            .map_err(|_| anyhow::anyhow!("No binary selected"))?;
-                            (selected_target.to_string(), k.to_string())
+                            if let Some(selected_target) = &target_from_single_bare_bin {
+                              (selected_target.clone(), k.to_string())
+                            } else {
+                              require_arg(non_interactive, "--bin target=file")?;
+                              let selected_target = Select::new(
+                                &format!("Select target for [{}]:", k),
+                                bootloader::get_hardcoded_list_of_targets()
+                              )
+                              .prompt()
+                              .map_err(|_| anyhow::anyhow!("No binary selected"))?;
+                              (selected_target.to_string(), k.to_string())
+                            }
                           }
                         };
                         result.insert(k, v);
