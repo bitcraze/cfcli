@@ -1442,7 +1442,7 @@ async fn run() -> Result<()> {
                             if let Some(selected_target) = &target_from_single_bare_bin {
                               (selected_target.clone(), k.to_string())
                             } else {
-                              require_arg(non_interactive, "--bin target=file")?;
+                              require_arg(non_interactive, "--bin target=file (or: --targets <TARGET> for a single bare --bin)")?;
                               let selected_target = Select::new(
                                 &format!("Select target for [{}]:", k),
                                 bootloader::get_hardcoded_list_of_targets()
