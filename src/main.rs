@@ -76,6 +76,16 @@ fn single_explicit_target_for_bare_bin(
     Some(target.to_string())
 }
 
+fn unsupported_flash_targets(selected: &[String]) -> Vec<String> {
+    let supported = bootloader::get_hardcoded_list_of_targets();
+
+    selected
+        .iter()
+        .filter(|target| !supported.contains(&target.as_str()))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +118,13 @@ mod tests {
         let targets = Some(Some("bcLighthouse4-fw".to_string()));
 
         assert_eq!(single_explicit_target_for_bare_bin(&Some(bin), &targets), None);
+    }
+
+    #[test]
+    fn unsupported_flash_targets_reports_unknown_targets() {
+        let selected = vec!["stm32ohnooo-fw".to_string(), "stm32-fw".to_string()];
+
+        assert_eq!(unsupported_flash_targets(&selected), vec!["stm32ohnooo-fw".to_string()]);
     }
 }
 
@@ -1514,6 +1531,17 @@ async fn run() -> Result<()> {
                     }
                     None => upgrade.get_target_and_types(),
                   };
+
+                  if matches!(&params.targets, Some(Some(_))) {
+                    let unsupported_targets = unsupported_flash_targets(&selected_target_and_types);
+                    if !unsupported_targets.is_empty() {
+                      bail!(CliError::InvalidValue(format!(
+                        "unknown flash target(s): {}. Valid targets: {}",
+                        unsupported_targets.join(", "),
+                        bootloader::get_hardcoded_list_of_targets().join(", ")
+                      )));
+                    }
+                  }
 
                   upgrade.filter_targets(&selected_target_and_types);
 
