@@ -9,7 +9,7 @@ use crazyflie_lib::{
         LighthouseBsCalibration, LighthouseBsGeometry, LighthouseCalibrationSweep,
         LighthouseMemory, MemoryType,
     },
-    Crazyflie,
+    Crazyflie, Error,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -374,46 +374,74 @@ pub async fn write(
         None => bail!("Failed to open lighthouse memory"),
     };
 
-    // Upload geometry data
-    if !config.geos.is_empty() {
-        let geometries: HashMap<u8, LighthouseBsGeometry> = config
-            .geos
-            .iter()
-            .map(|(&id, entry)| (id, LighthouseBsGeometry::from(entry)))
-            .collect();
+    let num_bs = LighthouseMemory::MAX_BASE_STATIONS as u8;
 
-        let progress_bar = make_progress(geometries.len(), "Geometry", non_interactive);
-        let pb = progress_bar.clone();
-        lighthouse_mem
-            .write_geometries_with_progress(&geometries, move |completed, _total| {
-                pb.set_position(completed as u64);
-            })
-            .await
-            .context("Failed to write geometries")?;
-        progress_bar.finish_with_message(format!("Uploaded {} geometries", geometries.len()));
+    // Upload geometry data
+    let progress_bar = make_progress(num_bs as usize, "Geometry", non_interactive);
+    for id in 0..num_bs {
+        let geo = config
+            .geos
+            .get(&id)
+            .map(LighthouseBsGeometry::from)
+            .unwrap_or_default();
+        match lighthouse_mem.write_geometry(id, &geo).await {
+            Ok(()) => {}
+            Err(Error::MemoryError(_)) => {
+                // Base station not supported by this firmware build, skip it.
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to write geometry for base station {}", id))
+            }
+        }
+        progress_bar.set_position((id + 1) as u64);
     }
+    progress_bar.finish_with_message(format!(
+        "Uploaded geometry for {} base station(s), invalidated the rest",
+        config.geos.len()
+    ));
 
     // Upload calibration data
-    if !config.calibs.is_empty() {
-        let calibrations: HashMap<u8, LighthouseBsCalibration> = config
+    let progress_bar = make_progress(num_bs as usize, "Calibration", non_interactive);
+    for id in 0..num_bs {
+        let calib = config
             .calibs
-            .iter()
-            .map(|(&id, entry)| (id, LighthouseBsCalibration::from(entry)))
-            .collect();
-
-        let progress_bar = make_progress(calibrations.len(), "Calibration", non_interactive);
-        let pb = progress_bar.clone();
-        lighthouse_mem
-            .write_calibrations_with_progress(&calibrations, move |completed, _total| {
-                pb.set_position(completed as u64);
-            })
-            .await
-            .context("Failed to write calibrations")?;
-        progress_bar.finish_with_message(format!("Uploaded {} calibrations", calibrations.len()));
+            .get(&id)
+            .map(LighthouseBsCalibration::from)
+            .unwrap_or_default();
+        match lighthouse_mem.write_calibration(id, &calib).await {
+            Ok(()) => {}
+            Err(Error::MemoryError(_)) => {
+                // Base station not supported by this firmware build, skip it.
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("Failed to write calibration for base station {}", id)
+                })
+            }
+        }
+        progress_bar.set_position((id + 1) as u64);
     }
+    progress_bar.finish_with_message(format!(
+        "Uploaded calibration for {} base station(s), invalidated the rest",
+        config.calibs.len()
+    ));
 
     // Close memory
     cf.memory.close_memory(lighthouse_mem).await?;
+
+    // Persist the written data to permanent storage
+    let all_ids: Vec<u8> = (0..num_bs).collect();
+    let persisted = cf
+        .localization
+        .lighthouse
+        .persist_lighthouse_data(&all_ids, &all_ids)
+        .await
+        .context("Failed to persist lighthouse configuration to flash")?;
+
+    if !persisted {
+        bail!("Crazyflie reported failure while persisting lighthouse configuration to flash");
+    }
 
     println!();
     println!("Lighthouse configuration uploaded successfully!");
