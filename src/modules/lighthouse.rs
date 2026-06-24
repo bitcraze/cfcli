@@ -397,8 +397,9 @@ pub async fn write(
             .unwrap_or_default();
         match lighthouse_mem.write_geometry(id, &geo).await {
             Ok(()) => {}
-            Err(Error::MemoryError(_)) => {
-                // Base station not supported by this firmware build, skip it.
+            Err(Error::MemoryError(_)) if !config.geos.contains_key(&id) => {
+                // Padding entry for a base station not supported by this
+                // firmware build, skip it.
             }
             Err(e) => {
                 return Err(e)
@@ -422,8 +423,9 @@ pub async fn write(
             .unwrap_or_default();
         match lighthouse_mem.write_calibration(id, &calib).await {
             Ok(()) => {}
-            Err(Error::MemoryError(_)) => {
-                // Base station not supported by this firmware build, skip it.
+            Err(Error::MemoryError(_)) if !config.calibs.contains_key(&id) => {
+                // Padding entry for a base station not supported by this
+                // firmware build, skip it.
             }
             Err(e) => {
                 return Err(e).with_context(|| {
