@@ -356,6 +356,17 @@ pub async fn write(
     let config: LighthouseConfigFile = serde_yaml::from_str(&yaml_content)
         .with_context(|| "Failed to parse lighthouse config YAML")?;
 
+    let max_bs_id = LighthouseMemory::MAX_BASE_STATIONS as u8 - 1;
+    for &id in config.geos.keys().chain(config.calibs.keys()) {
+        if id > max_bs_id {
+            bail!(
+                "Base station ID {} in config is out of range (0-{})",
+                id,
+                max_bs_id
+            );
+        }
+    }
+
     // Find lighthouse memory
     let memories = cf.memory.get_memories(Some(MemoryType::Lighthouse));
     let lighthouse_mem_device = match memories.first() {
