@@ -111,15 +111,22 @@ in the release or ZIP file. Since the bin files do not contain where
 they should be flashed you can either set the target on the commandline
 or leave it blank to select.
 
-The following command will promt you to select what target to flash the firmware
+The following command will prompt you to select what target to flash the firmware
 bin to:
 
 ```text
 cfcli bootload flash --bin firmware.bin
 ```
 
+If you want to flash one binary to one target without an interactive prompt,
+select that target with `--targets`:
+
+```text
+cfcli bootload flash --bin lighthouse.bin --targets bcLighthouse4-fw
+```
+
 It's also possible to set the target directly and also to flash multiple bins. The command
-below will promt you for where you want to flash ```color-led-firmware.bin``` and will
+below will prompt you for where you want to flash ```color-led-firmware.bin``` and will
 then flash it to the selected target as well as flashing the ```nrf51-firmware.bin```
 to the nRF51.
 
