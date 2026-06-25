@@ -179,9 +179,9 @@ Options:
 - `-i, --input <FILE>` — read YAML from a file. If omitted, YAML is read from
   stdin.
 
-Only the slots present in the YAML are written; existing slots not mentioned
-in the YAML are left untouched. To force a slot to be cleared, omit it from
-the YAML and re-flash, or use a separate erase tool.
+All base station slots are written. Slots present in the YAML are uploaded as
+valid, while slots omitted from the YAML are written as invalid to clear
+stale configuration. The resulting configuration is then persisted to flash.
 
 #### Write Examples
 
