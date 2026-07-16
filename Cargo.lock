@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "cfcli"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -425,8 +425,6 @@ dependencies = [
  "colored",
  "confy",
  "crazyflie-lib",
- "crazyflie-link",
- "crazyradio 0.7.0",
  "env_logger",
  "flume",
  "futures",
@@ -721,9 +719,9 @@ dependencies = [
 
 [[package]]
 name = "crazyflie-lib"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63e1924ed55c8ef67ed9bf2561f2cc7aca148802f9c1ddf6a469bbaadba592ec"
+checksum = "d127ba8e761396daa5b623b631d786c6aef3372443292813d4d067209b5f1013"
 dependencies = [
  "async-broadcast",
  "async-stream",
@@ -744,9 +742,9 @@ dependencies = [
 
 [[package]]
 name = "crazyflie-link"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "899dd3e14b47a1be3ee0c78c34c5b4b6634899ea2f5aab4d033829dd3d3ff3f0"
+checksum = "51c777bf6ea26a601a31642c2cab2500e099772e59b57b98a70fdfe1ea5e159e"
 dependencies = [
  "async-trait",
  "bitflags 2.11.1",

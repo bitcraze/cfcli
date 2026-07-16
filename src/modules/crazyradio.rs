@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use crazyradio::{Channel, Crazyradio, Datarate};
+use crazyflie_lib::crazyflie_link::crazyradio::{Channel, Crazyradio, Datarate};
 use std::time::Duration;
 
 const CRAZYRADIO_VID: u16 = 0x1915;
