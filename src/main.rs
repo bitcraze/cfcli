@@ -1280,12 +1280,12 @@ async fn run() -> Result<()> {
             match command {
                 HlCommands::Arm => {
                     println!("Arming Crazyflie...");
-                    cf.platform.send_arming_request(true).await?;
+                    cf.supervisor.send_arming_request(true).await?;
                     println!("Crazyflie armed!");
                 }
                 HlCommands::Disarm => {
                     println!("Disarming Crazyflie...");
-                    cf.platform.send_arming_request(false).await?;
+                    cf.supervisor.send_arming_request(false).await?;
                     println!("Crazyflie disarmed!");
                 }
                 HlCommands::Takeoff(params) => {
