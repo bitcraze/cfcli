@@ -311,7 +311,7 @@ fn is_streaming_command(cmd: &Commands) -> bool {
 /// alongside other immutable accesses to `holder`.
 async fn connect_cf<'a>(
     holder: &'a mut Option<crazyflie_lib::Crazyflie>,
-    link_context: &crazyflie_link::LinkContext,
+    link_context: &crazyflie_lib::crazyflie_link::LinkContext,
     uri: &str,
     toc_cache: ConfigTocCache,
     measure_connect_time: bool,
@@ -545,9 +545,9 @@ async fn run() -> Result<()> {
     let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
 
     #[cfg(all(unix, feature = "packet_capture"))]
-    crazyflie_link::capture::init();
+    crazyflie_lib::crazyflie_link::capture::init();
 
-    let link_context = crazyflie_link::LinkContext::new();
+    let link_context = crazyflie_lib::crazyflie_link::LinkContext::new();
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
     let preserve_console = args.preserve_console;

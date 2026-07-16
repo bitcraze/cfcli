@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::Crazyflie;
 use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryType, RawMemory};
 use tokio::time::{sleep, timeout, Duration};
-use crazyflie_link::{Connection, LinkContext, Packet};
+use crazyflie_lib::crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
 
 use crate::ConfigTocCache;
@@ -238,7 +238,7 @@ fn print_target_info(name: &str, info: &BootloaderInfo) {
   println!("  CPU ID: 0x{:04X}", info.cpuid);
 }
 
-pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, cold: bool, uri: &str) -> Result<()> {
+pub async fn print_bootloader_info(link_context: &crazyflie_lib::crazyflie_link::LinkContext, cold: bool, uri: &str) -> Result<()> {
 
   let link = start_bootloader(link_context, cold, uri).await?;
 
@@ -258,7 +258,7 @@ pub async fn print_bootloader_info(link_context: &crazyflie_link::LinkContext, c
   Ok(())
 }
 
-pub async fn reboot(link_context: &crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
+pub async fn reboot(link_context: &crazyflie_lib::crazyflie_link::LinkContext, uri: &str,) -> Result<()> {
 
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::ResetInit, None).await?;
@@ -420,7 +420,7 @@ async fn flash_deck_ctrl(
     Ok(())
 }
 
-pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, cold: bool) -> Result<()> {
+pub async fn flash(link_context: &crazyflie_lib::crazyflie_link::LinkContext, uri: &str, toc_cache: ConfigTocCache, firmware_upgrade: FirmwareUpgrade, cold: bool) -> Result<()> {
 
   let firmware_for_bootloader = firmware_upgrade.get_firmware_for_bootloader();
   let firmware_for_deckctrl = firmware_upgrade.get_firmware_for_deckctrl();
