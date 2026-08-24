@@ -2,7 +2,8 @@
 
 This module provides access to the Crazyflie console.
 
-**NOTE:** The console data history clears when you connect to the Crazyflie (i.e is downloaded on connect)
+The legacy Crazyflie console and any sourced consoles are selected separately.
+Running `cfcli console` without source options keeps the legacy behavior.
 
 ## Show console prints
 
@@ -17,6 +18,33 @@ If you do not want any formatting of the text then use the ```--no-format``` par
 ```text
 cfcli console --no-format
 ```
+
+## Show a sourced console
+
+Firmware using CRTP protocol 13 or newer may advertise additional console
+sources, such as a console retained by a deck. List their paths with:
+
+```text
+cfcli console --list-sources
+```
+
+The list contains source paths only. Use global `--csv` to emit a `path`
+header and one CSV row per source. Older firmware and Crazyflies without
+sourced consoles report an empty list successfully.
+
+Select one source by its exact, case-sensitive path:
+
+```text
+cfcli console --source deck:bcCam
+```
+
+The command first replays the source history retained for this connection and
+then continues with live output. Formatting and `--no-format` behave like the
+legacy console. Only one source can be selected at a time in this first
+implementation; concurrent multi-source output may be added later.
+
+If a requested source does not exist, cfcli exits with resource-not-found code
+20 and reports the available paths.
 
 ## Preserve console across connections
 
@@ -35,6 +63,10 @@ cfcli console
 
 This is useful for capturing console debug output that was printed during other operations (e.g. parameter changes or log sessions).
 
+Preservation currently applies only to the legacy Crazyflie console. A sourced
+console uses its own retained history and `cfcli console --source ...` neither
+prints nor clears the locally preserved legacy-console file.
+
 ## Clear preserved console history
 
 The `--clear` flag deletes the preserved console history file and exits without connecting to a Crazyflie. Useful when you want to discard accumulated output between runs:
@@ -47,10 +79,20 @@ The file path is shown by `cfcli settings show`.
 
 ## Stop streaming after a fixed duration
 
-`console` is a streaming command — by default it runs until the link is broken. Combine it with the global `--timeout` flag to stop cleanly after a fixed wall-clock duration:
+Legacy and sourced console output are streaming commands — by default they run
+until the link is broken. Combine either with the global `--timeout` flag to
+stop cleanly after a fixed wall-clock duration:
 
 ```text
 cfcli --timeout 3000 console
+cfcli --timeout 3000 console --source deck:bcCam
 ```
 
-When `--timeout` fires on a streaming command, the process exits **0** (the timer is the intended way to stop it). This is the recommended pattern when running `cfcli console` from a script or CI step.
+When `--timeout` fires on a streaming command, the process exits **0** (the
+timer is the intended way to stop it). For a sourced console, cfcli then makes
+a clean disable attempt bounded to one additional second before disconnecting.
+This is the recommended pattern when running `cfcli console` from a script or
+CI step.
+
+`--list-sources` is bounded rather than streaming. If its global timeout
+expires, cfcli exits with timeout code 40.

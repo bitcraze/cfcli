@@ -149,6 +149,13 @@ selected URI for a single command using the `--uri` flag:
 cfcli --uri radio://0/80/2M/E7E7E7E7E7 console
 ```
 
+Discover and stream a sourced console advertised by compatible firmware:
+
+```text
+cfcli console --list-sources
+cfcli --timeout 3000 console --source deck:bcCam
+```
+
 You can preserve console output across connections using the `-p` flag. Console data is accumulated
 during each connection and printed when the `console` command is run:
 
@@ -242,8 +249,8 @@ prompt) a few flags make the output predictable:
   stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
-  `platform info`, `swarm config list`/`show`, `swarm scan`,
-  `swarm platform info`, `swarm param get`, `swarm log print`,
+  `platform info`, `console --list-sources`, `swarm config list`/`show`,
+  `swarm scan`, `swarm platform info`, `swarm param get`, `swarm log print`,
   `swarm deck list`, `swarm debug assert`, `swarm bootload info`,
   `swarm lh check`, `lh config list`/`display`/`check`). Other
   commands ignore the flag.
