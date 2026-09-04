@@ -849,6 +849,7 @@ enum HlCommands {
 }
 
 #[derive(Debug, Args)]
+#[command(allow_negative_numbers = true)]
 struct HlTakeoffParameters {
     /// Target height in meters
     #[clap(long, short = 'z', default_value = "0.5")]
@@ -862,6 +863,7 @@ struct HlTakeoffParameters {
 }
 
 #[derive(Debug, Args)]
+#[command(allow_negative_numbers = true)]
 struct HlLandParameters {
     /// Target height in meters (typically 0.0)
     #[clap(long, short = 'z', default_value = "0.0")]
@@ -875,6 +877,7 @@ struct HlLandParameters {
 }
 
 #[derive(Debug, Args)]
+#[command(allow_negative_numbers = true)]
 struct HlGotoParameters {
     /// Target position as x,y,z (comma-separated)
     #[clap(value_parser = parse_position, allow_hyphen_values = true)]
