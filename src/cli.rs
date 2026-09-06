@@ -825,6 +825,54 @@ struct TrajectoryDisplayParameters {
 enum LocoCommands {
     /// Display Loco Positioning System anchor information
     Display,
+    /// Anchor position configuration
+    Config {
+        #[clap(subcommand)]
+        command: LocoConfigCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LocoConfigCommands {
+    /// Display anchor positions in human-readable form
+    Display(LocoDisplayParameters),
+    /// Read anchor positions as YAML (to file or stdout)
+    Read(LocoReadParameters),
+    /// Write anchor positions from YAML (from file or stdin) to the anchors
+    Write(LocoWriteParameters),
+}
+
+#[derive(Debug, Args)]
+struct LocoDisplayParameters {
+    /// YAML file to display (reads from the Crazyflie if omitted)
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LocoReadParameters {
+    /// YAML file to write anchor positions to (writes to stdout if omitted)
+    #[clap(long, short = 'o', value_hint = ValueHint::FilePath)]
+    output: Option<String>,
+
+    /// Also include anchors whose position is not marked valid
+    #[clap(long)]
+    include_invalid: bool,
+}
+
+#[derive(Debug, Args)]
+struct LocoWriteParameters {
+    /// YAML file to read anchor positions from (reads stdin if omitted)
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+
+    /// Send the positions without reading them back from the anchors
+    #[clap(long)]
+    no_verify: bool,
+
+    /// Seconds to keep resending until every anchor confirms its new position
+    #[clap(long, default_value_t = 15)]
+    verify_timeout: u64,
 }
 
 #[derive(Debug, Subcommand)]

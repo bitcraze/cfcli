@@ -1259,10 +1259,38 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Loco { command } => {
+            // Displaying a file needs no connection.
+            if let LocoCommands::Config { command: LocoConfigCommands::Display(params) } = &command {
+                if let Some(file_path) = &params.input {
+                    modules::lps::display_file(file_path)?;
+                    return Ok(());
+                }
+            }
+
             match command {
                 LocoCommands::Display => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::lps::display(&cf).await?;
+                    modules::lps::display(&cf, csv).await?;
+                }
+                LocoCommands::Config { command } => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+
+                    match command {
+                        LocoConfigCommands::Display(_) => {
+                            modules::lps::display(&cf, csv).await?;
+                        }
+                        LocoConfigCommands::Read(params) => {
+                            modules::lps::read(&cf, params.output.as_deref(), params.include_invalid).await?;
+                        }
+                        LocoConfigCommands::Write(params) => {
+                            modules::lps::write(
+                                &cf,
+                                params.input.as_deref(),
+                                !params.no_verify,
+                                std::time::Duration::from_secs(params.verify_timeout),
+                            ).await?;
+                        }
+                    }
                 }
             }
         }

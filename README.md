@@ -13,6 +13,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * Run stability tests with the Crazyflie
 * High-level commander (takeoff, land, go-to, trajectories)
 * Lighthouse positioning system configuration (read/write base station geometry and calibration)
+* Loco positioning system configuration (read/write anchor positions, cfclient-compatible YAML)
 * AI-agent and scripting friendly (CSV output, classified exit codes, non-interactive mode, command timeouts)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
