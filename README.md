@@ -135,6 +135,13 @@ selected URI for a single command using the `--uri` flag:
 cfcli --uri radio://0/80/2M/E7E7E7E7E7 console
 ```
 
+Discover and stream a sourced console advertised by compatible firmware:
+
+```text
+cfcli console --list-sources
+cfcli --timeout 3000 console --source deck:bcCam
+```
+
 You can preserve console output across connections using the `-p` flag. Console data is accumulated
 during each connection and printed when the `console` command is run:
 
@@ -214,8 +221,8 @@ prompt) a few flags make the output predictable:
   intended way to stop them and the command exits **0**. For all other
   commands a timeout means the command got stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
-  `param list`/`get`, `log list`/`print`, `mem list`, `platform info`). Other
-  commands ignore the flag.
+  `param list`/`get`, `log list`/`print`, `mem list`, `platform info`,
+  `console --list-sources`). Other commands ignore the flag.
 
 Exit codes:
 

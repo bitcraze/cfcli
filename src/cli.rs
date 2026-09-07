@@ -295,12 +295,20 @@ enum Commands {
     /// Print the console text from a Crazyflie
     Console {
       /// Output raw console data without processing
-      #[clap(long)]
+      #[clap(long, conflicts_with = "list_sources")]
       no_format: bool,
 
       /// Delete the preserved console history file and exit without connecting
-      #[clap(long)]
+      #[clap(long, conflicts_with_all = ["source", "list_sources"])]
       clear: bool,
+
+      /// Print one sourced console selected by its catalog path
+      #[clap(long, value_name = "PATH", conflicts_with_all = ["list_sources", "clear"])]
+      source: Option<String>,
+
+      /// List the available sourced-console paths and exit
+      #[clap(long, conflicts_with_all = ["source", "no_format", "clear"])]
+      list_sources: bool,
     },
 
     /// Local CLI settings (scan addresses, timeout, etc.)
