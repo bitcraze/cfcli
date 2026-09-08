@@ -1,6 +1,6 @@
 [package]
 name = "cfcli"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 authors = ["Marcus Eliasson <marcus@bitcraze.io>"]
 description = "Crazyflie command-line client"
@@ -51,48 +51,48 @@ packet_capture = []
 [dependencies]
 futures-util = "0.3"
 futures = "0.3"
-async-stream = "0.3.1"
+async-stream = "0.3.6"
 flume = "0.12.0"
-num_enum = "0.7.4"
+num_enum = "0.7.6"
 half = "2.6.0"
 env_logger = "0.11.8"
 anyhow = "1.0"
-crazyflie-link = { version = "0.5.0", default-features = false }
-crazyflie-lib = { version = "0.8.0", default-features = false }
+crazyflie-link = { version = "0.5.1", default-features = false }
+crazyflie-lib = { version = "0.8.2", default-features = false }
 crazyradio = { version = "0.7.0", features = ["async"] }
 rusb = "0.9"
 cfloader = "0.1.0"
-clap = { version = "4.5.46", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
 
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.143"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 confy = "2.0.0"
-clap_complete = "4.5"
-tokio = "1.47.1"
+clap_complete = "4.6.9"
+tokio = "1.53.1"
 serde_yaml = "0.9.34"
-probe-rs = "0.31.0"
+probe-rs = "0.32.0"
 clap-num = "1.2.0"
-inquire = "0.9.1"
-indicatif = { version = "0.18.1", features = ["tokio"] }
-colored = "3.0.0"
-rand = "0.10.1"
-pretty-hex = "0.4.1"
-terminal_size = "0.4.3"
-octocrab = "0.51"
+inquire = "0.9.4"
+indicatif = { version = "0.18.6", features = ["tokio"] }
+colored = "3.1.1"
+rand = "0.10.2"
+pretty-hex = "0.4.2"
+terminal_size = "0.4.4"
+octocrab = "0.54.1"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
-reqwest = { version="0.13.3", default-features = false, features = ["rustls", "json"]}
+reqwest = { version="0.13.4", default-features = false, features = ["rustls", "json"]}
 zip = "8.6"
 byteorder = "1.5.0"
 hex = "0.4.3"
-chrono = "0.4.44"
+chrono = "0.4.45"
 
 [target.'cfg(unix)'.dependencies]
-crazyflie-link = { version = "0.5.0", default-features = false, features = ["packet_capture"] }
+crazyflie-link = { version = "0.5.1", default-features = false, features = ["packet_capture"] }
 crazyradio = { version = "0.7.0", features = ["async", "packet_capture"] }
 
 # Used by build.rs to generate shell-completion scripts from the same clap
 # command tree as the binary (src/cli.rs is shared via include!).
 [build-dependencies]
-clap = { version = "4.5.46", features = ["derive"] }
-clap_complete = "4.5"
+clap = { version = "4.6.6", features = ["derive"] }
+clap_complete = "4.6.9"
 clap-num = "1.2.0"
