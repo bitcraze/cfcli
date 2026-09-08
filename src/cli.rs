@@ -854,10 +854,6 @@ struct LocoReadParameters {
     /// YAML file to write anchor positions to (writes to stdout if omitted)
     #[clap(long, short = 'o', value_hint = ValueHint::FilePath)]
     output: Option<String>,
-
-    /// Also include anchors whose position is not marked valid
-    #[clap(long)]
-    include_invalid: bool,
 }
 
 #[derive(Debug, Args)]

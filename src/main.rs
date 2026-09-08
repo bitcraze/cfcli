@@ -1270,17 +1270,17 @@ async fn run() -> Result<()> {
             match command {
                 LocoCommands::Display => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::lps::display(&cf, csv).await?;
+                    modules::lps::display(&cf, csv, non_interactive).await?;
                 }
                 LocoCommands::Config { command } => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
                     match command {
                         LocoConfigCommands::Display(_) => {
-                            modules::lps::display(&cf, csv).await?;
+                            modules::lps::display(&cf, csv, non_interactive).await?;
                         }
                         LocoConfigCommands::Read(params) => {
-                            modules::lps::read(&cf, params.output.as_deref(), params.include_invalid).await?;
+                            modules::lps::read(&cf, params.output.as_deref(), non_interactive).await?;
                         }
                         LocoConfigCommands::Write(params) => {
                             modules::lps::write(
@@ -1288,6 +1288,7 @@ async fn run() -> Result<()> {
                                 params.input.as_deref(),
                                 !params.no_verify,
                                 std::time::Duration::from_secs(params.verify_timeout),
+                                non_interactive,
                             ).await?;
                         }
                     }
@@ -1308,12 +1309,12 @@ async fn run() -> Result<()> {
             match command {
                 HlCommands::Arm => {
                     println!("Arming Crazyflie...");
-                    cf.platform.send_arming_request(true).await?;
+                    cf.supervisor.send_arming_request(true).await?;
                     println!("Crazyflie armed!");
                 }
                 HlCommands::Disarm => {
                     println!("Disarming Crazyflie...");
-                    cf.platform.send_arming_request(false).await?;
+                    cf.supervisor.send_arming_request(false).await?;
                     println!("Crazyflie disarmed!");
                 }
                 HlCommands::Takeoff(params) => {
