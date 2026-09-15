@@ -19,6 +19,8 @@ pub enum CliError {
     /// A check found that the Crazyflie differs from what it was compared
     /// with (`lh config check`).
     Differs(String),
+    Interrupted,
+    Terminated,
 }
 
 impl CliError {
@@ -30,6 +32,8 @@ impl CliError {
             CliError::Timeout(_) => 40,
             CliError::SomeFailed(_) => 50,
             CliError::Differs(_) => 60,
+            CliError::Interrupted => 130,
+            CliError::Terminated => 143,
         }
     }
 }
@@ -44,6 +48,8 @@ impl fmt::Display for CliError {
             CliError::Timeout(s) => write!(f, "timeout: {}", s),
             CliError::SomeFailed(s) => write!(f, "some Crazyflies failed: {}", s),
             CliError::Differs(s) => write!(f, "differs: {}", s),
+            CliError::Interrupted => write!(f, "interrupted"),
+            CliError::Terminated => write!(f, "terminated"),
         }
     }
 }
