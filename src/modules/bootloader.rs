@@ -55,6 +55,7 @@ pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
       "stm32-fw",
       "bcColorLedTop:col-fw",
       "bcColorLedBot:col-fw",
+      "bcFlow3:rp2350-fw",
       "deckctrl-fw",
       "deckctrl-cfg",
     ]
