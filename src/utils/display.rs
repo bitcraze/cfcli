@@ -114,7 +114,7 @@ where
         .with(
             Style::empty()
                 .vertical('|')
-                .horizontals([(1, HorizontalLine::new('-').intersection('|'))]),
+                .horizontals([(1, HorizontalLine::new('-').intersection('+'))]),
         )
         // The first column sits flush left; every other column keeps the
         // single space that separates it from the `|`.

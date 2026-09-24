@@ -40,13 +40,14 @@ cfcli mem list
 This will show an output similar to the one below showing id, type, size and serial (if available):
 
 ```text
-Memories:
-[0] EEPROMConfig size=7k (0x1fff/8191)
-[1] Trajectory size=4k (0x1000/4096)
-[2] MemoryTester size=4k (0x1000/4096)
-[3] DeckCtrl size=2k (0x800/2048) (0x2D0043000550314854363720)
-[4] DeckMemory size=1310720k (0x50000000/1342177280)
-[5] DeckCtrlDFU size=96k (0x18000/98304)
+ID | Type         | Size                    | Serial
+---+--------------+-------------------------+--------------------------
+ 0 | EEPROMConfig | 8191 (0x1fff)           |
+ 1 | Trajectory   | 4096 (0x1000)           |
+ 2 | MemoryTester | 4096 (0x1000)           |
+ 3 | DeckCtrl     | 2048 (0x800)            | 2D0043000550314854363720
+ 4 | DeckMemory   | 1342177280 (0x50000000) |
+ 5 | DeckCtrlDFU  | 98304 (0x18000)         |
 ```
 
 For machine-readable output, add the global `--csv` flag:
