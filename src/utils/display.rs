@@ -97,3 +97,40 @@ pub fn hex_dump(data: Vec<u8>, offset: usize) {
 
   println!("{:?}", data.hex_conf(cfg));
 }
+/// Print a table in the style used across the CLI: columns separated by
+/// ` | ` with a dashed rule under the header, as `param list` and
+/// `log list` print theirs. Columns are sized to fit their content, and
+/// rows carry no trailing whitespace.
+pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
+    let widths: Vec<usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(column, header)| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.chars().count())
+                .chain(std::iter::once(header.chars().count()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let pad = |cells: &mut dyn Iterator<Item = &str>| {
+        cells
+            .zip(&widths)
+            .map(|(cell, width)| format!("{:<width$}", cell, width = *width))
+            .collect::<Vec<_>>()
+            .join(" | ")
+            .trim_end()
+            .to_string()
+    };
+
+    println!("{}", pad(&mut headers.iter().copied()));
+    println!(
+        "{}",
+        widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("-|-")
+    );
+    for row in rows {
+        println!("{}", pad(&mut row.iter().map(String::as_str)));
+    }
+}

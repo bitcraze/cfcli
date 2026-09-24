@@ -32,6 +32,7 @@ pub mod modules {
     pub mod crazyradio;
     pub mod debug;
     pub mod lighthouse;
+    pub mod deck;
 }
 
 pub mod utils {
@@ -1439,6 +1440,14 @@ async fn run() -> Result<()> {
                             modules::lighthouse::read(&cf, params.output.as_deref(), non_interactive).await?;
                         }
                     }
+                }
+            }
+        }
+        Commands::Deck { command } => {
+            match command {
+                DeckCommands::List => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    modules::deck::list(&cf, csv).await?;
                 }
             }
         }
