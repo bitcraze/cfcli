@@ -512,6 +512,10 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
           toc_cache.clone()
       ).await?;
 
+      // Whether we wrote anything to the deck, and so whether the Crazyflie
+      // has to be restarted for it to run the new firmware.
+      let mut flashed = false;
+
       let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
       if !memories.is_empty() {
         let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
@@ -529,32 +533,43 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
         if let Some(section) = section {
 
           let bootloader_active = section.bootloader_active().await?;
-          if !bootloader_active {
-            section.reset_to_bootloader().await?;
 
-            // The deck may take a couple of seconds to complete the
-            // ROM-bootloader handshake before flipping the active bit,
-            // so poll up to 5 s instead of a single check.
-            let mut active = false;
-            for _ in 0..50 {
-              sleep(Duration::from_millis(100)).await;
-              if section.bootloader_active().await? {
-                active = true;
-                break;
+          // Needed for the lighthouse deck, since we cannot reboot to bootloader
+          // if the firmware matches the configuration.
+          let up_to_date =
+            !section.can_reset_to_bootloader() && !section.upgrade_required().await?;
+
+          if up_to_date {
+            println!("Deck {} firmware up to date, skipping", section.name());
+          } else {
+            if !bootloader_active {
+              section.reset_to_bootloader().await?;
+
+              // The deck may take a couple of seconds to complete the
+              // ROM-bootloader handshake before flipping the active bit,
+              // so poll up to 5 s instead of a single check.
+              let mut active = false;
+              for _ in 0..50 {
+                sleep(Duration::from_millis(100)).await;
+                if section.bootloader_active().await? {
+                  active = true;
+                  break;
+                }
+              }
+              if !active {
+                bail!("Failed to activate bootloader for deck section");
               }
             }
-            if !active {
-              bail!("Failed to activate bootloader for deck section");
-            }
-          }
 
-          let progress_bar = get_progressbar(firmware.data.len(), Some(section.name()));   
-          let pb = progress_bar.clone();
-          let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
-            pb.set_position(bytes_written as u64);
-          };
-          section.flash_firmware_with_progress(&firmware.data, progress_callback).await?;
-          finish_progress(&progress_bar, "Deck firmware flashed successfully!");
+            let progress_bar = get_progressbar(firmware.data.len(), Some(section.name()));
+            let pb = progress_bar.clone();
+            let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
+              pb.set_position(bytes_written as u64);
+            };
+            section.flash_firmware_with_progress(&firmware.data, progress_callback).await?;
+            finish_progress(&progress_bar, "Deck firmware flashed successfully!");
+            flashed = true;
+          }
         }
 
         cf.disconnect().await;
@@ -563,11 +578,13 @@ pub async fn flash(link_context: &crazyflie_link::LinkContext, uri: &str, toc_ca
 
       flash_count_left = flash_count_left - 1;
 
-      reboot(&link_context, uri).await?;
+      if flashed {
+        reboot(&link_context, uri).await?;
 
-      if flash_count_left > 0 {
-          println!("Restarting Crazyflie...");
-          sleep(Duration::from_millis(delay)).await;
+        if flash_count_left > 0 {
+            println!("Restarting Crazyflie...");
+            sleep(Duration::from_millis(delay)).await;
+        }
       }
     }
   }
