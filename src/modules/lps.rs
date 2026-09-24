@@ -28,7 +28,31 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 use crate::error::CliError;
-use crate::utils::display::csv_row;
+use crate::utils::display::{csv_row, print_table, table};
+use tabled::settings::{object::Columns, Alignment, Modify};
+use tabled::Tabled;
+
+/// One row of `loco display`.
+#[derive(Tabled)]
+struct AnchorRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "Active")]
+    active: String,
+    #[tabled(rename = "Valid")]
+    valid: String,
+    #[tabled(rename = "Position (x, y, z)")]
+    position: String,
+}
+
+/// One row of the anchor-positions file listing.
+#[derive(Tabled)]
+struct AnchorPositionRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "Position (x, y, z)")]
+    position: String,
+}
 
 /// LPP short-packet type for setting an anchor position (firmware
 /// `LPP_SHORT_ANCHORPOS`). Payload is this byte followed by 3x LE f32.
@@ -214,9 +238,9 @@ pub async fn display(cf: &Crazyflie, csv: bool, non_interactive: bool) -> Result
         csv_row(&["id", "active", "valid", "x", "y", "z"]);
     } else {
         println!("Loco Positioning System - Anchor Data:");
-        println!("  {:>3}  {:>6}  {:>5}  {}", "ID", "Active", "Valid", "Position (x, y, z)");
     }
 
+    let mut rows = Vec::new();
     for &id in &data.anchor_ids {
         let is_active = data.active_anchor_ids.contains(&id);
         if let Some(anchor) = data.anchors.get(&id) {
@@ -230,17 +254,24 @@ pub async fn display(cf: &Crazyflie, csv: bool, non_interactive: bool) -> Result
                     &anchor.position[2].to_string(),
                 ]);
             } else {
-                println!(
-                    "  {:>3}  {:>6}  {:>5}  ({:.3}, {:.3}, {:.3})",
-                    id,
-                    if is_active { "yes" } else { "no" },
-                    if anchor.is_valid { "yes" } else { "no" },
-                    anchor.position[0],
-                    anchor.position[1],
-                    anchor.position[2],
-                );
+                rows.push(AnchorRow {
+                    id: id.to_string(),
+                    active: if is_active { "yes" } else { "no" }.to_string(),
+                    valid: if anchor.is_valid { "yes" } else { "no" }.to_string(),
+                    position: format!(
+                        "({:.3}, {:.3}, {:.3})",
+                        anchor.position[0], anchor.position[1], anchor.position[2]
+                    ),
+                });
             }
         }
+    }
+
+    if !csv {
+        // Anchor ids are numeric, so they read better right-aligned.
+        let mut table = table(&rows);
+        table.with(Modify::new(Columns::one(0)).with(Alignment::right()));
+        print_table(&table);
     }
 
     Ok(())
@@ -474,10 +505,16 @@ pub fn display_file(file_path: &str) -> Result<()> {
     println!("Loco Anchor Positions File: {}", file_path);
     println!("===========================");
     println!();
-    println!("  {:>3}  {}", "ID", "Position (x, y, z)");
-    for (id, entry) in &positions {
-        println!("  {:>3}  ({:.3}, {:.3}, {:.3})", id, entry.x, entry.y, entry.z);
-    }
+    let rows: Vec<AnchorPositionRow> = positions
+        .iter()
+        .map(|(id, entry)| AnchorPositionRow {
+            id: id.to_string(),
+            position: format!("({:.3}, {:.3}, {:.3})", entry.x, entry.y, entry.z),
+        })
+        .collect();
+    let mut table = table(&rows);
+    table.with(Modify::new(Columns::one(0)).with(Alignment::right()));
+    print_table(&table);
     println!();
     println!("{} anchors", positions.len());
 

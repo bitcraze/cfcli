@@ -24,8 +24,9 @@ use crazyflie_lib::{
     subsystems::memory::{MemoryDevice, MemoryType, OwMemory, RawMemory},
     Crazyflie,
 };
+use tabled::Tabled;
 
-use crate::utils::display::{csv_row, print_table};
+use crate::utils::display::{csv_row, print_table, table};
 
 /// Magic marking a valid DeckCtrl info page, stored big endian (0xBCDC).
 const DECKCTRL_MAGIC: [u8; 2] = [0xBC, 0xDC];
@@ -41,9 +42,13 @@ const DECKCTRL_NAME_LEN: usize = 15;
 const UNKNOWN: &str = "?";
 
 /// One deck as presented by `deck list`.
+#[derive(Tabled)]
 struct Deck {
+    #[tabled(rename = "Name")]
     name: String,
+    #[tabled(rename = "Rev")]
     revision: String,
+    #[tabled(rename = "Serial")]
     serial: String,
 }
 
@@ -92,11 +97,7 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
         return Ok(());
     }
 
-    let rows: Vec<Vec<String>> = decks
-        .iter()
-        .map(|deck| vec![deck.name.clone(), deck.revision.clone(), deck.serial.clone()])
-        .collect();
-    print_table(&["Name", "Rev", "Serial"], &rows);
+    print_table(&table(&decks));
 
     Ok(())
 }
