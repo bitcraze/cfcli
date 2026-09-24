@@ -121,6 +121,47 @@ cfcli mem write EEPROMConfig -s 0x20 -i memory_data.bin
 **Note**: The Crazyflie will most likely not like writing raw random data to memories, so
 when using this functionality make sure you know what you are doing!
 
+## Verifying memory
+
+`mem verify` takes the same arguments as `mem write`, but instead of writing it
+reads the memory back and compares it against the data you give it. Use it to
+confirm that a write landed, or that a memory still holds what you expect.
+
+```bash
+cfcli mem verify DeckMemory -s 0x10000000 -i color-led.bin
+```
+
+The number of bytes read back is the length of the expected data, so the same
+`--data` (`-d`) and `--input` (`-i`) arguments that wrote a region also verify
+exactly that region:
+
+```bash
+cfcli mem verify EEPROMConfig -s 0x20 --data 0x01,1,0x02
+```
+
+If everything matches the command prints a confirmation and exits **0**:
+
+```text
+Read back 32 bytes from memory ID=3 at offset 0x0
+Verify OK: 32 bytes at offset 0x0 match
+```
+
+If anything differs, the differing bytes are listed with their absolute
+offsets and the command exits **1**, so a script can act on it:
+
+```text
+Read back 32 bytes from memory ID=3 at offset 0x0
+Offset     | Expected | Actual
+-----------+----------+--------
+0x00000004 | 0xFF     | 0x00
+0x00000005 | 0xBD     | 0xBC
+0x00000014 | 0xEF     | 0x6F
+Error: Verify FAILED: 3 of 32 bytes differ
+```
+
+At most 16 differing bytes are listed; the rest are summarised as
+`... and N more`, with the total in the final line.
+
 ## Displaying memory
 
 This command is used to interpret and display the content of a memory. Note that not all
@@ -157,4 +198,11 @@ cfcli mem write DeckMemory -s 0x1004 --data 0x02
 cfcli mem write DeckMemory -s 0x10000000 -i color-led.bin
 # Switch the deck back into application mode
 cfcli mem write DeckMemory -s 0x1004 --data 0x01
+```
+
+To check that the firmware was written correctly, read it back and compare
+before leaving bootloader mode:
+
+```bash
+cfcli mem verify DeckMemory -s 0x10000000 -i color-led.bin
 ```

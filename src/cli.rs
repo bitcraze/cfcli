@@ -764,6 +764,8 @@ enum MemoryCommands {
     Read(ReadMemoryParameters),
     /// Write a list of values to memory
     Write(WriteMemoryParameters),
+    /// Read memory back and compare it against the expected data
+    Verify(VerifyMemoryParameters),
     /// Display memory contents in a human-readable format
     Display(SelectMemoryParameters),
     /// Erase a memory
@@ -993,6 +995,29 @@ struct WriteMemoryParameters {
     #[clap(long, short = 'd', value_delimiter = ',', value_parser=maybe_hex::<u8>)]
     data: Option<Vec<u8>>,
     /// File to read raw binary data from
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("expected")
+        .required(true)
+        .multiple(false)
+        .args(&["data", "input"])
+))]
+struct VerifyMemoryParameters {
+    /// Memory to verify: numeric ID, type name (e.g. DeckCtrlDFU),
+    /// or type with instance index (e.g. DeckCtrlDFU:0)
+    #[clap(value_parser = parse_memory_ref)]
+    mem: MemoryRef,
+    /// Offset in bytes to start verifying at
+    #[clap(long, short = 's', value_parser = maybe_hex::<usize>)]
+    offset: usize,
+    /// Expected data (comma-separated list of bytes)
+    #[clap(long, short = 'd', value_delimiter = ',', value_parser=maybe_hex::<u8>)]
+    data: Option<Vec<u8>>,
+    /// File holding the expected raw binary data
     #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
     input: Option<String>,
 }

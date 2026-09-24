@@ -1161,6 +1161,25 @@ async fn run() -> Result<()> {
                     utils::display::finish_progress(&progress_bar, format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), mem_id, var.offset));
 
                 }
+                MemoryCommands::Verify(var) => {
+                    let expected: Vec<u8> = match &var.data {
+                      Some(d) => d.clone(),
+                      None => {
+                        let input_file = match &var.input {
+                          Some(f) => f,
+                          None => bail!("No data provided to verify against, please provide data via --data or --input"),
+                        };
+                        std::fs::read(input_file)?
+                      }
+                    };
+
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+
+                    let memories = cf.memory.get_memories(None);
+                    let device = resolve_memory_ref(&memories, &var.mem)?.clone();
+
+                    modules::memory::verify(&cf, device, var.offset, &expected).await?;
+                }
                 MemoryCommands::Display(var) => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
