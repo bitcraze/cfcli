@@ -848,6 +848,9 @@ async fn run() -> Result<()> {
                     match command {
                         DeckControlCommands::Bingen(params) => {
                             let deck_config = DeckConfig::from_yaml(params.input.clone())?;
+                            if let Some(warning) = deck_config.name_warning() {
+                                eprintln!("Warning: {}", warning);
+                            }
                             let bytes = deck_config.to_bytes();
                             
                             if let Some(output) = &params.output {
@@ -859,6 +862,9 @@ async fn run() -> Result<()> {
                         DeckControlCommands::Binflash(params) => {
                             println!("Generating deck binary from {}", params.input);
                             let deck_config = DeckConfig::from_yaml(params.input.clone())?;
+                            if let Some(warning) = deck_config.name_warning() {
+                                eprintln!("Warning: {}", warning);
+                            }
                             let bytes = deck_config.to_bytes();
 
                             let lister = Lister::new();
