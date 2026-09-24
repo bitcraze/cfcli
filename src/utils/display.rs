@@ -1,4 +1,6 @@
 use crazyflie_lib::Value;
+use tabled::settings::{object::Columns, style::HorizontalLine, Modify, Padding, Style};
+use tabled::{Table, Tabled};
 use pretty_hex::*;
 use std::io::IsTerminal;
 use terminal_size::{Width, Height, terminal_size};
@@ -97,40 +99,32 @@ pub fn hex_dump(data: Vec<u8>, offset: usize) {
 
   println!("{:?}", data.hex_conf(cfg));
 }
-/// Print a table in the style used across the CLI: columns separated by
-/// ` | ` with a dashed rule under the header, as `param list` and
-/// `log list` print theirs. Columns are sized to fit their content, and
-/// rows carry no trailing whitespace.
-pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
-    let widths: Vec<usize> = headers
-        .iter()
-        .enumerate()
-        .map(|(column, header)| {
-            rows.iter()
-                .filter_map(|row| row.get(column))
-                .map(|cell| cell.chars().count())
-                .chain(std::iter::once(header.chars().count()))
-                .max()
-                .unwrap_or(0)
-        })
-        .collect();
+/// Build a table in the style the CLI uses everywhere: columns separated by
+/// ` | ` with a dashed rule under the header, sized to fit their content.
+///
+/// Returned rather than printed so a caller can adjust it first (for example
+/// right-aligning a numeric column) before handing it to [`print_table`].
+pub fn table<I>(rows: I) -> Table
+where
+    I: IntoIterator,
+    I::Item: Tabled,
+{
+    let mut table = Table::new(rows);
+    table
+        .with(
+            Style::empty()
+                .vertical('|')
+                .horizontals([(1, HorizontalLine::new('-').intersection('+'))]),
+        )
+        // The first column sits flush left; every other column keeps the
+        // single space that separates it from the `|`.
+        .with(Modify::new(Columns::first()).with(Padding::new(0, 1, 0, 0)));
+    table
+}
 
-    let pad = |cells: &mut dyn Iterator<Item = &str>| {
-        cells
-            .zip(&widths)
-            .map(|(cell, width)| format!("{:<width$}", cell, width = *width))
-            .collect::<Vec<_>>()
-            .join(" | ")
-            .trim_end()
-            .to_string()
-    };
-
-    println!("{}", pad(&mut headers.iter().copied()));
-    println!(
-        "{}",
-        widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("-|-")
-    );
-    for row in rows {
-        println!("{}", pad(&mut row.iter().map(String::as_str)));
+/// Print a table built by [`table`], without trailing whitespace on any row.
+pub fn print_table(table: &Table) {
+    for line in table.to_string().lines() {
+        println!("{}", line.trim_end());
     }
 }

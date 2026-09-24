@@ -16,6 +16,8 @@ use std::sync::Arc;
 use inquire::{Select, MultiSelect};
 use crazyflie_lib::Value;
 use anyhow::{bail, Result};
+use tabled::settings::{object::Columns, Alignment, Modify};
+use tabled::Tabled;
 
 pub mod error;
 
@@ -75,6 +77,19 @@ fn single_explicit_target_for_bare_bin(
     }
 
     Some(target.to_string())
+}
+
+/// One row of `mem list`.
+#[derive(Tabled)]
+struct MemoryRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "Type")]
+    memory_type: String,
+    #[tabled(rename = "Size")]
+    size: String,
+    #[tabled(rename = "Serial")]
+    serial: String,
 }
 
 fn unsupported_flash_targets(selected: &[String]) -> Vec<String> {
@@ -1055,13 +1070,25 @@ async fn run() -> Result<()> {
                             ]);
                         }
                     } else {
-                        println!("Memories:");
-                        for mem in memory {
-                          let memory_serial = mem.serial.as_ref()
-                            .map(|s| format!(" (0x{})", s.iter().map(|b| format!("{:02X}", b)).collect::<String>()))
-                            .unwrap_or_default();
-                          println!("[{}] {:?} size={}k (0x{:x}/{}){}", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size, memory_serial);
-                        }
+                        let rows: Vec<MemoryRow> = memory
+                            .iter()
+                            .map(|mem| MemoryRow {
+                                id: mem.memory_id.to_string(),
+                                memory_type: format!("{:?}", mem.memory_type),
+                                size: format!("{} (0x{:x})", mem.size, mem.size),
+                                serial: mem
+                                    .serial
+                                    .as_ref()
+                                    .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                    .unwrap_or_default(),
+                            })
+                            .collect();
+
+                        // The ID is a short number, so right-aligning it keeps
+                        // the column tidy next to the wider type names.
+                        let mut table = utils::display::table(&rows);
+                        table.with(Modify::new(Columns::one(0)).with(Alignment::right()));
+                        utils::display::print_table(&table);
                     }
 
 

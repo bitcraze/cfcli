@@ -13,13 +13,13 @@ cfcli log list
 This will produce an output similar to this:
 
 ```text
-Name                           | Type 
--------------------------------|------
-DTR_P2P.rx_state               | U8
-DTR_P2P.tx_state               | U8
-acc.x                          | F32
-acc.y                          | F32
-acc.z                          | F32
+Name             | Type
+-----------------+------
+DTR_P2P.rx_state | U8
+DTR_P2P.tx_state | U8
+acc.x            | F32
+acc.y            | F32
+acc.z            | F32
 activeMarker.btSns             | U8
 activeMarker.i2cOk             | U8
 baro.asl                       | F32

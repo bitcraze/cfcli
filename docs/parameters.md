@@ -26,12 +26,12 @@ cfcli param list
 This will produce an output similar to this:
 
 ```text
-Name                           | Access | Persistent | Value/Stored
--------------------------------|--------|------------|------------
-activeMarker.back              |   RW   | Yes        | U8(1)
-activeMarker.front             |   RW   | Stored     | U8(3)/U8(3)
-commander.enHighLevel          |   RW   |            | U8(0)
-firmware.revision0             |   RO   |            | U16(14906)
+Name                  | Access | Persistent | Value/Stored
+----------------------+--------+------------+--------------
+activeMarker.back     |   RW   | Yes        | U8(1)
+activeMarker.front    |   RW   | Stored     | U8(3)/U8(3)
+commander.enHighLevel |   RW   |            | U8(0)
+firmware.revision0    |   RO   |            | U16(14906)
 ...
 ```
 
@@ -82,10 +82,10 @@ cfcli param get ring.effect,activeMarker.back
 The output includes persistent storage information for each parameter:
 
 ```text
-Name                           | Access | Persistent | Default         | Stored Value    | Value
--------------------------------|--------|------------|-----------------|-----------------|------
-ring.effect                    |   RW   | No         | U8(0)           |                 | U8(6)
-activeMarker.back              |   RW   | Yes        | U8(1)           | U8(3)           | U8(3)
+Name              | Access | Persistent | Default | Stored Value | Value
+------------------+--------+------------+---------+--------------+-------
+ring.effect       |   RW   | No         | U8(0)   |              | U8(6)
+activeMarker.back |   RW   | Yes        | U8(1)   | U8(3)        | U8(3)
 ```
 
 The `Persistent` column shows whether a value is stored in EEPROM (`Yes`/`No`),
