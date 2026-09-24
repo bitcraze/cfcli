@@ -61,7 +61,7 @@ crazyflie-link = { version = "0.5.1", default-features = false }
 # TODO: Return to a crates.io version before merging this PR.
 crazyflie-lib = {
     git = "https://github.com/bitcraze/crazyflie-lib-rs",
-    rev = "e7e1b594d4d015c06d6ba066a516199450aef69a",
+    rev = "20e817914c4a70f1835bf2ad450f821781145dc7",
     default-features = false,
 }
 crazyradio = { version = "0.7.0", features = ["async"] }

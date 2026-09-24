@@ -722,7 +722,7 @@ dependencies = [
 [[package]]
 name = "crazyflie-lib"
 version = "0.8.1"
-source = "git+https://github.com/bitcraze/crazyflie-lib-rs?rev=e7e1b594d4d015c06d6ba066a516199450aef69a#e7e1b594d4d015c06d6ba066a516199450aef69a"
+source = "git+https://github.com/bitcraze/crazyflie-lib-rs?rev=20e817914c4a70f1835bf2ad450f821781145dc7#20e817914c4a70f1835bf2ad450f821781145dc7"
 dependencies = [
  "async-broadcast",
  "async-stream",
@@ -734,7 +734,6 @@ dependencies = [
  "futures-util",
  "half",
  "hex",
- "libc",
  "num_enum",
  "serde",
  "serde_json",
