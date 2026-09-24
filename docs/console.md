@@ -1,8 +1,7 @@
 # Crazyflie console
 
-This module provides access to the Crazyflie console.
-
-The legacy Crazyflie console and any sourced consoles are selected separately.
+Use `cfcli console` to read output from the Crazyflie's local console or from
+a source advertised by protocol-13 firmware, such as the Camera Deck.
 Running `cfcli console` without source options keeps the legacy behavior.
 
 ## Show console prints
@@ -38,10 +37,13 @@ Select one source by its exact, case-sensitive path:
 cfcli console --source deck:bcCam
 ```
 
-The command first replays the source history retained for this connection and
-then continues with live output. Formatting and `--no-format` behave like the
-legacy console. Only one source can be selected at a time in this first
-implementation; concurrent multi-source output may be added later.
+The command enables the source, replays output already received for it, and
+then continues with live output. Replay may include output from a previous
+connection if the library received it before catalog discovery. The library
+keeps up to 64 KiB of early packets and drops the oldest packets when full.
+Packets lost over radio cannot be recovered. Formatting and `--no-format`
+behave like the legacy console. Only one source can be selected at a time in
+this first implementation; concurrent multi-source output may be added later.
 
 If a requested source does not exist, cfcli exits with resource-not-found code
 20 and reports the available paths.
