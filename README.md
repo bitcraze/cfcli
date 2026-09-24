@@ -85,6 +85,7 @@ Commands:
   cr        Crazyradio operations (sniffer, etc.)
   debug     Debugging utilities (assert info dumps, etc.)
   lh        Lighthouse positioning system configuration
+  deck      Decks attached to the Crazyflie
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -166,6 +167,7 @@ For a more indepth view on how to use the different commands, have a look at the
 
 * [Bootloader](/docs/bootload.md)
 * [Console](/docs/console.md)
+* [Decks](/docs/deck.md)
 * [High-Level Commander](/docs/high-level-commander.md)
 * [Lighthouse Positioning System](/docs/lighthouse.md)
 * [Loco Positioning System](/docs/loco.md)
@@ -214,8 +216,8 @@ prompt) a few flags make the output predictable:
   intended way to stop them and the command exits **0**. For all other
   commands a timeout means the command got stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
-  `param list`/`get`, `log list`/`print`, `mem list`, `platform info`). Other
-  commands ignore the flag.
+  `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
+  `platform info`). Other commands ignore the flag.
 
 Exit codes:
 

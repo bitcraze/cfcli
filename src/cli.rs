@@ -339,6 +339,12 @@ enum Commands {
         command: LighthouseCommands,
     },
 
+    /// Decks attached to the Crazyflie
+    Deck {
+        #[clap(subcommand)]
+        command: DeckCommands,
+    },
+
     /// Generate a shell completion script (printed to stdout)
     Completions {
         /// Shell to generate the completion script for
@@ -573,6 +579,12 @@ enum ParamCommands {
     Store(VariableName),
     /// Clear a stored parameter value from EEPROM (reverts to firmware default)
     Clear(VariableName),
+}
+
+#[derive(Debug, Subcommand)]
+enum DeckCommands {
+    /// List the attached decks with their revision and serial number
+    List,
 }
 
 #[derive(Debug, Subcommand)]
