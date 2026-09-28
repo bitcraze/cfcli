@@ -339,6 +339,12 @@ enum Commands {
         command: LighthouseCommands,
     },
 
+    /// Decks attached to the Crazyflie
+    Deck {
+        #[clap(subcommand)]
+        command: DeckCommands,
+    },
+
     /// Generate a shell completion script (printed to stdout)
     Completions {
         /// Shell to generate the completion script for
@@ -576,6 +582,12 @@ enum ParamCommands {
 }
 
 #[derive(Debug, Subcommand)]
+enum DeckCommands {
+    /// List the attached decks with their revision and serial number
+    List,
+}
+
+#[derive(Debug, Subcommand)]
 enum UtilCommands {
     /// Utilities for the deck controller
     DeckCtrl {
@@ -752,6 +764,8 @@ enum MemoryCommands {
     Read(ReadMemoryParameters),
     /// Write a list of values to memory
     Write(WriteMemoryParameters),
+    /// Read memory back and compare it against the expected data
+    Verify(VerifyMemoryParameters),
     /// Display memory contents in a human-readable format
     Display(SelectMemoryParameters),
     /// Erase a memory
@@ -825,6 +839,50 @@ struct TrajectoryDisplayParameters {
 enum LocoCommands {
     /// Display Loco Positioning System anchor information
     Display,
+    /// Anchor position configuration
+    Config {
+        #[clap(subcommand)]
+        command: LocoConfigCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LocoConfigCommands {
+    /// Display anchor positions in human-readable form
+    Display(LocoDisplayParameters),
+    /// Read anchor positions as YAML (to file or stdout)
+    Read(LocoReadParameters),
+    /// Write anchor positions from YAML (from file or stdin) to the anchors
+    Write(LocoWriteParameters),
+}
+
+#[derive(Debug, Args)]
+struct LocoDisplayParameters {
+    /// YAML file to display (reads from the Crazyflie if omitted)
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LocoReadParameters {
+    /// YAML file to write anchor positions to (writes to stdout if omitted)
+    #[clap(long, short = 'o', value_hint = ValueHint::FilePath)]
+    output: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LocoWriteParameters {
+    /// YAML file to read anchor positions from (reads stdin if omitted)
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+
+    /// Send the positions without reading them back from the anchors
+    #[clap(long)]
+    no_verify: bool,
+
+    /// Seconds to keep resending until every anchor confirms its new position
+    #[clap(long, default_value_t = 15)]
+    verify_timeout: u64,
 }
 
 #[derive(Debug, Subcommand)]
@@ -849,6 +907,7 @@ enum HlCommands {
 }
 
 #[derive(Debug, Args)]
+#[command(allow_negative_numbers = true)]
 struct HlTakeoffParameters {
     /// Target height in meters
     #[clap(long, short = 'z', default_value = "0.5")]
@@ -862,6 +921,7 @@ struct HlTakeoffParameters {
 }
 
 #[derive(Debug, Args)]
+#[command(allow_negative_numbers = true)]
 struct HlLandParameters {
     /// Target height in meters (typically 0.0)
     #[clap(long, short = 'z', default_value = "0.0")]
@@ -875,6 +935,7 @@ struct HlLandParameters {
 }
 
 #[derive(Debug, Args)]
+#[command(allow_negative_numbers = true)]
 struct HlGotoParameters {
     /// Target position as x,y,z (comma-separated)
     #[clap(value_parser = parse_position, allow_hyphen_values = true)]
@@ -934,6 +995,29 @@ struct WriteMemoryParameters {
     #[clap(long, short = 'd', value_delimiter = ',', value_parser=maybe_hex::<u8>)]
     data: Option<Vec<u8>>,
     /// File to read raw binary data from
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("expected")
+        .required(true)
+        .multiple(false)
+        .args(&["data", "input"])
+))]
+struct VerifyMemoryParameters {
+    /// Memory to verify: numeric ID, type name (e.g. DeckCtrlDFU),
+    /// or type with instance index (e.g. DeckCtrlDFU:0)
+    #[clap(value_parser = parse_memory_ref)]
+    mem: MemoryRef,
+    /// Offset in bytes to start verifying at
+    #[clap(long, short = 's', value_parser = maybe_hex::<usize>)]
+    offset: usize,
+    /// Expected data (comma-separated list of bytes)
+    #[clap(long, short = 'd', value_delimiter = ',', value_parser=maybe_hex::<u8>)]
+    data: Option<Vec<u8>>,
+    /// File holding the expected raw binary data
     #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
     input: Option<String>,
 }

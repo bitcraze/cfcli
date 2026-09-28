@@ -1,7 +1,17 @@
 use anyhow::Result;
 use crazyflie_lib::Crazyflie;
 use std::io::Write;
-use crate::utils::display::{csv_row, value_to_csv_string};
+use crate::utils::display::{csv_row, print_table, table, value_to_csv_string};
+use tabled::Tabled;
+
+/// One row of `log list`.
+#[derive(Tabled)]
+struct LogVariable {
+  #[tabled(rename = "Name")]
+  name: String,
+  #[tabled(rename = "Type")]
+  var_type: String,
+}
 
 pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
   if csv {
@@ -11,12 +21,12 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
       csv_row(&[&name, &format!("{:?}", var_type)]);
     }
   } else {
-    println!("{0: <30} | {1: <5}", "Name", "Type");
-    println!("{:-<30}-|-{:-<5}", "", "");
+    let mut rows = Vec::new();
     for name in cf.log.names() {
       let var_type = cf.log.get_type(&name)?;
-      println!("{0: <30} | {1: <5?}", name, var_type);
+      rows.push(LogVariable { name, var_type: format!("{:?}", var_type) });
     }
+    print_table(&table(&rows));
   }
 
   Ok(())

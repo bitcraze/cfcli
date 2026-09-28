@@ -1,6 +1,15 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// Size of the product name field in the deck info page. The last byte is
+/// reserved for the null terminator, so [`NAME_MAX_CHARS`] characters fit.
+/// See the "Deck Information Format" table in the crazyflie-firmware docs
+/// (`docs/functional-areas/deckctrl_protocol.md`).
+pub const NAME_FIELD_LEN: usize = 15;
+
+/// Longest product name that can be stored in the deck info page.
+pub const NAME_MAX_CHARS: usize = NAME_FIELD_LEN - 1;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Partition {
   pub size: u16,
@@ -27,6 +36,33 @@ impl DeckConfig {
     Ok(cfg)
   }
 
+  /// The name as it will be stored in the info page: at most
+  /// [`NAME_MAX_CHARS`] bytes, backed off to a character boundary so the
+  /// field is always null terminated and stays valid UTF-8.
+  pub fn stored_name(&self) -> &str {
+    let mut end = std::cmp::min(NAME_MAX_CHARS, self.name.len());
+    while !self.name.is_char_boundary(end) {
+      end -= 1;
+    }
+    &self.name[..end]
+  }
+
+  /// A warning if [`DeckConfig::to_bytes`] can't store the name as written,
+  /// `None` if it fits. Reported to the user rather than rejected, so a
+  /// configuration that was already flashed still works.
+  pub fn name_warning(&self) -> Option<String> {
+    let stored_name = self.stored_name();
+    if stored_name == self.name {
+      return None;
+    }
+
+    Some(format!(
+      "name \"{}\" is too long and will be stored as \"{}\" - the info page name \
+       field holds {} characters plus a null terminator",
+      self.name, stored_name, NAME_MAX_CHARS
+    ))
+  }
+
   pub fn to_bytes(&self) -> Vec<u8> {
     let mut bytes = Vec::new();
     // Add magic
@@ -40,11 +76,10 @@ impl DeckConfig {
     // Add revision string length and bytes
     bytes.push(self.rev as u8);
     
-    // Add name as fixed 15 byte array, zero terminated
-    let name_bytes = self.name.as_bytes();
-    let mut name_array = [0u8; 15];
-    let copy_len = std::cmp::min(name_bytes.len(), 14); // Leave space for null terminator
-    name_array[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
+    // Add name as fixed size array, zero terminated
+    let name_bytes = self.stored_name().as_bytes();
+    let mut name_array = [0u8; NAME_FIELD_LEN];
+    name_array[..name_bytes.len()].copy_from_slice(name_bytes);
     bytes.extend_from_slice(&name_array);
 
     if let Some(mfg) = &self.manufactured {

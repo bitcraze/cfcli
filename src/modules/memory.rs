@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Result};
+use tabled::Tabled;
 use crazyflie_lib::{
     subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, OwMemory, DeckMemory, RawMemory},
     Crazyflie,
@@ -177,4 +178,89 @@ pub async fn erase(cf: &Crazyflie, memory: MemoryDevice) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// How many differing bytes `verify` lists before summarising the rest.
+/// Enough to spot a pattern (a shifted image, a stuck bit) without burying
+/// the summary line.
+const MAX_REPORTED_MISMATCHES: usize = 16;
+
+/// One differing byte, as reported by `mem verify`.
+#[derive(Tabled)]
+struct Mismatch {
+    #[tabled(rename = "Offset")]
+    offset: String,
+    #[tabled(rename = "Expected")]
+    expected: String,
+    #[tabled(rename = "Actual")]
+    actual: String,
+}
+
+/// Read `expected.len()` bytes back from `memory` at `offset` and compare.
+///
+/// Returns an error if any byte differs, so the command exits non-zero and a
+/// script can act on it; the differing bytes are listed first.
+pub async fn verify(
+    cf: &Crazyflie,
+    memory: MemoryDevice,
+    offset: usize,
+    expected: &[u8],
+) -> Result<()> {
+    let mem_id = memory.memory_id;
+
+    let raw = match cf.memory.open_memory::<RawMemory>(memory).await {
+        Some(Ok(m)) => m,
+        Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
+        None => bail!("Memory ID={} not found", mem_id),
+    };
+
+    let progress_bar = crate::utils::display::get_progressbar(expected.len(), None);
+    let pb = progress_bar.clone();
+    let actual = raw
+        .read_with_progress(offset, expected.len(), move |bytes_read, _total| {
+            pb.set_position(bytes_read as u64);
+        })
+        .await?;
+    crate::utils::display::finish_progress(
+        &progress_bar,
+        format!(
+            "Read back {} bytes from memory ID={} at offset 0x{:x}",
+            expected.len(),
+            mem_id,
+            offset
+        ),
+    );
+
+    let mismatches: Vec<Mismatch> = expected
+        .iter()
+        .zip(actual.iter())
+        .enumerate()
+        .filter(|(_, (want, got))| want != got)
+        .map(|(i, (want, got))| Mismatch {
+            offset: format!("0x{:08x}", offset + i),
+            expected: format!("0x{:02X}", want),
+            actual: format!("0x{:02X}", got),
+        })
+        .collect();
+
+    if mismatches.is_empty() {
+        println!(
+            "Verify OK: {} bytes at offset 0x{:x} match",
+            expected.len(),
+            offset
+        );
+        return Ok(());
+    }
+
+    let shown = mismatches.len().min(MAX_REPORTED_MISMATCHES);
+    crate::utils::display::print_table(&crate::utils::display::table(&mismatches[..shown]));
+    if mismatches.len() > shown {
+        println!("... and {} more", mismatches.len() - shown);
+    }
+
+    bail!(
+        "Verify FAILED: {} of {} bytes differ",
+        mismatches.len(),
+        expected.len()
+    )
 }

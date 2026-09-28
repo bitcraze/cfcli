@@ -16,6 +16,8 @@ use std::sync::Arc;
 use inquire::{Select, MultiSelect};
 use crazyflie_lib::Value;
 use anyhow::{bail, Result};
+use tabled::settings::{object::Columns, Alignment, Modify};
+use tabled::Tabled;
 
 pub mod error;
 
@@ -32,6 +34,7 @@ pub mod modules {
     pub mod crazyradio;
     pub mod debug;
     pub mod lighthouse;
+    pub mod deck;
 }
 
 pub mod utils {
@@ -74,6 +77,19 @@ fn single_explicit_target_for_bare_bin(
     }
 
     Some(target.to_string())
+}
+
+/// One row of `mem list`.
+#[derive(Tabled)]
+struct MemoryRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "Type")]
+    memory_type: String,
+    #[tabled(rename = "Size")]
+    size: String,
+    #[tabled(rename = "Serial")]
+    serial: String,
 }
 
 fn unsupported_flash_targets(selected: &[String]) -> Vec<String> {
@@ -848,6 +864,9 @@ async fn run() -> Result<()> {
                     match command {
                         DeckControlCommands::Bingen(params) => {
                             let deck_config = DeckConfig::from_yaml(params.input.clone())?;
+                            if let Some(warning) = deck_config.name_warning() {
+                                eprintln!("Warning: {}", warning);
+                            }
                             let bytes = deck_config.to_bytes();
                             
                             if let Some(output) = &params.output {
@@ -859,6 +878,9 @@ async fn run() -> Result<()> {
                         DeckControlCommands::Binflash(params) => {
                             println!("Generating deck binary from {}", params.input);
                             let deck_config = DeckConfig::from_yaml(params.input.clone())?;
+                            if let Some(warning) = deck_config.name_warning() {
+                                eprintln!("Warning: {}", warning);
+                            }
                             let bytes = deck_config.to_bytes();
 
                             let lister = Lister::new();
@@ -1048,13 +1070,25 @@ async fn run() -> Result<()> {
                             ]);
                         }
                     } else {
-                        println!("Memories:");
-                        for mem in memory {
-                          let memory_serial = mem.serial.as_ref()
-                            .map(|s| format!(" (0x{})", s.iter().map(|b| format!("{:02X}", b)).collect::<String>()))
-                            .unwrap_or_default();
-                          println!("[{}] {:?} size={}k (0x{:x}/{}){}", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size, memory_serial);
-                        }
+                        let rows: Vec<MemoryRow> = memory
+                            .iter()
+                            .map(|mem| MemoryRow {
+                                id: mem.memory_id.to_string(),
+                                memory_type: format!("{:?}", mem.memory_type),
+                                size: format!("{} (0x{:x})", mem.size, mem.size),
+                                serial: mem
+                                    .serial
+                                    .as_ref()
+                                    .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                    .unwrap_or_default(),
+                            })
+                            .collect();
+
+                        // The ID is a short number, so right-aligning it keeps
+                        // the column tidy next to the wider type names.
+                        let mut table = utils::display::table(&rows);
+                        table.with(Modify::new(Columns::one(0)).with(Alignment::right()));
+                        utils::display::print_table(&table);
                     }
 
 
@@ -1126,6 +1160,25 @@ async fn run() -> Result<()> {
 
                     utils::display::finish_progress(&progress_bar, format!("Wrote {} bytes to memory ID={} at offset 0x{:x}", data.len(), mem_id, var.offset));
 
+                }
+                MemoryCommands::Verify(var) => {
+                    let expected: Vec<u8> = match &var.data {
+                      Some(d) => d.clone(),
+                      None => {
+                        let input_file = match &var.input {
+                          Some(f) => f,
+                          None => bail!("No data provided to verify against, please provide data via --data or --input"),
+                        };
+                        std::fs::read(input_file)?
+                      }
+                    };
+
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+
+                    let memories = cf.memory.get_memories(None);
+                    let device = resolve_memory_ref(&memories, &var.mem)?.clone();
+
+                    modules::memory::verify(&cf, device, var.offset, &expected).await?;
                 }
                 MemoryCommands::Display(var) => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
@@ -1259,10 +1312,39 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Loco { command } => {
+            // Displaying a file needs no connection.
+            if let LocoCommands::Config { command: LocoConfigCommands::Display(params) } = &command {
+                if let Some(file_path) = &params.input {
+                    modules::lps::display_file(file_path)?;
+                    return Ok(());
+                }
+            }
+
             match command {
                 LocoCommands::Display => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::lps::display(&cf).await?;
+                    modules::lps::display(&cf, csv, non_interactive).await?;
+                }
+                LocoCommands::Config { command } => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+
+                    match command {
+                        LocoConfigCommands::Display(_) => {
+                            modules::lps::display(&cf, csv, non_interactive).await?;
+                        }
+                        LocoConfigCommands::Read(params) => {
+                            modules::lps::read(&cf, params.output.as_deref(), non_interactive).await?;
+                        }
+                        LocoConfigCommands::Write(params) => {
+                            modules::lps::write(
+                                &cf,
+                                params.input.as_deref(),
+                                !params.no_verify,
+                                std::time::Duration::from_secs(params.verify_timeout),
+                                non_interactive,
+                            ).await?;
+                        }
+                    }
                 }
             }
         }
@@ -1404,6 +1486,14 @@ async fn run() -> Result<()> {
                             modules::lighthouse::read(&cf, params.output.as_deref(), non_interactive).await?;
                         }
                     }
+                }
+            }
+        }
+        Commands::Deck { command } => {
+            match command {
+                DeckCommands::List => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    modules::deck::list(&cf, csv).await?;
                 }
             }
         }

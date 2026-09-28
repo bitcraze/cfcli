@@ -5,7 +5,39 @@ use crazyflie_lib::ValueType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use crate::error::CliError;
-use crate::utils::display::{csv_row, value_to_csv_string};
+use crate::utils::display::{csv_row, print_table, table, value_to_csv_string};
+use tabled::settings::{object::Columns, Alignment, Modify};
+use tabled::Tabled;
+
+/// One row of `param list`.
+#[derive(Tabled)]
+struct ParamListRow {
+    #[tabled(rename = "Name")]
+    name: String,
+    #[tabled(rename = "Access")]
+    access: String,
+    #[tabled(rename = "Persistent")]
+    persistent: String,
+    #[tabled(rename = "Value/Stored")]
+    value: String,
+}
+
+/// One row of `param get`, which also shows the persisted default and value.
+#[derive(Tabled)]
+struct ParamGetRow {
+    #[tabled(rename = "Name")]
+    name: String,
+    #[tabled(rename = "Access")]
+    access: String,
+    #[tabled(rename = "Persistent")]
+    persistent: String,
+    #[tabled(rename = "Default")]
+    default: String,
+    #[tabled(rename = "Stored Value")]
+    stored: String,
+    #[tabled(rename = "Value")]
+    value: String,
+}
 
 /// CSV header shared by `param list` and `param get` so consumers see the
 /// same columns from both commands. Ordering matters — the `print_csv_row`
@@ -62,9 +94,7 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{: <30} | {: <6} | {: <10} | {: <12}", "Name", "Access", "Persistent", "Value/Stored");
-    println!("{0:-<30}-|-{0:-<6}-|-{0:-<10}-|-{0:-<12}", "");
-
+    let mut rows = Vec::new();
     for name in cf.param.names() {
         let value: Value = cf.param.get(&name).await?;
         let writable = if cf.param.is_writable(&name)? { "RW" } else { "RO" };
@@ -81,8 +111,19 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
         } else {
             ("", format!("{:?}", value))
         };
-        println!("{: <30} | {: ^6} | {: <10} | {}", name, writable, persistent, value_str);
+        rows.push(ParamListRow {
+            name,
+            access: writable.to_string(),
+            persistent: persistent.to_string(),
+            value: value_str,
+        });
     }
+
+    // `Access` holds a short RW/RO flag; centring it keeps the column from
+    // looking ragged against the much wider name column.
+    let mut table = table(&rows);
+    table.with(Modify::new(Columns::one(1)).with(Alignment::center()));
+    print_table(&table);
 
     Ok(())
 }
@@ -98,9 +139,7 @@ pub async fn get(cf: &Crazyflie, names: &str, csv: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{: <30} | {: <6} | {: <10} | {: <15} | {: <15} | {: <6}", "Name", "Access", "Persistent", "Default", "Stored Value", "Value");
-    println!("{0:-<30}-|-{0:-<6}-|-{0:-<10}-|-{0:-<15}-|-{0:-<15}-|-{0:-<6}", "");
-
+    let mut rows = Vec::new();
     for name in names.split(',') {
         let value: Value = cf.param.get(name).await?;
         let writable = if cf.param.is_writable(&name)? { "RW" } else { "RO" };
@@ -122,8 +161,19 @@ pub async fn get(cf: &Crazyflie, names: &str, csv: bool) -> Result<()> {
             (String::new(), String::new(), String::new())
         };
 
-        println!("{: <30} | {: ^6} | {: <10} | {: <15} | {: <15} | {:?}", name, writable, persistent, default_str, stored_str, value);
+        rows.push(ParamGetRow {
+            name: name.to_string(),
+            access: writable.to_string(),
+            persistent,
+            default: default_str,
+            stored: stored_str,
+            value: format!("{:?}", value),
+        });
     }
+
+    let mut table = table(&rows);
+    table.with(Modify::new(Columns::one(1)).with(Alignment::center()));
+    print_table(&table);
 
     Ok(())
 }

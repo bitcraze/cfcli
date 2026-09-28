@@ -40,13 +40,14 @@ cfcli mem list
 This will show an output similar to the one below showing id, type, size and serial (if available):
 
 ```text
-Memories:
-[0] EEPROMConfig size=7k (0x1fff/8191)
-[1] Trajectory size=4k (0x1000/4096)
-[2] MemoryTester size=4k (0x1000/4096)
-[3] DeckCtrl size=2k (0x800/2048) (0x2D0043000550314854363720)
-[4] DeckMemory size=1310720k (0x50000000/1342177280)
-[5] DeckCtrlDFU size=96k (0x18000/98304)
+ID | Type         | Size                    | Serial
+---+--------------+-------------------------+--------------------------
+ 0 | EEPROMConfig | 8191 (0x1fff)           |
+ 1 | Trajectory   | 4096 (0x1000)           |
+ 2 | MemoryTester | 4096 (0x1000)           |
+ 3 | DeckCtrl     | 2048 (0x800)            | 2D0043000550314854363720
+ 4 | DeckMemory   | 1342177280 (0x50000000) |
+ 5 | DeckCtrlDFU  | 98304 (0x18000)         |
 ```
 
 For machine-readable output, add the global `--csv` flag:
@@ -120,6 +121,47 @@ cfcli mem write EEPROMConfig -s 0x20 -i memory_data.bin
 **Note**: The Crazyflie will most likely not like writing raw random data to memories, so
 when using this functionality make sure you know what you are doing!
 
+## Verifying memory
+
+`mem verify` takes the same arguments as `mem write`, but instead of writing it
+reads the memory back and compares it against the data you give it. Use it to
+confirm that a write landed, or that a memory still holds what you expect.
+
+```bash
+cfcli mem verify DeckMemory -s 0x10000000 -i color-led.bin
+```
+
+The number of bytes read back is the length of the expected data, so the same
+`--data` (`-d`) and `--input` (`-i`) arguments that wrote a region also verify
+exactly that region:
+
+```bash
+cfcli mem verify EEPROMConfig -s 0x20 --data 0x01,1,0x02
+```
+
+If everything matches the command prints a confirmation and exits **0**:
+
+```text
+Read back 32 bytes from memory ID=3 at offset 0x0
+Verify OK: 32 bytes at offset 0x0 match
+```
+
+If anything differs, the differing bytes are listed with their absolute
+offsets and the command exits **1**, so a script can act on it:
+
+```text
+Read back 32 bytes from memory ID=3 at offset 0x0
+Offset     | Expected | Actual
+-----------+----------+--------
+0x00000004 | 0xFF     | 0x00
+0x00000005 | 0xBD     | 0xBC
+0x00000014 | 0xEF     | 0x6F
+Error: Verify FAILED: 3 of 32 bytes differ
+```
+
+At most 16 differing bytes are listed; the rest are summarised as
+`... and N more`, with the total in the final line.
+
 ## Displaying memory
 
 This command is used to interpret and display the content of a memory. Note that not all
@@ -156,4 +198,11 @@ cfcli mem write DeckMemory -s 0x1004 --data 0x02
 cfcli mem write DeckMemory -s 0x10000000 -i color-led.bin
 # Switch the deck back into application mode
 cfcli mem write DeckMemory -s 0x1004 --data 0x01
+```
+
+To check that the firmware was written correctly, read it back and compare
+before leaving bootloader mode:
+
+```bash
+cfcli mem verify DeckMemory -s 0x10000000 -i color-led.bin
 ```
