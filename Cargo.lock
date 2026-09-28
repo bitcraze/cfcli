@@ -409,8 +409,6 @@ dependencies = [
  "colored",
  "confy",
  "crazyflie-lib",
- "crazyflie-link",
- "crazyradio 0.7.0",
  "env_logger",
  "flume",
  "futures",

@@ -22,7 +22,7 @@ pub trait StabilityTest {
     
     fn run<'a>(
         &'a self,
-        link_context: &'a crazyflie_link::LinkContext,
+        link_context: &'a crazyflie_lib::crazyflie_link::LinkContext,
         uri: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
@@ -37,7 +37,7 @@ impl StabilityTest for ReconnectTest {
     
     fn run<'a>(
         &'a self,
-        link_context: &'a crazyflie_link::LinkContext,
+        link_context: &'a crazyflie_lib::crazyflie_link::LinkContext,
         uri: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -58,7 +58,7 @@ impl StabilityTest for ParamReadReadWriteTest {
     
     fn run<'a>(
         &'a self,
-        link_context: &'a crazyflie_link::LinkContext,
+        link_context: &'a crazyflie_lib::crazyflie_link::LinkContext,
         uri: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -98,7 +98,7 @@ impl StabilityTest for LoggingTest {
     
     fn run<'a>(
         &'a self,
-        link_context: &'a crazyflie_link::LinkContext,
+        link_context: &'a crazyflie_lib::crazyflie_link::LinkContext,
         uri: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -134,7 +134,7 @@ impl StabilityTest for LoggingTest {
 }
 
 pub async fn stability(
-    link_context: &crazyflie_link::LinkContext,
+    link_context: &crazyflie_lib::crazyflie_link::LinkContext,
     uri: &str,
     iterations: u32,
 ) -> Result<()> {
@@ -148,7 +148,7 @@ pub async fn stability(
 }
 
 async fn run_stability_tests(
-    link_context: &crazyflie_link::LinkContext,
+    link_context: &crazyflie_lib::crazyflie_link::LinkContext,
     uri: &str,
     iterations: u32,
     tests: Vec<Box<dyn StabilityTest>>,
@@ -213,7 +213,7 @@ struct RebootTestResult {
 }
 
 pub async fn reboot(
-    link_context: &crazyflie_link::LinkContext,
+    link_context: &crazyflie_lib::crazyflie_link::LinkContext,
     uri: &str,
     toc_cache: ConfigTocCache,
     iterations: u32,
