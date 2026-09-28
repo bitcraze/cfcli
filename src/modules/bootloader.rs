@@ -66,6 +66,7 @@ enum BootloaderCommand {
 pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
     vec![
       "nrf51-fw",
+      "nrf51-bootloader+softdevice",
       "bcAI:esp-fw",
       "bcAI:gap8-fw",
       "bcCam:qcc",
@@ -501,7 +502,12 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
   let firmware_for_deckctrl = firmware_upgrade.get_firmware_for_deckctrl();
   let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
 
-  if !firmware_for_bootloader.is_empty() {
+  // The nRF51 bootloader+softdevice is flashed through the same link, so the
+  // bootloader has to be entered for it too even when it is all that was
+  // selected.
+  let has_nrf51_softdevice = firmware_upgrade.nrf51_softdevice().is_some();
+
+  if !firmware_for_bootloader.is_empty() || has_nrf51_softdevice {
       // stm32-fw / nrf51-fw flashing requires the radio bootloader handshake;
       // USB doesn't expose that path. Decks (handled below) work over USB.
       // In --cold mode the URI is ignored (we scan for the rescue bootloader),
@@ -513,6 +519,8 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
       }
       let bllink = restart_and_get_bllink(link_context, uri, cold).await?;
       let mut cfloader = cfloader::CFLoader::new(bllink).await?;
+
+      upgrade_nrf51_softdevice(&mut cfloader, &firmware_upgrade).await?;
       for firmware in firmware_for_bootloader {
         if firmware.target == "stm32" && firmware.file_type == "fw" {
           let stm32_info = cfloader.stm32_info();
@@ -664,4 +672,266 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
   }
 
   Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// nRF51 softdevice upgrade
+//
+// Release zips carry a combined nRF51 bootloader+softdevice binary, and the
+// nRF51 firmware declares which softdevice it needs (`requires: [sd-s130]`).
+// The bundle declares what it brings (`provides: [sd-s130]`). The device
+// reports which softdevice it is running through its bootloader's start page.
+//
+// Unlike cfloader we only ever move forwards: if the archive would take the
+// device back to an older softdevice or an older bootloader we refuse instead
+// of flashing, so we never need to carry an old softdevice of our own.
+// ---------------------------------------------------------------------------
+
+/// How long to wait for the nRF51 to come back after its bootloader has been
+/// replaced and it has been restarted.
+const NRF51_RESTART_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// nRF51 bootloader start page when running the S110 softdevice.
+const NRF51_START_PAGE_S110: u16 = 88;
+/// nRF51 bootloader start page when running the S130 softdevice.
+const NRF51_START_PAGE_S130: u16 = 108;
+
+const NRF51_SOFTDEVICE_S110: &str = "sd-s110";
+const NRF51_SOFTDEVICE_S130: &str = "sd-s130";
+
+/// Which softdevice the nRF51 is running, worked out from where its
+/// bootloader says the firmware area starts.
+fn nrf51_softdevice_from_start_page(start_page: u16) -> Option<&'static str> {
+    match start_page {
+        NRF51_START_PAGE_S110 => Some(NRF51_SOFTDEVICE_S110),
+        NRF51_START_PAGE_S130 => Some(NRF51_SOFTDEVICE_S130),
+        _ => None,
+    }
+}
+
+/// A dotted numeric version, as both the bootloader and the manifest use.
+///
+/// The bootloader derives its numbers from the git tag of its repository
+/// (`2024.10` becomes major 2024, minor 10), and the manifest names the same
+/// release, so the two are directly comparable. Missing components count as
+/// zero, so `2024.10` and `2024.10.0` are equal.
+fn parse_version(version: &str) -> Option<Vec<u32>> {
+    // A bootloader built from a dirty tree reports a `+dev` suffix.
+    let version = version.split('+').next().unwrap_or(version).trim();
+    if version.is_empty() {
+        return None;
+    }
+
+    version
+        .split('.')
+        .map(|part| part.parse::<u32>().ok())
+        .collect()
+}
+
+/// Compare two dotted versions, `None` if either can't be read as one.
+fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let (left, right) = (parse_version(left)?, parse_version(right)?);
+    let width = left.len().max(right.len());
+
+    for i in 0..width {
+        let l = left.get(i).copied().unwrap_or(0);
+        let r = right.get(i).copied().unwrap_or(0);
+        if l != r {
+            return Some(l.cmp(&r));
+        }
+    }
+
+    Some(std::cmp::Ordering::Equal)
+}
+
+/// What to do about the nRF51 bootloader+softdevice bundle before flashing
+/// the nRF51 firmware.
+#[derive(Debug, PartialEq, Eq)]
+enum SoftdeviceAction {
+    /// Nothing to do.
+    Skip,
+    /// Flash the bundle first.
+    Flash,
+}
+
+/// Decide whether the bundled bootloader+softdevice has to be flashed.
+///
+/// `current_sd` is what the device runs, `required_sd` what the archive's
+/// nRF51 firmware needs, `provided_sd` what the bundle brings. `current_bl`
+/// and `provided_bl` are the bootloader versions on the device and in the
+/// archive.
+///
+/// Returns an error rather than flashing whenever that would move the device
+/// backwards, or when the archive can't satisfy the firmware it ships.
+fn decide_softdevice_action(
+    has_bundle: bool,
+    current_sd: Option<&str>,
+    required_sd: Option<&str>,
+    provided_sd: Option<&str>,
+    current_bl: Option<&str>,
+    provided_bl: Option<&str>,
+) -> Result<SoftdeviceAction> {
+    if !has_bundle {
+        // Nothing to flash. If the firmware needs a softdevice the device
+        // isn't running, we can't help it.
+        if let (Some(required), Some(current)) = (required_sd, current_sd) {
+            if required != current {
+                bail!(CliError::InvalidValue(format!(
+                    "the nRF51 firmware needs {} but the device runs {}, and the archive has no \
+                     {} binary to upgrade it with",
+                    required, current, crate::utils::firmware::NRF51_SOFTDEVICE_TYPE
+                )));
+            }
+        }
+        return Ok(SoftdeviceAction::Skip);
+    }
+
+    // The firmware needs a softdevice that neither the device nor the bundle
+    // can give it.
+    if let Some(required) = required_sd {
+        let satisfied = current_sd == Some(required) || provided_sd == Some(required);
+        if !satisfied {
+            bail!(CliError::InvalidValue(format!(
+                "cannot flash nRF51: firmware needs {}, device runs {} and the archive provides {}",
+                required,
+                current_sd.unwrap_or("an unknown softdevice"),
+                provided_sd.unwrap_or("none"),
+            )));
+        }
+    }
+
+    // A softdevice change. We only go forwards, so S110 -> S130 is an
+    // upgrade and the other direction is refused.
+    if let (Some(current), Some(provided)) = (current_sd, provided_sd) {
+        if current != provided {
+            if current == NRF51_SOFTDEVICE_S130 && provided == NRF51_SOFTDEVICE_S110 {
+                bail!(CliError::InvalidValue(format!(
+                    "refusing to downgrade the nRF51 softdevice from {} to {}",
+                    current, provided
+                )));
+            }
+            return Ok(SoftdeviceAction::Flash);
+        }
+    }
+
+    // Same softdevice, so this comes down to the bootloader version.
+    match (current_bl, provided_bl) {
+        (Some(current), Some(provided)) => match compare_versions(provided, current) {
+            Some(std::cmp::Ordering::Greater) => Ok(SoftdeviceAction::Flash),
+            // A device that is already current, or newer than the archive,
+            // is left alone; so is one whose version we cannot read, rather
+            // than guessing at it.
+            Some(_) | None => Ok(SoftdeviceAction::Skip),
+        },
+        // The original bootloader doesn't report a version. Anything the
+        // archive offers is newer than that.
+        (None, Some(_)) => Ok(SoftdeviceAction::Flash),
+        _ => Ok(SoftdeviceAction::Skip),
+    }
+}
+
+/// Flash the nRF51 bootloader+softdevice bundle if the archive has one and
+/// the device needs it.
+///
+/// Returns a loader connected to whichever bootloader is running afterwards:
+/// the same one if nothing was flashed, or the newly flashed one, which has
+/// to be reconnected to.
+async fn upgrade_nrf51_softdevice(
+    cfloader: &mut cfloader::CFLoader,
+    firmware_upgrade: &FirmwareUpgrade,
+) -> Result<()> {
+    let bundle = firmware_upgrade.nrf51_softdevice();
+    let provided_sd = bundle.as_ref().and_then(|fw| fw.provides.first().cloned());
+    let provided_bl = bundle.as_ref().map(|fw| fw.version.clone());
+
+    let nrf51_info = cfloader.nrf51_info();
+    let current_sd = nrf51_softdevice_from_start_page(nrf51_info.flash_start());
+    let current_bl = nrf51_info.firmware_version().map(|v| v.to_string());
+
+    // Deciding needs the device to be in its bootloader, so by the time we
+    // can refuse an upgrade the Crazyflie has already been restarted into it.
+    // Nothing has been written at this point, so put it back into its
+    // firmware rather than leaving it stranded in the bootloader.
+    let decision = firmware_upgrade
+        .required_nrf51_softdevice()
+        .and_then(|required_sd| {
+            decide_softdevice_action(
+                bundle.is_some(),
+                current_sd,
+                required_sd.as_deref(),
+                provided_sd.as_deref(),
+                current_bl.as_deref(),
+                provided_bl.as_deref(),
+            )
+        });
+
+    let action = match decision {
+        Ok(action) => action,
+        Err(e) => {
+            if let Err(reset_error) = cfloader.reset_to_firmware().await {
+                eprintln!(
+                    "Warning: could not restart the Crazyflie into its firmware: {}",
+                    reset_error
+                );
+            }
+            return Err(e);
+        }
+    };
+
+    if action == SoftdeviceAction::Skip {
+        return Ok(());
+    }
+
+    let bundle = bundle.expect("a bundle is present whenever we decide to flash one");
+
+    let page_size = nrf51_info.page_size() as usize;
+    let flash_pages = nrf51_info.n_flash_page() as usize;
+    let firmware_start = nrf51_info.flash_start() as usize;
+
+    if page_size == 0 {
+        bail!("nRF51 bootloader reported a page size of 0");
+    }
+    let bundle_pages = bundle.data.len().div_ceil(page_size);
+    if bundle_pages > flash_pages {
+        bail!(
+            "{} is {} bytes, which does not fit in the nRF51's {} pages of {} bytes",
+            bundle.file_name,
+            bundle.data.len(),
+            flash_pages,
+            page_size
+        );
+    }
+
+    // Replacing the bootloader erases part of the firmware. Erase the
+    // firmware's first page up front so that a bootloader interrupted
+    // half-way can't jump into what is left of it, and stays in bootloader
+    // mode where we can reach it again.
+    cfloader
+        .flash_nrf51((firmware_start * page_size) as u32, &vec![0xFF; page_size])
+        .await?;
+
+    // The bundle lives at the very end of flash.
+    let start_page = flash_pages - bundle_pages;
+    let progress_bar = get_progressbar(bundle.data.len(), Some("nrf51-sd"));
+    let pb = progress_bar.clone();
+    let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
+        pb.set_position(bytes_written as u64);
+    };
+    cfloader
+        .flash_nrf51_with_progress(
+            (start_page * page_size) as u32,
+            &bundle.data,
+            Some(progress_callback),
+        )
+        .await?;
+    finish_progress(&progress_bar, "nRF51 bootloader+softdevice flashed successfully!");
+
+    // Restart so the bootloader we just wrote takes over, staying in the
+    // bootloader rather than starting the firmware we erased a page of. The
+    // link is connectionless, so it survives the restart; the cached info
+    // does not, since the new bootloader may report a different flash layout.
+    cfloader.reset_to_bootloader().await?;
+    cfloader.refresh_info(NRF51_RESTART_TIMEOUT).await?;
+
+    Ok(())
 }

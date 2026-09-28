@@ -1502,14 +1502,18 @@ async fn run() -> Result<()> {
                   let release = utils::flash_source::release(&source.release, non_interactive).await?;
                   let bin_with_selections = utils::flash_source::bins(&source.bin, &source.targets, non_interactive)?;
 
-                  let platform = if params.cold {
-                    // In cold-boot/recovery mode the Crazyflie is not running firmware,
-                    // so we cannot connect to query the platform. Use the --platform
-                    // flag or ask the user interactively.
+                  // The platform is normally read from the running firmware, but
+                  // that isn't always possible: in cold-boot/recovery mode there is
+                  // no firmware to ask, and a Crazyflie old enough to need a
+                  // softdevice upgrade speaks a CRTP version we can no longer
+                  // connect with. `--platform` covers both.
+                  let platform = if params.cold || params.platform.is_some() {
                     match &params.platform {
                       Some(p) => utils::flash_source::platform_name(p)?.to_string(),
                       None => {
                         require_arg(non_interactive, "--platform")?;
+                        // Only reachable in cold-boot mode; otherwise we would
+                        // have asked the firmware instead of coming here.
                         Select::new("Select the platform:", utils::flash_source::platform_names())
                           .prompt()
                           .map_err(|_| anyhow::anyhow!("No platform selected"))?
