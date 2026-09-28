@@ -1597,10 +1597,12 @@ async fn run() -> Result<()> {
                     Some(result)
                   };
 
-                  let platform = if params.cold {
-                    // In cold-boot/recovery mode the Crazyflie is not running firmware,
-                    // so we cannot connect to query the platform. Use the --platform
-                    // flag or ask the user interactively.
+                  // The platform is normally read from the running firmware, but
+                  // that isn't always possible: in cold-boot/recovery mode there is
+                  // no firmware to ask, and a Crazyflie old enough to need a
+                  // softdevice upgrade speaks a CRTP version we can no longer
+                  // connect with. `--platform` covers both.
+                  let platform = if params.cold || params.platform.is_some() {
                     let resolve_platform = |p: &str| -> Result<String> {
                       match p.to_lowercase().as_str() {
                         "cf21" => Ok("Crazyflie 2.1".to_string()),
@@ -1615,6 +1617,8 @@ async fn run() -> Result<()> {
                       Some(p) => resolve_platform(p)?,
                       None => {
                         require_arg(non_interactive, "--platform")?;
+                        // Only reachable in cold-boot mode; otherwise we would
+                        // have asked the firmware instead of coming here.
                         let platforms = vec![
                           "Crazyflie 2.1",
                           "Crazyflie 2.1 Brushless",

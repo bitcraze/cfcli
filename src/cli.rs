@@ -731,8 +731,11 @@ struct FlashParameters {
   /// Use coldboot (i.e rescue mode) to flash the device
   #[clap(long, default_value_t = false)]
   cold: bool,
-  /// Platform to use when cold-booting (skips connecting to running firmware).
-  /// If not specified in cold-boot mode, you will be prompted to select one.
+  /// Platform to flash for, instead of asking the running firmware.
+  ///
+  /// Needed when cold-booting, since there is no firmware to ask. Also useful
+  /// for a Crazyflie running firmware too old for the CLI to connect to,
+  /// which can still be bootloaded.
   ///
   /// Valid values: cf21, cf21bl, bolt11, flapper, tag
   #[clap(long, verbatim_doc_comment)]
