@@ -45,6 +45,12 @@ impl std::error::Error for CliError {}
 /// `crazyflie_lib::Error` variants to the appropriate bucket. Unclassified
 /// failures return `1`.
 pub fn classify_exit_code(err: &anyhow::Error) -> i32 {
+    // Downcasting the anyhow error itself, rather than the `chain()` items, is
+    // what finds a `CliError` attached with `.context()`: the chain only
+    // exposes anyhow's own wrapper type there, while this traverses contexts.
+    if let Some(cli) = err.downcast_ref::<CliError>() {
+        return cli.exit_code();
+    }
     for cause in err.chain() {
         if let Some(cli) = cause.downcast_ref::<CliError>() {
             return cli.exit_code();
@@ -66,4 +72,94 @@ pub fn classify_exit_code(err: &anyhow::Error) -> i32 {
         }
     }
     1
+}
+
+/// Extra guidance printed after the error message when the failure has a
+/// known way out. Walks the anyhow chain looking for typed errors we have
+/// concrete advice for; returns `None` when we have nothing useful to add.
+pub fn hint(err: &anyhow::Error) -> Option<String> {
+    for cause in err.chain() {
+        if let Some(crazyflie_lib::Error::ProtocolVersionNotSupported {
+            min_supported,
+            max_supported,
+            found,
+        }) = cause.downcast_ref::<crazyflie_lib::Error>()
+        {
+            // Firmware newer than this cfcli: updating the firmware would only
+            // make the gap worse, the CLI is the side that has to move.
+            if found > max_supported {
+                return Some(format!(
+                    "the firmware is newer than this cfcli (CRTP {} against a supported {}-{}).\n      \
+                     Update cfcli rather than the Crazyflie.",
+                    found, min_supported, max_supported
+                ));
+            }
+
+            // Firmware too old. We cannot ask it to reboot into its bootloader
+            // over CRTP, since that is exactly the link that just failed, so
+            // the bootloader has to be entered by hand and flashed cold.
+            return Some(
+                "the firmware is too old for this cfcli. It cannot be asked to reboot into\n      \
+                 its bootloader over a link that will not come up, so flash it cold:\n\n        \
+                 cfcli bootload flash --release --cold\n\n      \
+                 Power the Crazyflie off, then hold the power button for a few seconds\n      \
+                 until the blue LEDs blink to enter the bootloader before flashing."
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn protocol_error(found: u8) -> anyhow::Error {
+        // Built the same way `connect_cf` builds it, so the test also covers
+        // that the typed error survives the `CliError::Connection` context.
+        anyhow::Error::new(crazyflie_lib::Error::ProtocolVersionNotSupported {
+            min_supported: 12,
+            max_supported: 13,
+            found,
+        })
+        .context(CliError::Connection(
+            "connecting to usb://4A002B0007504B5957333720".to_string(),
+        ))
+    }
+
+    #[test]
+    fn old_firmware_is_pointed_at_a_cold_boot_flash() {
+        let hint = hint(&protocol_error(7)).expect("old firmware should get a hint");
+        assert!(hint.contains("cfcli bootload flash --release --cold"), "{}", hint);
+        assert!(hint.contains("too old for this cfcli"), "{}", hint);
+    }
+
+    #[test]
+    fn new_firmware_is_pointed_at_a_cfcli_update() {
+        let hint = hint(&protocol_error(20)).expect("new firmware should get a hint");
+        assert!(hint.contains("Update cfcli"), "{}", hint);
+        assert!(hint.contains("CRTP 20 against a supported 12-13"), "{}", hint);
+        assert!(!hint.contains("--cold"), "{}", hint);
+    }
+
+    #[test]
+    fn unrelated_errors_get_no_hint() {
+        let err = anyhow::Error::new(CliError::Connection("no USB Crazyflies found".to_string()));
+        assert!(hint(&err).is_none());
+    }
+
+    #[test]
+    fn connection_context_still_renders_the_underlying_error() {
+        assert_eq!(
+            format!("{:#}", protocol_error(7)),
+            "connection error: connecting to usb://4A002B0007504B5957333720: \
+             Protocol version not supported: supported range is 12-13, found 7"
+        );
+    }
+
+    #[test]
+    fn protocol_mismatch_still_exits_as_a_connection_error() {
+        assert_eq!(classify_exit_code(&protocol_error(7)), 10);
+    }
 }

@@ -15,7 +15,7 @@ use std::io::IsTerminal;
 use std::sync::Arc;
 use inquire::{Select, MultiSelect};
 use crazyflie_lib::Value;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
 
@@ -334,7 +334,7 @@ async fn connect_cf<'a>(
 ) -> Result<&'a crazyflie_lib::Crazyflie> {
     let start = if measure_connect_time { Some(std::time::Instant::now()) } else { None };
     let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache).await
-        .map_err(|e| CliError::Connection(format!("connecting to {}: {}", uri, e)))?;
+        .context(CliError::Connection(format!("connecting to {}", uri)))?;
     if let Some(s) = start {
         eprintln!("Connection time: {:.2?}", s.elapsed());
     }
@@ -408,6 +408,9 @@ async fn main() {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("Error: {:#}", e);
+            if let Some(hint) = error::hint(&e) {
+                eprintln!("Hint: {}", hint);
+            }
             error::classify_exit_code(&e)
         }
     };
