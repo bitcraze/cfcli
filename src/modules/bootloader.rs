@@ -60,6 +60,7 @@ pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
     vec![
       "nrf51-fw",
       "bcAI:esp-fw",
+      "bcAI:gap8-fw",
       "bcCam:qcc",
       "bcLighthouse4-fw",
       "stm32-fw",
