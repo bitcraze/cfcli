@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::Crazyflie;
-use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryType, RawMemory};
+use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryDevice, MemoryType, OwMemory, RawMemory};
 use tokio::time::{sleep, timeout, Duration};
 use crazyflie_lib::crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
@@ -22,6 +22,16 @@ const DECK_CTRL_DFU_CMD_OFFSET: usize = 0x03;
 const DECK_CTRL_DFU_CMD_ENTER_DFU: u8 = 0x01;
 const DECK_CTRL_DFU_CMD_ENTER_FIRMWARE: u8 = 0x02;
 const DECK_CTRL_DFU_RESET_DELAY_MS: u64 = 3000;
+
+// AI-deck identification, matching what the nRF51 checks at boot
+const AIDECK_VID: u8 = 0xBC;
+const AIDECK_PID: u8 = 0x12;
+const AIDECK_BOARD_NAME: &str = "bcAI";
+
+// Time between deck flashes for the Crazyflie to restart. The nRF51 delays
+// boot by an additional 5 s when an AI-deck is attached.
+const DECK_REBOOT_DELAY_MS: u64 = 3000;
+const AIDECK_BOOT_DELAY_MS: u64 = 5000;
 
 use cfloader::Bllink;
 
@@ -299,23 +309,29 @@ async fn get_flashable_firmware(cf: &Crazyflie, firmwares: &[Firmware]) -> Resul
       Ok(flashable_firmares)
 }
 
+/// Detect an AI-deck the same way the nRF51 does when deciding to delay boot:
+/// a valid 1-wire deck EEPROM with the Bitcraze VID, AI-deck PID and board name.
 async fn is_aideck_attached(cf: &Crazyflie) -> Result<bool> {
-    let memories = cf.memory.get_memories(Some(MemoryType::DeckMemory));
-    if !memories.is_empty() {
-      let deck_memory = match cf.memory.open_memory::<DeckMemory>(memories[0].clone()).await {
-        Some(Ok(deck)) => deck,
-        Some(Err(e)) => {
-          return Err(anyhow!("Error: {:?}", e));
-        }
-        None => {
-          bail!("DeckMemory not found");
-        }
+    let memories: Vec<MemoryDevice> = cf.memory.get_memories(Some(MemoryType::OneWire))
+      .into_iter()
+      .cloned()
+      .collect();
+
+    for device in memories {
+      // A memory that fails to parse (bad CRC etc) is skipped, as the nRF51 does
+      let ow = match cf.memory.open_memory::<OwMemory>(device).await {
+        Some(Ok(ow)) => ow,
+        _ => continue,
       };
 
-      let section = deck_memory.sections().iter().find(|s| s.name() == "bcAI:esp-fw");
-      if let Some(_section) = section {
+      let is_aideck = ow.vid() == AIDECK_VID
+        && ow.pid() == AIDECK_PID
+        && ow.elements().get("boardName").map(String::as_str) == Some(AIDECK_BOARD_NAME);
+      cf.memory.close_memory(ow).await?;
+
+      if is_aideck {
         return Ok(true);
-      } 
+      }
     }
 
     Ok(false)
@@ -498,9 +514,9 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
 
     let firmware_for_decks = get_flashable_firmware(&cf, &firmware_for_decks).await?;
     let delay = if is_aideck_attached(&cf).await? {
-      7000
+      DECK_REBOOT_DELAY_MS + AIDECK_BOOT_DELAY_MS
     } else {
-      3000
+      DECK_REBOOT_DELAY_MS
     };
     let mut flash_count_left = firmware_for_decks.len();
     cf.disconnect().await;
