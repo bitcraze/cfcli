@@ -114,28 +114,46 @@ async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo> {
     Err(anyhow!("Failed to get info"))
 }
 
-async fn reset_to_bootloader(link: &Connection) -> Result<String> {
-    let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
-    link.send_packet(packet).await?;
+/// Ask the nRF51 firmware for the address its bootloader will use (RESET_INIT)
+///
+/// The request or its answer can be lost, so RESET_INIT is sent again every
+/// 200 ms until it is answered, for up to 2 s. While waiting, the link keeps
+/// delivering other packets: with safelink off, every ACK without a payload
+/// arrives as a 0xFF packet, about one per millisecond. So the deadline and
+/// the resend are checked on every packet, never after a quiet period, which
+/// would never come.
+async fn request_bootloader_address(link: &Connection) -> Result<Vec<u8>> {
+    let reset_init: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut last_sent: Option<tokio::time::Instant> = None;
 
-    let mut new_address = Vec::new();
     loop {
-        let packet = tokio::select! {
-            result = link.recv_packet() => result?,
-            _ = sleep(Duration::from_millis(100)) => {
-              return Err(anyhow!("Disconnected: timeout waiting for response"));
-            }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            bail!("Disconnected: the nRF51 did not answer RESET_INIT within 2 s");
+        }
+        if last_sent.map_or(true, |sent| now - sent >= Duration::from_millis(200)) {
+            link.send_packet(reset_init.clone()).await?;
+            last_sent = Some(now);
+        }
+
+        let wait_until = (last_sent.unwrap() + Duration::from_millis(200)).min(deadline);
+        let Ok(packet) = tokio::time::timeout_at(wait_until, link.recv_packet()).await else {
+            continue;
         };
+        let packet = packet?;
         let data = packet.get_data();
-        if data.len() > 2 && data[0..2] == [TARGET_NRF51, 0xFF] {
-            new_address.push(0xb1);
-            for byte in data[2..6].iter().rev() {
-                // handle little-endian order
-                new_address.push(*byte);
-            }
-            break;
+        if data.len() > 5 && data[0..2] == [TARGET_NRF51, 0xFF] {
+            // 0xB1 followed by the four address bytes, sent little endian
+            let mut new_address = vec![0xb1];
+            new_address.extend(data[2..6].iter().rev());
+            return Ok(new_address);
         }
     }
+}
+
+async fn reset_to_bootloader(link: &Connection) -> Result<String> {
+    let new_address = request_bootloader_address(link).await?;
 
     for _ in 0..10 {
         let packet: Packet = vec![0xFF, TARGET_NRF51, 0xF0, 0x00].into();
@@ -155,27 +173,7 @@ async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>> 
     let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF, 0x05, 0x00].into();
     link.send_packet(packet).await?;
 
-    let packet: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
-    link.send_packet(packet).await?;
-
-    let mut new_address = Vec::new();
-    loop {
-        let packet = tokio::select! {
-            result = link.recv_packet() => result?,
-            _ = sleep(Duration::from_millis(100)) => {
-              return Err(anyhow!("Disconnected: timeout waiting for response"));
-            }
-        };
-        let data = packet.get_data();
-        if data.len() > 2 && data[0..2] == [TARGET_NRF51, 0xFF] {
-            new_address.push(0xb1);
-            for byte in data[2..6].iter().rev() {
-                // handle little-endian order
-                new_address.push(*byte);
-            }
-            break;
-        }
-    }
+    let new_address = request_bootloader_address(link).await?;
 
     for _ in 0..10 {
         let packet: Packet = vec![0xFF, TARGET_NRF51, 0xF0, 0x00].into();
