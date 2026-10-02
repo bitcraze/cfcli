@@ -425,6 +425,9 @@ struct ScanOptions {
     /// Radio address to scan on (5 byte hex, e.g. E7E7E7E7E7). Overrides settings.
     #[clap(value_parser)]
     address: Option<String>,
+    /// Connect to each USB-attached Crazyflie and print the radio URI from its config (nothing is saved)
+    #[clap(long, conflicts_with = "address")]
+    from_usb: bool,
 }
 
 #[derive(Debug, Args)]

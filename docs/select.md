@@ -45,7 +45,8 @@ the radio channel, speed, and address from the Crazyflie's EEPROM and construct
 a `radio://` URI.
 
 If zero or more than one USB Crazyflie is found, the command will exit with an
-error.
+error. To only print the radio URI without saving it, see
+[Radio URI of USB-attached Crazyflies](#radio-uri-of-usb-attached-crazyflies).
 
 ## Scan only
 
@@ -71,3 +72,25 @@ radio://0/80/2M/E7E7E7E7E7
 
 The first line is a header (`uri`); each subsequent line is one discovered URI.
 An empty result (just the header line) means no Crazyflies were found.
+
+### Radio URI of USB-attached Crazyflies
+
+Add `--from-usb` to connect to each USB-attached Crazyflie, read its radio
+configuration from the EEPROM and print the radio URI it can be reached on,
+without saving any selection:
+
+```bash
+cfcli scan --from-usb
+```
+
+```text
+> radio://0/90/2M/ABAD1DEA01 (usb://410050000551343036333233)
+```
+
+Unlike `select --from-usb` this works with any number of USB-attached
+Crazyflies. With `--csv` the output has one row per Crazyflie:
+
+```text
+usb_uri,radio_uri
+usb://410050000551343036333233,radio://0/90/2M/ABAD1DEA01
+```
