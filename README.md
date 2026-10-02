@@ -122,6 +122,14 @@ If you have a Crazyflie on a different address than the default you can specify 
 cfcli select E7E7E7E7E7
 ```
 
+If the Crazyflie is connected over USB you can read the radio URI from its configuration instead,
+either just printing it or selecting it directly:
+
+```text
+cfcli scan --from-usb
+cfcli select --from-usb
+```
+
 You can also configure persistent scan addresses and a connection timeout using the `settings` command:
 
 ```text

@@ -398,6 +398,54 @@ pub fn decode_address(address: &str) -> Result<[u8; 5]> {
     }
 }
 
+/// List the URIs of all USB-attached Crazyflies. USB devices are found
+/// regardless of radio address, so scanning on the default one is enough.
+async fn scan_usb(link_context: &crazyflie_lib::crazyflie_link::LinkContext) -> Result<Vec<String>> {
+    let address = decode_address("E7E7E7E7E7")?;
+    let found = link_context.scan(address).await?;
+    Ok(found.into_iter().filter(|uri| uri.starts_with("usb://")).collect())
+}
+
+/// Connect to a USB-attached Crazyflie, read the radio channel, speed and
+/// address from its EEPROM config and return the matching radio URI. The
+/// USB connection is closed again before returning.
+async fn radio_uri_from_usb(
+    holder: &mut Option<crazyflie_lib::Crazyflie>,
+    link_context: &crazyflie_lib::crazyflie_link::LinkContext,
+    usb_uri: &str,
+    toc_cache: ConfigTocCache,
+    measure_connect_time: bool,
+    preserve_console: bool,
+) -> Result<String> {
+    let cf = connect_cf(holder, link_context, usb_uri, toc_cache, measure_connect_time).await?;
+    let radio_uri = read_radio_uri(cf).await;
+    save_and_disconnect(cf, preserve_console).await;
+    holder.take();
+    radio_uri
+}
+
+async fn read_radio_uri(cf: &crazyflie_lib::Crazyflie) -> Result<String> {
+    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
+    if memories.len() != 1 {
+        bail!("No EEPROMConfig memory found or more than one ({})", memories.len());
+    }
+
+    let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
+        Some(Ok(m)) => m,
+        Some(Err(e)) => bail!("Could not read EEPROM config: {}", e),
+        None => bail!("No EEPROM memory found"),
+    };
+
+    let speed_str = match eeprom.get_radio_speed() {
+        RadioSpeed::R250Kbps => "250K",
+        RadioSpeed::R1Mbps => "1M",
+        RadioSpeed::R2Mbps => "2M",
+    };
+    let address_str = eeprom.get_radio_address().iter().map(|b| format!("{:02X}", b)).collect::<String>();
+
+    Ok(format!("radio://0/{}/{}/{}", eeprom.get_radio_channel(), speed_str, address_str))
+}
+
 #[tokio::main]
 async fn main() {
     rustls::crypto::aws_lc_rs::default_provider()
@@ -578,6 +626,23 @@ async fn run() -> Result<()> {
     match &args.command {
         // Handled before connection setup via early return in run().
         Commands::Completions { .. } => unreachable!(),
+        Commands::Scan(scan_options) if scan_options.from_usb => {
+            let mut found = Vec::new();
+            for usb_uri in scan_usb(&link_context).await? {
+                let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, &usb_uri, toc_cache.clone(), args.debug, preserve_console).await?;
+                found.push((usb_uri, radio_uri));
+            }
+            if csv {
+                println!("usb_uri,radio_uri");
+                for (usb_uri, radio_uri) in &found {
+                    utils::display::csv_row(&[usb_uri, radio_uri]);
+                }
+            } else {
+                for (usb_uri, radio_uri) in &found {
+                    println!("> {} ({})", radio_uri, usb_uri);
+                }
+            }
+        }
         Commands::Scan(scan_options) => {
             let addresses = match &scan_options.address {
                 Some(addr) => vec![addr.clone()],
@@ -605,11 +670,7 @@ async fn run() -> Result<()> {
         }
         Commands::Select(select_options) => {
             let selected_uri = if select_options.from_usb {
-                // Scan for USB-connected Crazyflies
-                // USB scan only needs one address since USB devices are found regardless
-                let address = decode_address("E7E7E7E7E7")?;
-                let all_found = link_context.scan(address).await?;
-                let found: Vec<_> = all_found.into_iter().filter(|uri| uri.starts_with("usb://")).collect();
+                let found = scan_usb(&link_context).await?;
 
                 if found.is_empty() {
                     bail!(CliError::Connection("no USB Crazyflies found".to_string()));
@@ -621,40 +682,7 @@ async fn run() -> Result<()> {
                 let usb_uri = &found[0];
                 println!("Found Crazyflie on USB: {}", usb_uri);
 
-                // Connect via USB and read EEPROM config
-                let cf = connect_cf(&mut connected_cf, &link_context, usb_uri, toc_cache, args.debug).await?;
-
-                let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
-                if memories.len() != 1 {
-                    bail!("No EEPROMConfig memory found or more than one ({})", memories.len());
-                }
-
-                let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
-                    Some(Ok(m)) => m,
-                    Some(Err(e)) => bail!("Could not read EEPROM config: {}", e),
-                    None => bail!("No EEPROM memory found"),
-                };
-
-                let channel = eeprom.get_radio_channel();
-                let address = eeprom.get_radio_address();
-                let speed = eeprom.get_radio_speed();
-
-                let speed_str = match speed {
-                    RadioSpeed::R250Kbps => "250K",
-                    RadioSpeed::R1Mbps => "1M",
-                    RadioSpeed::R2Mbps => "2M",
-                };
-
-                let address_str = address.iter().map(|b| format!("{:02X}", b)).collect::<String>();
-                let radio_uri = format!("radio://0/{}/{}/{}", channel, speed_str, address_str);
-
-                println!("Read radio config: channel={}, speed={}, address={}", channel, speed, address_str);
-
-                // Disconnect mid-command since we only needed this connection to read EEPROM
-                save_and_disconnect(connected_cf.as_ref().unwrap(), preserve_console).await;
-                connected_cf.take();
-
-                radio_uri
+                radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache, args.debug, preserve_console).await?
             } else {
                 // Scan for Crazyflies on configured addresses
                 let addresses = match &select_options.address {
