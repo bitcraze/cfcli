@@ -38,6 +38,12 @@ use cfloader::Bllink;
 const TARGET_STM32: u8 = 0xFF;
 const TARGET_NRF51: u8 = 0xFE;
 
+// The STM32 ROM bootloader on USB, and how long it gets to show up there
+// after the nRF51 has restarted the STM32 into it
+const STM32_DFU_VID: u16 = 0x0483;
+const STM32_DFU_PID: u16 = 0xDF11;
+const STM32_DFU_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug)]
 struct BootloaderInfo {
     id: u8,
@@ -54,6 +60,7 @@ struct BootloaderInfo {
 enum BootloaderCommand {
   ResetInit = 0xFF,
   Reset = 0xF0,
+  Stm32Dfu = 0x07,
 }
 
 pub fn get_hardcoded_list_of_targets() -> Vec<&'static str> {
@@ -268,6 +275,41 @@ pub async fn print_bootloader_info(link_context: &LinkContext, cold: bool, uri: 
   link.close().await;
 
   Ok(())
+}
+
+/// Restart the STM32 into its ROM bootloader, so it can be flashed over USB DFU
+///
+/// The nRF51 power-cycles the STM32 with BOOT0 high, as a long press on the
+/// power button from off does. The command is handled by the nRF51 itself,
+/// which only receives it over the radio: the STM32 firmware does not pass it
+/// on from USB. Returns whether the STM32 then showed up on USB in DFU mode.
+pub async fn stm32_dfu(link_context: &LinkContext, uri: &str) -> Result<bool> {
+  if uri.starts_with("usb://") {
+    bail!("Restarting the STM32 into DFU needs a radio URI, the nRF51 does not get this command over USB");
+  }
+
+  let link = link_context.open_link(uri).await?;
+  send_command(&link, BootloaderCommand::Stm32Dfu, None).await?;
+
+  let deadline = tokio::time::Instant::now() + STM32_DFU_ENUMERATION_TIMEOUT;
+  while tokio::time::Instant::now() < deadline {
+    sleep(Duration::from_millis(200)).await;
+    if stm32_dfu_present()? {
+      return Ok(true);
+    }
+  }
+
+  Ok(false)
+}
+
+fn stm32_dfu_present() -> Result<bool> {
+  for device in rusb::devices()?.iter() {
+    let desc = device.device_descriptor()?;
+    if desc.vendor_id() == STM32_DFU_VID && desc.product_id() == STM32_DFU_PID {
+      return Ok(true);
+    }
+  }
+  Ok(false)
 }
 
 pub async fn reboot(link_context: &LinkContext, uri: &str,) -> Result<()> {

@@ -55,3 +55,23 @@ This will power off the Crazyflie (same as pressing the power button):
 ```bash
 cfcli platform power-off
 ```
+
+## Restart the STM32 into USB DFU
+
+This restarts the STM32 into its ROM bootloader, the same as holding the power button from off,
+so it can be flashed over USB with a DFU tool such as `dfu-util`:
+
+```bash
+cfcli platform dfu
+```
+
+The command is handled by the nRF51, so the Crazyflie has to be selected with a radio URI, and its
+nRF51 firmware has to support it. With the Crazyflie connected over USB, `cfcli` waits for the STM32
+to show up in DFU mode (`0483:df11`):
+
+```text
+STM32 is in USB DFU mode (0483:df11)
+When done, restart it into its firmware with: cfcli platform reboot
+```
+
+Once flashing is done, `cfcli platform reboot` restarts the STM32 into its firmware.

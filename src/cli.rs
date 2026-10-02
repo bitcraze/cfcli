@@ -787,6 +787,11 @@ enum PlatformCommands {
     Sleep,
     /// Wake up the platform
     Wakeup,
+    /// Restart the STM32 into its USB DFU bootloader (radio URI only)
+    ///
+    /// Needs an nRF51 firmware that supports it. Flash with dfu-util, then
+    /// return to the firmware with `cfcli platform reboot`.
+    Dfu,
 }
 
 #[derive(Debug, Subcommand)]
