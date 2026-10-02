@@ -449,8 +449,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 [[package]]
 name = "cfloader"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04c1d79352992d3d69fe3984201d0d4c6fa5f67a72b18362e674e9370a595be5"
+source = "git+https://github.com/bitcraze/cfloader-rs?branch=evoggy%2Fnrf51-bootloader-version#6cfa3c549fdc4269437c7b7c5528f6039f2c0d80"
 dependencies = [
  "anyhow",
  "clap",
