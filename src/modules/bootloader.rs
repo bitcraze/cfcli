@@ -816,6 +816,10 @@ fn decide_softdevice_action(
 
     // Same softdevice, so this comes down to the bootloader version.
     match (current_bl, provided_bl) {
+        // A bundle given with --bin has no release version, only "custom".
+        // It was asked for explicitly, so it is flashed whatever the device
+        // runs; this is how a development bootloader gets onto a Crazyflie.
+        (_, Some(provided)) if parse_version(provided).is_none() => Ok(SoftdeviceAction::Flash),
         (Some(current), Some(provided)) => match compare_versions(provided, current) {
             Some(std::cmp::Ordering::Greater) => Ok(SoftdeviceAction::Flash),
             // A device that is already current, or newer than the archive,
@@ -934,4 +938,28 @@ async fn upgrade_nrf51_softdevice(
     cfloader.refresh_info(NRF51_RESTART_TIMEOUT).await?;
 
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const S130: Option<&str> = Some(NRF51_SOFTDEVICE_S130);
+
+    #[test]
+    fn raw_bundle_is_flashed_over_a_versioned_bootloader() {
+        let action = decide_softdevice_action(true, S130, None, None, Some("2024.10.0"), Some("custom")).unwrap();
+        assert_eq!(action, SoftdeviceAction::Flash);
+    }
+
+    #[test]
+    fn release_bundle_is_skipped_when_bootloader_is_current() {
+        let action = decide_softdevice_action(true, S130, Some(NRF51_SOFTDEVICE_S130), S130, Some("2024.10.0"), Some("2024.10")).unwrap();
+        assert_eq!(action, SoftdeviceAction::Skip);
+    }
+
+    #[test]
+    fn release_bundle_is_flashed_when_newer() {
+        let action = decide_softdevice_action(true, S130, Some(NRF51_SOFTDEVICE_S130), S130, Some("2024.10.0"), Some("2026.08")).unwrap();
+        assert_eq!(action, SoftdeviceAction::Flash);
+    }
 }
