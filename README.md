@@ -68,25 +68,27 @@ Crazyflie command-line client
 Usage: cfcli [OPTIONS] <COMMAND>
 
 Commands:
-  log       Access to the log subsystem
-  param     Access to the parameter subsystem
-  mem       Access to the memory subsystem
-  config    Configure the Crazyflie (radio settings, etc)
-  util      Various supporting utilities for the Crazyflie and its ecosystem
-  bootload  Bootload the Crazyflie and decks
-  test      Run tests with the Crazyflie
-  platform  Access platform functionality
-  scan      List the Crazyflies found while scanning (on the selected address)
-  select    Scan for Crazyflies and select which one to save for later interactions
-  console   Print the console text from a Crazyflie
-  settings  Local CLI settings (scan addresses, timeout, etc.)
-  loco      Loco Positioning System
-  hlc       High-level commander operations (takeoff, land, go-to, trajectory, etc.)
-  cr        Crazyradio operations (sniffer, etc.)
-  debug     Debugging utilities (assert info dumps, etc.)
-  lh        Lighthouse positioning system configuration
-  deck      Decks attached to the Crazyflie
-  help      Print this message or the help of the given subcommand(s)
+  log          Access to the log subsystem
+  param        Access to the parameter subsystem
+  mem          Access to the memory subsystem
+  config       Configure the Crazyflie (radio settings, etc)
+  util         Various supporting utilities for the Crazyflie and its ecosystem
+  bootload     Bootload the Crazyflie and decks
+  test         Run tests with the Crazyflie
+  platform     Access platform functionality
+  scan         List the Crazyflies found while scanning (on the selected address)
+  select       Scan for Crazyflies and select which one to save for later interactions
+  console      Print the console text from a Crazyflie
+  settings     Local CLI settings (scan addresses, timeout, etc.)
+  loco         Loco Positioning System
+  hlc          High-level commander operations (takeoff, land, go-to, trajectory, etc.)
+  cr           Crazyradio operations (sniffer, etc.)
+  debug        Debugging utilities (assert info dumps, etc.)
+  lh           Lighthouse positioning system configuration
+  deck         Decks attached to the Crazyflie
+  swarm        Swarms of Crazyflies: store them, select one, check which ones answer
+  completions  Generate a shell completion script (printed to stdout)
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
   -n, --no-toc-cache       Do not use TOC cache
@@ -171,6 +173,15 @@ A release can be flashed with:
 cfcli bootload flash --release 2025.12
 ```
 
+Several Crazyflies can be kept as a swarm, for instance imported from Swarmkeeper, and any one of
+them selected by its name:
+
+```text
+cfcli swarm config import ~/Documents/Swarmkeeper/swarms/lab.yaml
+cfcli swarm scan
+cfcli select --from-swarm CF-03
+```
+
 For a more indepth view on how to use the different commands, have a look at the documentation:
 
 * [Bootloader](/docs/bootload.md)
@@ -185,6 +196,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Platform](/docs/platform.md)
 * [Select](/docs/select.md)
 * [Settings](/docs/settings.md)
+* [Swarms](/docs/swarm.md)
 * [Crazyradio](/docs/crazyradio.md)
 * [Debug](/docs/debug.md)
 * [Test](/docs/test.md)

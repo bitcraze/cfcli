@@ -345,6 +345,12 @@ enum Commands {
         command: DeckCommands,
     },
 
+    /// Swarms of Crazyflies: store them, select one, check which ones answer
+    Swarm {
+        #[clap(subcommand)]
+        command: SwarmCommands,
+    },
+
     /// Generate a shell completion script (printed to stdout)
     Completions {
         /// Shell to generate the completion script for
@@ -365,6 +371,10 @@ enum CompletionKind {
     FlashTargets,
     /// EEPROM config setting names (for `config set`)
     ConfigKeys,
+    /// Stored swarm IDs (for `swarm config select` and `--swarm`)
+    SwarmConfigs,
+    /// Crazyflie names in the selected swarm (for `--cf` and `select --from-swarm`)
+    SwarmUnits,
 }
 
 #[derive(Debug, Subcommand)]
@@ -441,6 +451,157 @@ struct SelectOptions {
     /// Connect to a USB-attached Crazyflie, read its radio config, and select that radio URI
     #[clap(long)]
     from_usb: bool,
+    /// Select a Crazyflie from the selected swarm by name (prompts for one if no name is given)
+    #[clap(long, value_name = "CF", conflicts_with_all = ["address", "auto", "from_usb"])]
+    from_swarm: Option<Option<String>>,
+}
+
+/// The Crazyflies a swarm command contacts. Flattened into every command
+/// that talks to Crazyflies (global, so it also works after a subcommand).
+#[derive(Debug, Args)]
+struct SwarmTargetArgs {
+    /// Swarm to use instead of the selected one
+    #[clap(long, global = true, value_name = "SWARM")]
+    swarm: Option<String>,
+    /// Only act on these Crazyflies (comma-separated names)
+    #[clap(long, global = true, value_name = "CF", value_delimiter = ',')]
+    cf: Vec<String>,
+    /// Act on every Crazyflie except these (comma-separated names)
+    #[clap(long, global = true, value_name = "CF", value_delimiter = ',')]
+    exclude: Vec<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmCommands {
+    /// Manage the stored swarms (never contacts a Crazyflie)
+    Config {
+        #[clap(subcommand)]
+        command: SwarmConfigCommands,
+    },
+    /// Check which Crazyflies in the swarm answer
+    Scan(SwarmTargetArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmConfigCommands {
+    /// List the stored swarms (* marks the selected one)
+    List,
+    /// Select the swarm the swarm commands act on
+    Select {
+        /// Swarm ID (prompts for one if omitted, or lists them when non-interactive)
+        #[clap(value_name = "SWARM")]
+        id: Option<String>,
+    },
+    /// Create an empty swarm
+    Create(SwarmCreateParameters),
+    /// Delete a swarm
+    Delete {
+        /// Swarm ID (prompts for one if omitted)
+        #[clap(value_name = "SWARM")]
+        id: Option<String>,
+    },
+    /// Show the Crazyflies in a swarm
+    Show {
+        /// Swarm ID (the selected swarm if omitted)
+        #[clap(value_name = "SWARM")]
+        id: Option<String>,
+    },
+    /// Add Crazyflies to the swarm
+    Add(SwarmAddParameters),
+    /// Remove Crazyflies from the swarm
+    Remove {
+        /// Names (or URIs) of the Crazyflies to remove (prompts for them if omitted)
+        #[clap(value_name = "CF")]
+        names: Vec<String>,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
+    },
+    /// Give a Crazyflie in the swarm a new name
+    Rename {
+        /// Current name (or URI) of the Crazyflie (prompts for one if omitted)
+        #[clap(value_name = "CF")]
+        current: Option<String>,
+        /// New name (prompts for one if omitted)
+        new_name: Option<String>,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
+    },
+    /// Import swarm files (Swarmkeeper format)
+    Import(SwarmImportParameters),
+    /// Export a swarm (Swarmkeeper format)
+    Export(SwarmExportParameters),
+}
+
+#[derive(Debug, Args)]
+struct SwarmCreateParameters {
+    /// Swarm ID, also its file name (letters, digits, '-', '_' and '.')
+    id: String,
+    /// Name shown for the swarm (defaults to the ID)
+    #[clap(long)]
+    name: Option<String>,
+    /// Description of the swarm
+    #[clap(long)]
+    description: Option<String>,
+    /// Select the new swarm (done anyway when no swarm is selected)
+    #[clap(long)]
+    select: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("source")
+        .required(true)
+        .args(&["uris", "scan", "from_usb"])
+))]
+struct SwarmAddParameters {
+    /// URIs of the Crazyflies to add. Use * as the radio to let cfcli pick a
+    /// Crazyradio, a radio of 0 is turned into *.
+    /// Example: radio://*/80/2M/E7E7E7E7E7
+    #[clap(value_name = "URI", verbatim_doc_comment)]
+    uris: Vec<String>,
+    /// Name of the Crazyflie, only when adding a single one (prompts for one
+    /// if omitted). Several Crazyflies added at once get the next free CF-NN.
+    #[clap(long, conflicts_with = "scan")]
+    name: Option<String>,
+    /// Description of the added Crazyflies
+    #[clap(long)]
+    description: Option<String>,
+    /// Swarm to add to instead of the selected one
+    #[clap(long, value_name = "SWARM")]
+    swarm: Option<String>,
+    /// Scan and add every Crazyflie found that isn't in the swarm yet. Scans
+    /// the address given, or the scan addresses in settings.
+    #[clap(long, value_name = "ADDRESS", conflicts_with_all = ["uris", "from_usb"])]
+    scan: Option<Option<String>>,
+    /// Connect to the USB-attached Crazyflie and add the radio URI from its
+    /// config. Only one Crazyflie may be connected over USB.
+    #[clap(long, conflicts_with = "uris")]
+    from_usb: bool,
+}
+
+#[derive(Debug, Args)]
+struct SwarmImportParameters {
+    /// Swarm files to import (the file name becomes the swarm ID)
+    #[clap(required = true, value_hint = ValueHint::FilePath)]
+    files: Vec<String>,
+    /// Swarm ID to use instead of the file name (only when importing a single file)
+    #[clap(long)]
+    id: Option<String>,
+    /// Replace swarms that already exist
+    #[clap(long)]
+    force: bool,
+}
+
+#[derive(Debug, Args)]
+struct SwarmExportParameters {
+    /// Swarm ID (the selected swarm if omitted)
+    #[clap(value_name = "SWARM")]
+    id: Option<String>,
+    /// File to write the swarm to (writes to stdout if omitted)
+    #[clap(long, short = 'o', value_hint = ValueHint::FilePath)]
+    output: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

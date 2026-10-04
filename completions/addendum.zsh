@@ -1,7 +1,7 @@
 
 # ---- cfcli dynamic completion -------------------------------------------
 # Appended by build.rs to the clap-generated zsh completion. build.rs also
-# rewrites the `_default` action of the param/log/flash-target arguments to
+# rewrites the `_default` action of the param/log/flash-target/swarm arguments to
 # call the helpers below. Each helper passes the whole current word to `cfcli
 # __complete`, which handles comma-separated lists (returning fully-qualified
 # tokens) and reads only a local cache (never connects).
@@ -26,6 +26,9 @@ _cfcli_param_set()     { _cfcli__dyn param-names-writable '=' }
 _cfcli_config_set()    { _cfcli__dyn config-keys '=' }
 _cfcli_log_names()     { _cfcli__dyn log-names '' }
 _cfcli_flash_targets() { _cfcli__dyn flash-targets }
+_cfcli_swarm_configs() { _cfcli__dyn swarm-configs }
+_cfcli_swarm_units()   { _cfcli__dyn swarm-units }
+_cfcli_swarm_unit_list() { _cfcli__dyn swarm-units '' }
 # `--bin` is a comma-separated list of `target=file`. In the current segment
 # (after the last comma) complete the file path once past '=', otherwise the
 # target name (appending '='). `compset -P '*='` moves the `…target=` prefix
