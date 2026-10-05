@@ -59,7 +59,7 @@ fn main() {
     // --- bash: wrap the generated function to add dynamic candidates.
     append_file(&out_dir.join("cfcli.bash"), &out_dir.join("addendum.bash"));
 
-    // --- zsh: point the param/log/flash-target argument actions at our
+    // --- zsh: point the param/log/flash-target/swarm argument actions at our
     // helper functions, then append the helper definitions. The matched
     // strings are the verbatim `Example:` lines / value names from the CLI
     // doc comments; if those change, completion silently falls back to the
@@ -84,6 +84,33 @@ fn main() {
         );
         s = s.replace("::TARGETS:_default", "::TARGETS:_cfcli_flash_targets");
         s = s.replace(":BIN:_default", ":BIN:_cfcli_flash_bin");
+        // Swarm IDs: `--swarm` and the positional ID of select/delete/show/
+        // export (not create, which takes a new ID).
+        s = s.replace(":SWARM:_default", ":SWARM:_cfcli_swarm_configs");
+        s = s.replace(
+            "Swarm ID (prompts for one if omitted):_default",
+            "Swarm ID (prompts for one if omitted):_cfcli_swarm_configs",
+        );
+        s = s.replace(
+            "Swarm ID (the selected swarm if omitted):_default",
+            "Swarm ID (the selected swarm if omitted):_cfcli_swarm_configs",
+        );
+        s = s.replace(
+            "or lists them when non-interactive):_default",
+            "or lists them when non-interactive):_cfcli_swarm_configs",
+        );
+        // Crazyflie names: `--from-swarm` takes one, `--cf`/`--exclude` a
+        // comma-separated list. `::CF` first, it also contains `:CF`.
+        s = s.replace("::CF:_default", "::CF:_cfcli_swarm_units");
+        s = s.replace(":CF:_default", ":CF:_cfcli_swarm_unit_list");
+        s = s.replace(
+            "of the Crazyflies to remove (prompts for them if omitted):_default",
+            "of the Crazyflies to remove (prompts for them if omitted):_cfcli_swarm_units",
+        );
+        s = s.replace(
+            "Current name (or URI) of the Crazyflie:_default",
+            "Current name (or URI) of the Crazyflie:_cfcli_swarm_units",
+        );
         if let Ok(extra) = fs::read_to_string(out_dir.join("addendum.zsh")) {
             // The helper functions must be defined BEFORE clap's autoload
             // self-invocation (`_cfcli "$@"` near the end of the file), or

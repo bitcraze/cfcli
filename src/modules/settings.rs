@@ -1,5 +1,6 @@
 use anyhow::Result;
 use crate::{Config, console_preserve_path, decode_address};
+use crate::modules::swarm::store::Store;
 
 pub fn show(config: &Config) {
     println!("Timeout: {}ms{}", config.effective_timeout(),
@@ -9,6 +10,10 @@ pub fn show(config: &Config) {
         println!("  {}", addr);
     }
     println!("Preserved console history file: {}", console_preserve_path().display());
+    println!("Selected swarm: {}", config.swarm.as_deref().unwrap_or("none"));
+    if let Ok(store) = Store::open() {
+        println!("Swarm folder: {}", store.dir().display());
+    }
 }
 
 pub fn timeout_show(config: &Config) {

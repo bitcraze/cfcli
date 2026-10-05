@@ -22,7 +22,7 @@ Display all current settings at once:
 cfcli settings show
 ```
 
-This prints the connection timeout, the configured scan addresses, and the path to the preserved console history file (used by the global `-p`/`--preserve-console` flag — see [Console](console.md)).
+This prints the connection timeout, the configured scan addresses, the path to the preserved console history file (used by the global `-p`/`--preserve-console` flag — see [Console](console.md)), the selected swarm and the folder the swarms are stored in (see [Swarms](swarm.md)).
 
 ## Connection timeout
 

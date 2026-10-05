@@ -48,6 +48,20 @@ If zero or more than one USB Crazyflie is found, the command will exit with an
 error. To only print the radio URI without saving it, see
 [Radio URI of USB-attached Crazyflies](#radio-uri-of-usb-attached-crazyflies).
 
+## Select from a swarm
+
+Use `--from-swarm` to select a Crazyflie from the selected
+[swarm](swarm.md) by its name, or leave the name out to pick one from a list:
+
+```text
+cfcli select --from-swarm CF-03
+cfcli select --from-swarm
+```
+
+The URI is saved as it is written in the swarm. A `radio:///` URI (any
+Crazyradio) is resolved to the first Crazyradio that can be opened each time a
+command connects.
+
 ## Scan only
 
 The `scan` command lists Crazyflies found on the configured scan addresses

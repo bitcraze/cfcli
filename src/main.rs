@@ -35,12 +35,14 @@ pub mod modules {
     pub mod debug;
     pub mod lighthouse;
     pub mod deck;
+    pub mod swarm;
 }
 
 pub mod utils {
     pub mod deckctrl;
     pub mod display;
     pub mod firmware;
+    pub mod radio;
 }
 
 use error::CliError;
@@ -231,6 +233,9 @@ pub struct Config {
     timeout_ms: Option<u32>,
     #[serde(default = "default_addresses")]
     addresses: Vec<String>,
+    /// ID of the selected swarm (see `cfcli swarm config select`)
+    #[serde(default)]
+    swarm: Option<String>,
 }
 
 fn default_addresses() -> Vec<String> {
@@ -245,6 +250,7 @@ impl Default for Config {
             toc_cache: HashMap::new(),
             timeout_ms: None,
             addresses: default_addresses(),
+            swarm: None,
         }
     }
 }
@@ -317,6 +323,22 @@ fn is_streaming_command(cmd: &Commands) -> bool {
         Commands::Console { .. }
             | Commands::Log { command: LogCommands::Print(_) }
             | Commands::Cr { command: CrCommands::Sniff(_) }
+    )
+}
+
+/// Whether a command talks to the selected (or `--uri`) Crazyflie. Only those
+/// resolve a `radio:///` URI, which opens the Crazyradios to find a free one.
+fn uses_selected_uri(cmd: &Commands) -> bool {
+    !matches!(
+        cmd,
+        Commands::Completions { .. }
+            | Commands::Scan(_)
+            | Commands::Select(_)
+            | Commands::Settings { .. }
+            | Commands::Swarm { .. }
+            | Commands::Cr { .. }
+            | Commands::Util { .. }
+            | Commands::Bootload { command: BootloadCommands::Releases | BootloadCommands::Targets }
     )
 }
 
@@ -510,6 +532,24 @@ fn load_completion_cache() -> LatestCache {
         .unwrap_or(LatestCache { log: Vec::new(), param: Vec::new() })
 }
 
+/// Names of the Crazyflies in the selected swarm, for completion. Empty when
+/// there is no config file yet: loading one would print a notice and create
+/// it, which must not happen while the shell is completing.
+fn selected_swarm_units() -> Vec<String> {
+    let exists = confy::get_configuration_file_path("cf-cli", None).is_ok_and(|path| path.exists());
+    let selected = exists
+        .then(|| confy::load::<Config>("cf-cli", None).ok())
+        .flatten()
+        .and_then(|config| config.swarm);
+    let Some(id) = selected else {
+        return Vec::new();
+    };
+    modules::swarm::store::Store::open()
+        .and_then(|store| store.load(&id))
+        .map(|swarm| swarm.units.into_iter().map(|unit| unit.name).collect())
+        .unwrap_or_default()
+}
+
 /// Print a shell completion script for `shell` to stdout.
 fn emit_completion_script(shell: clap_complete::Shell) {
     let mut cmd = CliArgs::command();
@@ -559,6 +599,10 @@ fn emit_dynamic_completions(kind: CompletionKind, partial: &str) {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+        CompletionKind::SwarmConfigs => modules::swarm::store::Store::open()
+            .and_then(|store| store.ids())
+            .unwrap_or_default(),
+        CompletionKind::SwarmUnits => selected_swarm_units(),
     };
 
     let stdout = std::io::stdout();
@@ -595,8 +639,22 @@ async fn run() -> Result<()> {
         Config::default()
     });
 
+    let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
+
+    #[cfg(all(unix, feature = "packet_capture"))]
+    crazyflie_lib::crazyflie_link::capture::init();
+
+    let link_context = crazyflie_lib::crazyflie_link::LinkContext::new();
+
     let uri = {
         let base = args.uri.clone().unwrap_or(config.uri.clone());
+        // A radio:/// URI (any Crazyradio) gets a real radio here, so every
+        // command below can hand it straight to crazyflie-link.
+        let base = if uses_selected_uri(&args.command) {
+            utils::radio::resolve(&link_context, &base).await
+        } else {
+            base
+        };
         if config.timeout_ms.is_some() && !base.starts_with("usb://") {
             let timeout = config.effective_timeout();
             if base.contains('?') {
@@ -608,13 +666,6 @@ async fn run() -> Result<()> {
             base
         }
     };
-
-    let toc_cache = ConfigTocCache::new(config.clone(), args.no_toc_cache);
-
-    #[cfg(all(unix, feature = "packet_capture"))]
-    crazyflie_lib::crazyflie_link::capture::init();
-
-    let link_context = crazyflie_lib::crazyflie_link::LinkContext::new();
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
     let preserve_console = args.preserve_console;
@@ -669,7 +720,12 @@ async fn run() -> Result<()> {
             }
         }
         Commands::Select(select_options) => {
-            let selected_uri = if select_options.from_usb {
+            let mut selected_from = None;
+            let selected_uri = if let Some(name) = &select_options.from_swarm {
+                let (uri, from) = modules::swarm::pick_unit(&config, name.as_deref(), non_interactive)?;
+                selected_from = Some(from);
+                uri
+            } else if select_options.from_usb {
                 let found = scan_usb(&link_context).await?;
 
                 if found.is_empty() {
@@ -716,7 +772,10 @@ async fn run() -> Result<()> {
                 }
             };
 
-            println!("Selected: {}", selected_uri);
+            match selected_from {
+                Some(from) => println!("Selected: {} ({})", selected_uri, from),
+                None => println!("Selected: {}", selected_uri),
+            }
             config.uri = selected_uri.clone();
 
             confy::store("cf-cli", None, config).unwrap_or_else(|err| {
@@ -1519,6 +1578,31 @@ async fn run() -> Result<()> {
                     }
                 }
             }
+        }
+        Commands::Swarm { command: SwarmCommands::Config { command: SwarmConfigCommands::Add(params) } }
+            if params.from_usb =>
+        {
+            // Check the swarm before connecting to anything.
+            let id = modules::swarm::swarm_to_change(&config, params.swarm.as_deref())?;
+            // One Crazyflie at a time, so --name can't end up on the wrong one.
+            let found = scan_usb(&link_context).await?;
+            if found.is_empty() {
+                bail!(CliError::Connection("no USB Crazyflies found".to_string()));
+            }
+            if found.len() != 1 {
+                bail!(
+                    "Expected exactly one Crazyflie on USB, found {} ({}). Connect only the one to add.",
+                    found.len(),
+                    found.join(", ")
+                );
+            }
+            let usb_uri = &found[0];
+            println!("Found Crazyflie on USB: {}", usb_uri);
+            let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache, args.debug, preserve_console).await?;
+            modules::swarm::add_uris(&id, params, vec![radio_uri], non_interactive)?;
+        }
+        Commands::Swarm { command } => {
+            modules::swarm::run(&mut config, command, &link_context, non_interactive, csv).await?;
         }
         Commands::Deck { command } => {
             match command {

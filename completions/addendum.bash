@@ -1,10 +1,11 @@
 
 # ---- cfcli dynamic completion -------------------------------------------
 # Appended by build.rs to the clap-generated bash completion. Adds param/log
-# variable names and flash targets sourced from `cfcli __complete`, which
-# reads only a local cache (written on each connection) and never talks to a
-# Crazyflie. Wrapping the generated `_cfcli` keeps this robust across clap
-# versions: we let clap complete first, then add our candidates.
+# variable names, flash targets, swarm IDs and Crazyflie names sourced from
+# `cfcli __complete`, which reads only local files (a cache written on each
+# connection, the stored swarms) and never talks to a Crazyflie. Wrapping the
+# generated `_cfcli` keeps this robust across clap versions: we let clap
+# complete first, then add our candidates.
 #
 # Note: bash's COMP_WORDBREAKS contains ',' and '=', so $cur is already the
 # fragment after the last comma/equals, which is exactly what `cfcli
@@ -42,6 +43,9 @@ _cfcli_dynamic() {
         *" param get "*|*" param store "*|*" param clear "*) kind="param-names" ;;
         *" config set "*)                             kind="config-keys"; suffix="="; nospace=1 ;;
         *" log print "*)                              kind="log-names"; nospace=1 ;;
+        *" swarm config select "*|*" swarm config delete "*|*" swarm config show "*|*" swarm config export "*)
+                                                      kind="swarm-configs" ;;
+        *" swarm config remove "*|*" swarm config rename "*) kind="swarm-units" ;;
     esac
 
     # Option values: `--targets x,y` (plain list) / `--bin t=f` (key=value),
@@ -49,9 +53,17 @@ _cfcli_dynamic() {
     case "$prev" in
         --bin)     kind="flash-targets"; suffix="="; nospace=1 ;;
         --targets) kind="flash-targets" ;;
+        --swarm)   kind="swarm-configs" ;;
+        --cf|--exclude) kind="swarm-units"; nospace=1 ;;
+        --from-swarm)   kind="swarm-units" ;;
+        # Values that are a new name, a file or free text.
+        -o|--output|--id|--name|--description) kind="" ;;
         =) case "${COMP_WORDS[COMP_CWORD-2]}" in
                --bin)     kind="flash-targets"; suffix="="; nospace=1 ;;
                --targets) kind="flash-targets" ;;
+               --swarm)   kind="swarm-configs" ;;
+               --cf|--exclude) kind="swarm-units"; nospace=1 ;;
+               --from-swarm)   kind="swarm-units" ;;
            esac ;;
     esac
 
