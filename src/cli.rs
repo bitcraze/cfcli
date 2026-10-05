@@ -195,8 +195,8 @@ const HELP_EPILOG: &str = "\x1b[1m\x1b[4mExit codes:\x1b[0m
    0  success
    1  unspecified error
    2  usage / argument error (clap)
-  10  connection failure (no Crazyflie found, link error, disconnected)
-  20  resource not found (param/log/memory by name, release name)
+  10  connection failure (no Crazyflie or Crazyradio found, link error, disconnected)
+  20  resource not found (param/log/memory, swarm or Crazyflie by name, release name)
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
 ";

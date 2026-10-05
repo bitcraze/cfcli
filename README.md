@@ -105,8 +105,8 @@ Exit codes:
    0  success
    1  unspecified error
    2  usage / argument error (clap)
-  10  connection failure (no Crazyflie found, link error, disconnected)
-  20  resource not found (param/log/memory by name, release name)
+  10  connection failure (no Crazyflie or Crazyradio found, link error, disconnected)
+  20  resource not found (param/log/memory, swarm or Crazyflie by name, release name)
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
 ```
@@ -237,19 +237,20 @@ prompt) a few flags make the output predictable:
   commands a timeout means the command got stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
-  `platform info`). Other commands ignore the flag.
+  `platform info`, `swarm config list`/`show`, `swarm scan`). Other commands
+  ignore the flag.
 
 Exit codes:
 
-| Code | Meaning                                                        |
-|------|----------------------------------------------------------------|
-| 0    | Success                                                        |
-| 1    | Unspecified error                                              |
-| 2    | Usage / argument error (from clap)                             |
-| 10   | Connection failure (no Crazyflie found, link error, etc.)      |
-| 20   | Resource not found (param/log/memory by name, release name)    |
-| 30   | Invalid value (range, type, malformed input)                   |
-| 40   | `--timeout` expired on a bounded command                       |
+| Code | Meaning                                                                         |
+|------|---------------------------------------------------------------------------------|
+| 0    | Success                                                                         |
+| 1    | Unspecified error                                                               |
+| 2    | Usage / argument error (from clap)                                              |
+| 10   | Connection failure (no Crazyflie or Crazyradio found, link error, etc.)         |
+| 20   | Resource not found (param/log/memory, swarm or Crazyflie by name, release name) |
+| 30   | Invalid value (range, type, malformed input)                                    |
+| 40   | `--timeout` expired on a bounded command                                        |
 
 Worked example — read one parameter into a shell variable:
 
