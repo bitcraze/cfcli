@@ -17,7 +17,7 @@ use tabled::Tabled;
 use super::runner::{csv_row_for, split, Outcome, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::{bootloader, debug, deck, log, param, platform};
-use crate::utils::display::{csv_row, print_table, table, table_from_records, StreamTable};
+use crate::utils::display::{csv_row, print_table, table, Column, StreamTable};
 use crate::{
     AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmLogCommands, SwarmParamCommands,
     SwarmPlatformCommands, VariableName, VariableNameAndValue, VariablesAndPeriod,
@@ -153,11 +153,11 @@ async fn log_once(runner: &Runner<'_>, names: &[String], period: u64, csv: bool)
             .iter()
             .map(|(i, data)| {
                 let mut row = vec![runner.targets[*i].name.clone()];
-                row.extend(log::values(data, names));
+                row.extend(log::display_values(data, names));
                 row
             })
             .collect();
-        print_table(&table_from_records(&header, &rows));
+        log::print_sample_table(&header, &rows, 1);
     }
     finish(runner, outcome)
 }
@@ -211,8 +211,10 @@ async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: boo
             csv_row(&header);
         } else {
             let name_width = runner.targets.iter().map(|t| t.name.len()).max().unwrap_or(0);
-            let mut columns = vec![("CF", name_width)];
-            columns.extend(log::stream_columns(names));
+            let mut columns = vec![Column { name: "CF", width: name_width, right: false }];
+            // The types come from the TOC, the same for Crazyflies with the
+            // same firmware.
+            columns.extend(log::stream_columns(&connections[0], names));
             table = Some(StreamTable::new(&columns));
         }
     }
@@ -221,23 +223,21 @@ async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: boo
     while let Some((i, sample)) = merged.next().await {
         let target = &runner.targets[i];
         match sample {
-            Ok(data) => {
-                let fields = log::stream_fields(&data, names);
-                let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
-                match &table {
-                    Some(table) => {
-                        let mut row = vec![target.name.as_str()];
-                        row.extend(fields);
-                        table.row(&row);
-                    }
-                    None => {
-                        csv_row_for(target, &fields);
-                        // Flush per row, like `log print --csv`, so a
-                        // consumer sees the samples as they come.
-                        let _ = stdout.flush();
-                    }
+            Ok(data) => match &mut table {
+                Some(table) => {
+                    let fields = log::stream_fields(&data, names);
+                    let mut row = vec![target.name.as_str()];
+                    row.extend(fields.iter().map(String::as_str));
+                    table.row(&row);
                 }
-            }
+                None => {
+                    let fields = log::csv_fields(&data, names);
+                    csv_row_for(target, &fields.iter().map(String::as_str).collect::<Vec<_>>());
+                    // Flush per row, like `log print --csv`, so a consumer
+                    // sees the samples as they come.
+                    let _ = stdout.flush();
+                }
+            },
             Err(e) => {
                 eprintln!("{}: stopped: {}", target.name, e);
                 results[i] = Err(CliError::Connection(format!("{} stopped logging: {}", target.link_uri, e)).into());

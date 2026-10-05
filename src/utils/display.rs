@@ -146,21 +146,33 @@ pub fn print_table(table: &Table) {
     }
 }
 
+/// A column of a [`StreamTable`].
+pub struct Column<'a> {
+    pub name: &'a str,
+    /// The width to start with; the header widens it if it is longer.
+    pub width: usize,
+    /// Right-aligned, for numbers.
+    pub right: bool,
+}
+
 /// A table printed a row at a time, for output that streams, in the style
-/// of [`table`]. The rows aren't known up front, so each column is as wide
-/// as its header or its minimum width, whichever is wider; a longer value
-/// pushes the rest of its row to the right.
+/// of [`table`]. The rows aren't known up front, so each column starts as
+/// wide as its header or its given width, whichever is wider. A value that
+/// doesn't fit widens its column from then on: one row shifts, the ones
+/// after line up again.
 pub struct StreamTable {
     widths: Vec<usize>,
+    right: Vec<bool>,
 }
 
 impl StreamTable {
-    /// A table with these columns: a name and a minimum width each.
-    pub fn new(columns: &[(&str, usize)]) -> Self {
+    /// Print the header of a table with these columns.
+    pub fn new(columns: &[Column]) -> Self {
         let table = StreamTable {
-            widths: columns.iter().map(|(name, min)| name.len().max(*min)).collect(),
+            widths: columns.iter().map(|c| c.name.len().max(c.width)).collect(),
+            right: columns.iter().map(|c| c.right).collect(),
         };
-        let names: Vec<&str> = columns.iter().map(|(name, _)| *name).collect();
+        let names: Vec<&str> = columns.iter().map(|c| c.name).collect();
         println!("{}", table.line(&names));
         println!("{}", table.rule());
         table
@@ -168,8 +180,11 @@ impl StreamTable {
 
     /// Print one row, flushed so that a consumer reading a pipe sees it
     /// right away.
-    pub fn row(&self, fields: &[&str]) {
+    pub fn row(&mut self, fields: &[&str]) {
         use std::io::Write;
+        for (width, field) in self.widths.iter_mut().zip(fields) {
+            *width = (*width).max(field.len());
+        }
         println!("{}", self.line(fields));
         let _ = std::io::stdout().flush();
     }
@@ -180,7 +195,11 @@ impl StreamTable {
             if i > 0 {
                 line.push_str("| ");
             }
-            line.push_str(&format!("{:<width$} ", field, width = width));
+            if self.right[i] {
+                line.push_str(&format!("{:>width$} ", field, width = width));
+            } else {
+                line.push_str(&format!("{:<width$} ", field, width = width));
+            }
         }
         line.trim_end().to_string()
     }
@@ -198,21 +217,28 @@ impl StreamTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tabled::settings::Alignment;
 
     #[test]
     fn stream_tables_look_like_tables() {
         let header: Vec<String> = ["CF", "Time (ms)", "pm.vbat"].iter().map(|s| s.to_string()).collect();
-        let row: Vec<String> = ["CF-01", "8112423", "4.117302"].iter().map(|s| s.to_string()).collect();
-        let expected: Vec<String> = table_from_records(&header, &[row.clone()])
-            .to_string()
-            .lines()
-            .map(|line| line.trim_end().to_string())
-            .collect();
+        let row: Vec<String> = ["CF-01", "8112423", "4.117"].iter().map(|s| s.to_string()).collect();
+        let mut expected = table_from_records(&header, &[row.clone()]);
+        expected.with(Modify::new(Columns::new(1..)).with(Alignment::right()));
+        let expected: Vec<String> = expected.to_string().lines().map(|line| line.trim_end().to_string()).collect();
 
         // Columns as wide as the widest of header and row, like `table`.
-        let streamed = StreamTable { widths: vec![5, 9, 8] };
+        let streamed = StreamTable { widths: vec![5, 9, 7], right: vec![false, true, true] };
         let header: Vec<&str> = header.iter().map(String::as_str).collect();
         let row: Vec<&str> = row.iter().map(String::as_str).collect();
         assert_eq!(vec![streamed.line(&header), streamed.rule(), streamed.line(&row)], expected);
+    }
+
+    #[test]
+    fn a_value_that_does_not_fit_widens_its_column() {
+        let mut streamed = StreamTable { widths: vec![3, 5], right: vec![false, true] };
+        streamed.row(&["a", "123456"]);
+        assert_eq!(streamed.widths, vec![3, 6]);
+        assert_eq!(streamed.line(&["b", "1.000"]), "b   |  1.000");
     }
 }

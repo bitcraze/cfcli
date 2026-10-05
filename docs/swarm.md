@@ -242,10 +242,10 @@ one command:
 
 ```text
 $ cfcli swarm log print pm.vbat,pm.state --once
-CF    | pm.vbat  | pm.state
-------+----------+----------
-CF-01 | 4.196481 | 2
-CF-02 | 4.117302 | 2
+CF    | pm.vbat | pm.state
+------+---------+----------
+CF-01 |   4.154 |        2
+CF-02 |   4.170 |        2
 ```
 
 Without `--once` it logs from all the Crazyflies at the same time, a row per
@@ -254,11 +254,14 @@ row), until stopped with Ctrl-C or `--timeout`:
 
 ```text
 $ cfcli --timeout 3000 swarm log print pm.vbat,pm.state -p 500
-CF    | Time (ms)  | pm.vbat      | pm.state
-------+------------+--------------+--------------
-CF-02 | 12960186   | 4.1595306    | 2
-CF-01 | 12937940   | 4.1806455    | 2
+CF    |  Time (ms) |  pm.vbat | pm.state
+------+------------+----------+----------
+CF-02 |   13973361 |    4.170 |        2
+CF-01 |   13949379 |    4.154 |        2
 ```
+
+As for `log print`, floats are shown with 3 decimals; `--csv` gives the full
+value.
 
 A Crazyflie that can't start logging, or that drops out later, is reported on
 stderr while the others go on. As for the normal `log print`, `--timeout` ends

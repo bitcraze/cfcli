@@ -62,14 +62,17 @@ This prints a table with the Crazyflie's time and a column per variable, one
 row per sample:
 
 ```text
-Time (ms)  | acc.x        | acc.y
------------+--------------+--------------
-377433600  | 0.02040638   | -0.011233097
-377436160  | 0.018765358  | -0.01344875
+ Time (ms) |    acc.x |    acc.y
+-----------+----------+----------
+ 377433600 |    0.020 |   -0.011
+ 377436160 |    0.019 |   -0.013
 ```
 
-The columns can't be sized from samples that haven't arrived yet, so a value
-longer than its column pushes the rest of its row to the right.
+Floats are shown with 3 decimals (millimetres, millivolts, milli-g,
+thousandths of a degree), so that the columns keep their width and the
+decimal points line up. Integers get a column as wide as their type needs. A
+value that still doesn't fit widens its column from then on. For the full
+value, use `--csv`.
 
 ### CSV output
 
@@ -114,9 +117,9 @@ cfcli log print pm.vbat,pm.state --once
 ```
 
 ```text
-pm.vbat  | pm.state
----------+----------
-4.196481 | 2
+pm.vbat | pm.state
+--------+----------
+  4.154 |        2
 ```
 
 With `--csv` it is the same header and row as `log print --csv` gives for the
