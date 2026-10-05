@@ -1,9 +1,10 @@
 # Swarms
 
-The **swarm** command keeps lists of Crazyflies, called swarms. One swarm is
-selected, and the swarm commands act on the Crazyflies in it. Every Crazyflie
-in a swarm has a short name (`CF-01`, `Rig`, ...) that is shown in the output
-and used to pick Crazyflies.
+The **swarm** command keeps lists of Crazyflies, called swarms, and runs
+commands on all the Crazyflies in one. One swarm is selected, and the swarm
+commands act on the Crazyflies in it. Every Crazyflie in a swarm has a short
+name (`CF-01`, `Rig`, ...) that is shown in the output and used to pick
+Crazyflies.
 
 Swarms are stored in the same format as [Swarmkeeper](#file-format), so a swarm
 file can be moved between the two with `import` and `export`.
@@ -48,8 +49,8 @@ cfcli swarm config show lab
 Swarm 'lab': Lab Crazyflies
 The bench
 
-CF    | URI                        | Description
-------+----------------------------+-------------
+CF    | URI                       | Description
+------+---------------------------+-------------
 CF-01 | radio:///80/2M/E7E7E7E701 |
 Rig   | radio:///80/2M/E7E7E7E702 | Test bench
 ```
@@ -175,8 +176,8 @@ cfcli swarm scan
 ```
 
 ```text
-CF    | URI                        | Radio | Online
-------+----------------------------+-------+--------
+CF    | URI                       | Radio | Online
+------+---------------------------+-------+--------
 CF-01 | radio:///80/2M/E7E7E7E701 | 0     | yes
 Rig   | radio:///80/2M/E7E7E7E702 | 0     | no
 1 of 2 Crazyflies answered
@@ -186,6 +187,78 @@ Rig   | radio:///80/2M/E7E7E7E702 | 0     | no
 packet to each Crazyflie, it doesn't connect. Use `--cf` and `--exclude`
 (comma-separated names) to check some of them, and `--swarm <id>` for another
 swarm. With `--csv` the output is `cf,uri,radio,online`.
+
+## Running commands on the swarm
+
+These commands work like the normal ones, on every Crazyflie in the swarm:
+
+| Command | Does |
+|---------|------|
+| `cfcli swarm platform info` | Platform, firmware and CRTP protocol of each Crazyflie |
+| `cfcli swarm platform reboot \| power-off \| sleep \| wakeup` | Reboot, power off, sleep or wake up each Crazyflie |
+| `cfcli swarm param get \| set \| store \| clear` | Parameters on each Crazyflie |
+| `cfcli swarm deck list` | The decks on each Crazyflie |
+| `cfcli swarm debug assert` | The assert info of each Crazyflie |
+
+`--cf` and `--exclude` (comma-separated names) pick some of the Crazyflies,
+and `--swarm <id>` runs on another swarm than the selected one:
+
+```bash
+cfcli swarm param set commander.enHighLevel=1 --cf CF-01,CF-02
+cfcli swarm platform reboot --exclude Rig
+```
+
+Listings look like the normal ones, with a `CF` column in front:
+
+```text
+$ cfcli swarm param get stabilizer.estimator
+CF    | Name                 | Access | Persistent | Default | Stored Value | Value
+------+----------------------+--------+------------+---------+--------------+-------
+CF-01 | stabilizer.estimator |   RW   |            |         |              | U8(2)
+Rig   | stabilizer.estimator |   RW   |            |         |              | U8(2)
+```
+
+With `--csv` every row starts with the Crazyflie's name and URI
+(`cf,uri,...`). Commands that only do something print one line per Crazyflie:
+
+```text
+$ cfcli swarm platform reboot
+CF-01: rebooted
+Rig: connection error: radio://0/80/2M/E7E7E7E702 doesn't answer
+Error: some Crazyflies failed: 1 of 2 Crazyflies
+```
+
+Without names, `param get`, `set`, `store` and `clear` let you pick the
+parameters from those of the first Crazyflie, and `set` asks for each value
+once for all of them.
+
+### When some Crazyflies fail
+
+A Crazyflie that can't be reached, or where the command fails, doesn't stop
+the others. Its error is printed on stderr, prefixed with its name, and the
+exit code tells what happened:
+
+* every Crazyflie succeeded: 0;
+* every Crazyflie failed in the same way: that failure's usual exit code, for
+  instance 10 when none of them answer, or 20 for a parameter none of them
+  have;
+* otherwise: 50.
+
+`reboot`, `power-off`, `sleep` and `wakeup` are sent without the Crazyflie
+confirming them, so each Crazyflie is first checked to answer. A Crazyflie that
+is switched off is reported as not answering rather than as done. A sleeping
+Crazyflie still answers, so `wakeup` works.
+
+### How it runs
+
+The Crazyflies are spread over the Crazyradios the same way as for `swarm
+scan`, and each Crazyradio handles up to 8 of them at a time. More Crazyradios,
+and Crazyflies on more channels, make big swarms faster.
+
+Crazyflies running the same firmware share their parameter and log TOCs. A
+TOC that isn't in the cache yet is downloaded from one Crazyflie only; the
+others wait and then use the cache. Run with `-n` (no TOC cache) and every
+Crazyflie downloads its own.
 
 ## Using one Crazyflie from a swarm
 

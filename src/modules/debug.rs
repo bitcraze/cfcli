@@ -16,12 +16,22 @@ fn strip_subsystem_prefix(line: &str) -> &str {
     }
 }
 
-/// Trigger a firmware assert-info dump and print the resulting line.
+/// Trigger a firmware assert-info dump and print the resulting line, or "No
+/// assert info" when the firmware doesn't answer.
+pub async fn assert_dump(cf: &Crazyflie, wait_timeout: Duration) -> Result<()> {
+    match assert_info(cf, wait_timeout).await? {
+        Some(line) => println!("{}", line),
+        None => println!("No assert info"),
+    }
+    Ok(())
+}
+
+/// Trigger a firmware assert-info dump and return the resulting line.
 /// `printAssertSnapshotData()` emits exactly one `DEBUG_PRINT` line per
 /// invocation, so we wait for the first complete line and return. If
-/// nothing arrives within `wait_timeout` the firmware never responded —
-/// fall back to a local "No assert info" message.
-pub async fn assert_dump(cf: &Crazyflie, wait_timeout: Duration) -> Result<()> {
+/// nothing arrives within `wait_timeout` the firmware never responded and
+/// there is no line.
+pub async fn assert_info(cf: &Crazyflie, wait_timeout: Duration) -> Result<Option<String>> {
     let mut stream = cf.console.stream().await;
 
     // Drain any console history / pre-existing output so we don't mix it
@@ -45,15 +55,13 @@ pub async fn assert_dump(cf: &Crazyflie, wait_timeout: Duration) -> Result<()> {
             Ok(Some(chunk)) => {
                 buf.push_str(&chunk);
                 if let Some(nl) = buf.find('\n') {
-                    let line = &buf[..=nl];
-                    print!("{}", strip_subsystem_prefix(line));
-                    return Ok(());
+                    let line = &buf[..nl];
+                    return Ok(Some(strip_subsystem_prefix(line).trim_end().to_string()));
                 }
             }
             _ => break,
         }
     }
 
-    println!("No assert info");
-    Ok(())
+    Ok(None)
 }

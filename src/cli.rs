@@ -199,6 +199,7 @@ const HELP_EPILOG: &str = "\x1b[1m\x1b[4mExit codes:\x1b[0m
   20  resource not found (param/log/memory, swarm or Crazyflie by name, release name)
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
+  50  a swarm command failed on some of the Crazyflies
 ";
 
 #[derive(Parser, Debug)]
@@ -345,7 +346,7 @@ enum Commands {
         command: DeckCommands,
     },
 
-    /// Swarms of Crazyflies: store them, select one, check which ones answer
+    /// Swarms of Crazyflies: store them and run commands on them
     Swarm {
         #[clap(subcommand)]
         command: SwarmCommands,
@@ -480,6 +481,76 @@ enum SwarmCommands {
     },
     /// Check which Crazyflies in the swarm answer
     Scan(SwarmTargetArgs),
+    /// Platform functionality of the Crazyflies in the swarm
+    Platform {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmPlatformCommands,
+    },
+    /// Parameters of the Crazyflies in the swarm
+    Param {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmParamCommands,
+    },
+    /// Decks attached to the Crazyflies in the swarm
+    Deck {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmDeckCommands,
+    },
+    /// Debugging utilities for the Crazyflies in the swarm
+    Debug {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmDebugCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmPlatformCommands {
+    /// Show information about each platform
+    Info,
+    /// Reboot the firmware of each Crazyflie
+    Reboot,
+    /// Power off each Crazyflie
+    PowerOff,
+    /// Put each Crazyflie to sleep
+    Sleep,
+    /// Wake up each Crazyflie
+    Wakeup,
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmParamCommands {
+    /// Read the value of parameters on each Crazyflie
+    Get(VariableName),
+    /// Set the value of parameters on each Crazyflie
+    Set(VariableNameAndValue),
+    /// Store the current value of parameters to EEPROM on each Crazyflie
+    Store(VariableName),
+    /// Clear stored parameter values from EEPROM on each Crazyflie (reverts to firmware default)
+    Clear(VariableName),
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmDeckCommands {
+    /// List the decks attached to each Crazyflie
+    List,
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmDebugCommands {
+    /// Trigger a firmware assert-info dump on each Crazyflie
+    Assert(AssertArgs),
 }
 
 #[derive(Debug, Subcommand)]
