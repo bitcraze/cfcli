@@ -233,14 +233,15 @@ prompt) a few flags make the output predictable:
   Auto-enabled when stdin isn't a TTY. Missing required arguments now produce
   a clear error (exit code 30) instead of hanging waiting for keyboard input.
 * `--timeout <ms>` — global wall-clock cap for the whole command. For
-  *streaming* commands (`console`, `log print`, `cr sniff`) the timer is the
-  intended way to stop them and the command exits **0**. For all other
-  commands a timeout means the command got stuck and the command exits **40**.
+  *streaming* commands (`console`, `log print` and `swarm log print` without
+  `--once`, `cr sniff`) the timer is the intended way to stop them and the
+  command exits **0**. For all other commands a timeout means the command got
+  stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
   `platform info`, `swarm config list`/`show`, `swarm scan`,
-  `swarm platform info`, `swarm param get`, `swarm deck list`,
-  `swarm debug assert`). Other commands ignore the flag.
+  `swarm platform info`, `swarm param get`, `swarm log print`,
+  `swarm deck list`, `swarm debug assert`). Other commands ignore the flag.
 
 Exit codes:
 

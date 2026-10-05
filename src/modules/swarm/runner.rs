@@ -183,20 +183,40 @@ impl<'a> Runner<'a> {
         label: &str,
         op: impl AsyncFn(&Crazyflie, &Target) -> Result<T>,
     ) -> Vec<Result<T>> {
-        let connect_and_run = async |target: &Target| {
-            let cf = self.connect(target).await?;
+        self.connect_each(label, async |cf: Crazyflie, target: &Target| {
             let result = op(&cf, target).await;
             cf.disconnect().await;
             result
+        })
+        .await
+        .into_iter()
+        .map(|result| result.and_then(|inner| inner))
+        .collect()
+    }
+
+    /// Connect to every target and keep the connections, for commands that
+    /// talk to all the Crazyflies at the same time. Each TOC missing from
+    /// the cache is downloaded from one Crazyflie only.
+    pub async fn connect_all(&self, label: &str) -> Vec<Result<Crazyflie>> {
+        self.connect_each(label, async |cf: Crazyflie, _: &Target| cf).await
+    }
+
+    /// Connect to every target and hand the connection to `then`, which
+    /// owns it from there. Each TOC missing from the cache is downloaded
+    /// from one Crazyflie only.
+    async fn connect_each<R>(&self, label: &str, then: impl AsyncFn(Crazyflie, &Target) -> R) -> Vec<Result<R>> {
+        let connect_then = async |target: &Target| -> Result<R> {
+            let cf = self.connect(target).await?;
+            Ok(then(cf, target).await)
         };
         // Without the cache every Crazyflie downloads its TOCs anyway.
         if self.toc_cache.no_toc_cache {
-            return self.each(label, connect_and_run).await;
+            return self.each(label, connect_then).await;
         }
 
         let total = self.targets.len();
         let bar = progress(label, total);
-        let mut results: Vec<Option<Result<T>>> = std::iter::repeat_with(|| None).take(total).collect();
+        let mut results: Vec<Option<Result<R>>> = std::iter::repeat_with(|| None).take(total).collect();
         let mut pending: Vec<usize> = (0..total).collect();
         while !pending.is_empty() {
             // Every pending Crazyflie whose TOCs are all in the cache.
@@ -208,13 +228,12 @@ impl<'a> Runner<'a> {
                         Err(e) => return Probe::Done(Err(e)),
                     };
                     let missed = probe.missed();
-                    let probed = if missed.is_empty() {
-                        Probe::Done(op(&cf, &self.targets[i]).await)
+                    if missed.is_empty() {
+                        Probe::Done(Ok(then(cf, &self.targets[i]).await))
                     } else {
+                        cf.disconnect().await;
                         Probe::Missed(missed)
-                    };
-                    cf.disconnect().await;
-                    probed
+                    }
                 })
                 .await;
 
@@ -237,7 +256,7 @@ impl<'a> Runner<'a> {
                     }
                 }
             }
-            for (i, result) in self.run(downloaders, async |i| connect_and_run(&self.targets[i]).await).await {
+            for (i, result) in self.run(downloaders, async |i| connect_then(&self.targets[i]).await).await {
                 results[i] = Some(result);
                 bar.inc(1);
             }
@@ -276,7 +295,7 @@ impl Target {
 
 /// How connecting with only the TOC cache went.
 enum Probe<T> {
-    /// Connected (or failed to), and the command ran if it could.
+    /// Connected (or failed to), and the connection was handed over.
     Done(Result<T>),
     /// These TOCs (cache keys) weren't in the cache.
     Missed(Vec<Vec<u8>>),

@@ -329,12 +329,14 @@ fn require_arg(non_interactive: bool, missing_arg: &str) -> Result<()> {
 /// other command is bounded — a timeout means it got stuck, so we return
 /// `CliError::Timeout` and exit 40.
 fn is_streaming_command(cmd: &Commands) -> bool {
-    matches!(
-        cmd,
-        Commands::Console { .. }
-            | Commands::Log { command: LogCommands::Print(_) }
-            | Commands::Cr { command: CrCommands::Sniff(_) }
-    )
+    match cmd {
+        Commands::Log { command: LogCommands::Print(params) } => !params.once,
+        Commands::Swarm { command: SwarmCommands::Log { command: SwarmLogCommands::Print(params), .. } } => {
+            !params.once
+        }
+        Commands::Console { .. } | Commands::Cr { command: CrCommands::Sniff(_) } => true,
+        _ => false,
+    }
 }
 
 /// Whether a command talks to the selected (or `--uri`) Crazyflie. Only those
@@ -823,16 +825,15 @@ async fn run() -> Result<()> {
                       Some(n) => n.clone(),
                       None => {
                         require_arg(non_interactive, "<names>")?;
-                        let available_vars = cf.log.names();
-                        let selected_vars = MultiSelect::new("Select variables to log:", available_vars)
-                          .prompt()
-                          .map_err(|_| anyhow::anyhow!("No variables selected"))?;
-                        selected_vars.join(",")
+                        modules::log::pick_names(cf)?
                       }
                     };
 
-
-                    modules::log::print(&cf, names.as_str(), var.period as u64, csv).await?;
+                    if var.once {
+                        modules::log::print_once(cf, &names, var.period as u64, csv).await?;
+                    } else {
+                        modules::log::print(cf, &names, var.period as u64, csv).await?;
+                    }
 
                 }
             }

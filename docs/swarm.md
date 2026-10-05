@@ -198,6 +198,7 @@ These commands work like the normal ones, on every Crazyflie in the swarm:
 | `cfcli swarm platform info` | Platform, firmware and CRTP protocol of each Crazyflie |
 | `cfcli swarm platform reboot \| power-off \| sleep \| wakeup` | Reboot, power off, sleep or wake up each Crazyflie |
 | `cfcli swarm param get \| set \| store \| clear` | Parameters on each Crazyflie |
+| `cfcli swarm log print` | Log variables from each Crazyflie |
 | `cfcli swarm deck list` | The decks on each Crazyflie |
 | `cfcli swarm debug assert` | The assert info of each Crazyflie |
 
@@ -231,7 +232,36 @@ Error: some Crazyflies failed: 1 of 2 Crazyflies
 
 Without names, `param get`, `set`, `store` and `clear` let you pick the
 parameters from those of the first Crazyflie, and `set` asks for each value
-once for all of them.
+once for all of them. The same goes for the variables of `log print`.
+
+### Logging
+
+`swarm log print --once` reads one sample from each Crazyflie: a row per
+Crazyflie, a column per variable. It checks the batteries of a whole swarm in
+one command:
+
+```text
+$ cfcli swarm log print pm.vbat,pm.state --once
+CF    | pm.vbat  | pm.state
+------+----------+----------
+CF-01 | 4.196481 | 2
+CF-02 | 4.117302 | 2
+```
+
+Without `--once` it logs from all the Crazyflies at the same time, each line
+with the Crazyflie's name in front (and its name and URI in front of each CSV
+row), until stopped with Ctrl-C or `--timeout`:
+
+```text
+$ cfcli --timeout 3000 swarm log print pm.vbat -p 500
+CF-02: LogData { timestamp: 8112423, data: {"pm.vbat": F32(4.117302)} }
+CF-01: LogData { timestamp: 8098512, data: {"pm.vbat": F32(4.196481)} }
+```
+
+A Crazyflie that can't start logging, or that drops out later, is reported on
+stderr while the others go on. As for the normal `log print`, `--timeout` ends
+it with exit code 0; the exit code rules below only apply when every
+Crazyflie has stopped on its own.
 
 ### When some Crazyflies fail
 
