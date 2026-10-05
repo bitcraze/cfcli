@@ -58,12 +58,21 @@ cfcli log print acc.x,acc.y -p 10
 
 The period defaults to 100 ms if `-p`/`--period` is omitted.
 
-This will produce an output similar to this:
+This prints a table with the Crazyflie's time and a column per variable, one
+row per sample:
 
 ```text
-LogData { timestamp: 377433600, data: {"acc.x": F32(0.02040638), "acc.y": F32(-0.011233097)} }
-LogData { timestamp: 377436160, data: {"acc.x": F32(0.018765358), "acc.y": F32(-0.01344875)} }
+ Time (ms) |    acc.x |    acc.y
+-----------+----------+----------
+ 377433600 |    0.020 |   -0.011
+ 377436160 |    0.019 |   -0.013
 ```
+
+Floats are shown with 3 decimals (millimetres, millivolts, milli-g,
+thousandths of a degree), so that the columns keep their width and the
+decimal points line up. Integers get a column as wide as their type needs. A
+value that still doesn't fit widens its column from then on. For the full
+value, use `--csv`.
 
 ### CSV output
 
@@ -108,9 +117,9 @@ cfcli log print pm.vbat,pm.state --once
 ```
 
 ```text
-pm.vbat  | pm.state
----------+----------
-4.196481 | 2
+pm.vbat | pm.state
+--------+----------
+  4.154 |        2
 ```
 
 With `--csv` it is the same header and row as `log print --csv` gives for the

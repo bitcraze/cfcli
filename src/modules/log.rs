@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Result};
 use crazyflie_lib::subsystems::log::{LogData, LogPeriod, LogStream};
-use crazyflie_lib::Crazyflie;
+use crazyflie_lib::{Crazyflie, Value, ValueType};
 use std::io::Write;
-use crate::utils::display::{csv_row, print_table, table, table_from_records, value_to_csv_string};
+use crate::utils::display::{csv_row, print_table, table, table_from_records, value_to_csv_string, Column, StreamTable};
+use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
 
 /// One row of `log list`.
@@ -51,12 +52,90 @@ pub async fn sample(cf: &Crazyflie, names: &[String], period: u64) -> Result<Log
   Ok(data)
 }
 
-/// The values of a sample as plain numbers, in the order of `names`.
+/// The values of a sample as plain numbers at full precision, in the order
+/// of `names`. For CSV.
 pub fn values(data: &LogData, names: &[String]) -> Vec<String> {
   names
     .iter()
     .map(|name| data.data.get(name).map(value_to_csv_string).unwrap_or_default())
     .collect()
+}
+
+/// Decimals of a float in a table: millimetres, millivolts, milli-g and
+/// thousandths of a degree, at or below what the sensors resolve. `--csv`
+/// keeps the full value.
+const DECIMALS: usize = 3;
+/// Width of the time column: a u32 of milliseconds.
+const TIME_WIDTH: usize = 10;
+/// Width a float column starts with: -999.999, enough for most values. A
+/// larger one (thrust, say) widens its column once.
+const FLOAT_WIDTH: usize = 8;
+
+/// A value as shown in a table: floats with [`DECIMALS`] decimals, so that
+/// a column keeps its width and its decimal points line up.
+fn display_value(value: &Value) -> String {
+  match value {
+    Value::F16(x) => format!("{:.*}", DECIMALS, x.to_f32()),
+    Value::F32(x) => format!("{:.*}", DECIMALS, x),
+    Value::F64(x) => format!("{:.*}", DECIMALS, x),
+    other => value_to_csv_string(other),
+  }
+}
+
+/// The values of a sample as shown in a table, in the order of `names`.
+pub fn display_values(data: &LogData, names: &[String]) -> Vec<String> {
+  names
+    .iter()
+    .map(|name| data.data.get(name).map(display_value).unwrap_or_default())
+    .collect()
+}
+
+/// The width any value of the type fits in.
+fn type_width(value_type: ValueType) -> usize {
+  match value_type {
+    ValueType::U8 => 3,
+    ValueType::I8 => 4,
+    ValueType::U16 => 5,
+    ValueType::I16 => 6,
+    ValueType::U32 => 10,
+    ValueType::I32 => 11,
+    ValueType::U64 | ValueType::I64 => 20,
+    ValueType::F16 | ValueType::F32 | ValueType::F64 => FLOAT_WIDTH,
+  }
+}
+
+/// The columns of streamed samples: the Crazyflie's time, then a column per
+/// variable in the order asked for, as wide as its type needs.
+pub fn stream_columns<'a>(cf: &Crazyflie, names: &'a [String]) -> Vec<Column<'a>> {
+  let mut columns = vec![Column { name: "Time (ms)", width: TIME_WIDTH, right: true }];
+  columns.extend(names.iter().map(|name| Column {
+    name,
+    width: cf.log.get_type(name).map_or(FLOAT_WIDTH, type_width),
+    right: true,
+  }));
+  columns
+}
+
+/// A streamed sample as table fields: the time, then the values.
+pub fn stream_fields(data: &LogData, names: &[String]) -> Vec<String> {
+  let mut fields = vec![data.timestamp.to_string()];
+  fields.extend(display_values(data, names));
+  fields
+}
+
+/// A sample as CSV fields: the time, then the values at full precision.
+pub fn csv_fields(data: &LogData, names: &[String]) -> Vec<String> {
+  let mut fields = vec![data.timestamp.to_string()];
+  fields.extend(values(data, names));
+  fields
+}
+
+/// Print samples as a table, with the values right-aligned from column
+/// `first_value` on.
+pub fn print_sample_table(header: &[String], rows: &[Vec<String>], first_value: usize) {
+  let mut table = table_from_records(header, rows);
+  table.with(Modify::new(Columns::new(first_value..)).with(Alignment::right()));
+  print_table(&table);
 }
 
 /// Split a comma-separated list of variable names.
@@ -77,17 +156,14 @@ pub fn pick_names(cf: &Crazyflie) -> Result<String> {
 pub async fn print_once(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Result<()> {
   let name_list = split_names(names);
   let data = sample(cf, &name_list, period).await?;
-  let values = values(&data, &name_list);
   if csv {
     let mut header: Vec<&str> = vec!["timestamp_ms"];
     header.extend(name_list.iter().map(String::as_str));
     csv_row(&header);
-    let timestamp = data.timestamp.to_string();
-    let mut row: Vec<&str> = vec![&timestamp];
-    row.extend(values.iter().map(String::as_str));
-    csv_row(&row);
+    let row = csv_fields(&data, &name_list);
+    csv_row(&row.iter().map(String::as_str).collect::<Vec<_>>());
   } else {
-    print_table(&table_from_records(&name_list, &[values]));
+    print_sample_table(&name_list, &[display_values(&data, &name_list)], 0);
   }
   Ok(())
 }
@@ -102,8 +178,7 @@ pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Resul
     csv_row(&header);
     let mut stdout = std::io::stdout();
     while let Ok(data) = stream.next().await {
-      let mut row = vec![data.timestamp.to_string()];
-      row.extend(values(&data, &name_list));
+      let row = csv_fields(&data, &name_list);
       let row_refs: Vec<&str> = row.iter().map(|s| s.as_str()).collect();
       csv_row(&row_refs);
       // Flush per row so consumers piping `log print --csv` see samples in
@@ -111,8 +186,10 @@ pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Resul
       let _ = stdout.flush();
     }
   } else {
+    let mut table = StreamTable::new(&stream_columns(cf, &name_list));
     while let Ok(data) = stream.next().await {
-        println!("{:?}", data);
+      let row = stream_fields(&data, &name_list);
+      table.row(&row.iter().map(String::as_str).collect::<Vec<_>>());
     }
   }
 
