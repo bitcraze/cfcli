@@ -513,6 +513,14 @@ enum SwarmCommands {
         #[clap(subcommand)]
         command: SwarmLogCommands,
     },
+    /// Bootload the Crazyflies in the swarm
+    Bootload {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmBootloadCommands,
+    },
     /// Debugging utilities for the Crazyflies in the swarm
     Debug {
         #[clap(flatten)]
@@ -579,6 +587,21 @@ enum SwarmParamCommands {
 enum SwarmLogCommands {
     /// Start logging and print variable values from each Crazyflie
     Print(VariablesAndPeriod),
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmBootloadCommands {
+    /// Show the bootloader versions of each Crazyflie (restarts each one into
+    /// its bootloader and back)
+    Info,
+    /// Flash firmware to each Crazyflie, one after another
+    Flash(SwarmFlashParameters),
+}
+
+#[derive(Debug, Args)]
+struct SwarmFlashParameters {
+    #[clap(flatten)]
+    source: FirmwareSourceArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -961,22 +984,15 @@ struct InfoParameters {
   cold: bool,
 }
 
+/// The firmware to flash, shared by `bootload flash` and `swarm bootload flash`.
 #[derive(Debug, Args)]
-#[command(
-  // group(
-  //   ArgGroup::new("source_type")
-  //     .args(&["release", "zip"])
-  //     .required(false)
-  //     .multiple(false)
-  // ),
-  group(
+#[command(group(
     ArgGroup::new("firmware_source")
       .args(&["release", "zip", "bin"])
       .required(true)
       .multiple(true)
-  )
-)]
-struct FlashParameters {
+))]
+struct FirmwareSourceArgs {
   /// Release name, interactive selection if left blank (cannot be combined with zip)
   #[clap(long)]
   release: Option<Option<String>>,
@@ -1000,6 +1016,12 @@ struct FlashParameters {
   /// Example: stm32-fw,nrf51-fw
   #[clap(long, verbatim_doc_comment)]
   targets: Option<Option<String>>,
+}
+
+#[derive(Debug, Args)]
+struct FlashParameters {
+  #[clap(flatten)]
+  source: FirmwareSourceArgs,
   /// Use coldboot (i.e rescue mode) to flash the device
   #[clap(long, default_value_t = false)]
   cold: bool,

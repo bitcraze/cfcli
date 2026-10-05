@@ -268,6 +268,20 @@ pub async fn print_bootloader_info(link_context: &LinkContext, cold: bool, uri: 
   Ok(())
 }
 
+/// The bootloader protocol versions of a Crazyflie that runs its firmware:
+/// (STM32, nRF51). The Crazyflie is restarted into its bootloader to read
+/// them, and back into its firmware afterwards.
+pub async fn bootloader_versions(link_context: &LinkContext, uri: &str) -> Result<(u8, u8)> {
+  let link = start_bootloader(link_context, false, uri).await?;
+  let stm32 = get_info(&link, TARGET_STM32).await?;
+  let nrf51 = get_info(&link, TARGET_NRF51).await?;
+  send_command(&link, BootloaderCommand::ResetInit, None).await?;
+  send_command(&link, BootloaderCommand::Reset, Some(&[0x01])).await?; // Reset to firmware
+  sleep(Duration::from_millis(500)).await;
+  link.close().await;
+  Ok((stm32.protocol_version, nrf51.protocol_version))
+}
+
 pub async fn reboot(link_context: &LinkContext, uri: &str,) -> Result<()> {
 
   let link = link_context.open_link(uri).await?;

@@ -6,6 +6,7 @@
 //! single command. Crazyflies are named by their short `name`, which is also
 //! what `--cf`/`--exclude` and `select --from-swarm` take.
 
+mod bootload;
 mod commands;
 mod rechannel;
 mod runner;
@@ -78,6 +79,10 @@ pub(crate) async fn run(
         SwarmCommands::Log { target, command } => {
             let runner = runner(&store, config, target, link_context, toc_cache).await?;
             commands::log(&runner, command, non_interactive, csv).await
+        }
+        SwarmCommands::Bootload { target, command } => {
+            let runner = runner(&store, config, target, link_context, toc_cache.clone()).await?;
+            bootload::bootload(&runner, command, toc_cache, non_interactive, csv).await
         }
         SwarmCommands::Debug { target, command } => {
             let runner = runner(&store, config, target, link_context, toc_cache).await?;
