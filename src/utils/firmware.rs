@@ -186,6 +186,7 @@ async fn download_release_zip(release: &String, platform_release: &String) -> Re
     Ok(zip_data)
 }
 
+#[derive(Clone)]
 pub struct FirmwareUpgrade {
     bins: HashMap<String, Firmware>,
 }

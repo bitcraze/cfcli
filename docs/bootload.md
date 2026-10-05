@@ -22,6 +22,9 @@ This command shows you the bootloader version and other related information of t
 cfcli bootload info
 ```
 
+To flash, or show the bootloaders of, every Crazyflie of a swarm, see
+[Swarms](swarm.md#flashing).
+
 ## List available releases
 
 This command will list the available releases from the [Crazyflie release repository](https://github.com/bitcraze/crazyflie-release).

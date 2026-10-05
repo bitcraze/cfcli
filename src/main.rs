@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::sync::Arc;
-use inquire::{Select, MultiSelect};
+use inquire::Select;
 use anyhow::{bail, Context, Result};
 use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
@@ -43,6 +43,7 @@ pub mod utils {
     pub mod deckctrl;
     pub mod display;
     pub mod firmware;
+    pub mod flash_source;
     pub mod radio;
 }
 
@@ -50,37 +51,6 @@ use error::CliError;
 use modules::settings;
 
 include!("cli.rs");
-
-fn single_explicit_target_for_bare_bin(
-    bin: &Option<HashMap<String, Option<String>>>,
-    targets: &Option<Option<String>>,
-) -> Option<String> {
-    let bin_map = bin.as_ref()?;
-    if bin_map.len() != 1 {
-        return None;
-    }
-
-    let (_bin_path, selected_target) = bin_map.iter().next()?;
-    if selected_target.is_some() {
-        return None;
-    }
-
-    let target_arg = match targets {
-        Some(Some(target_arg)) => target_arg,
-        _ => return None,
-    };
-
-    let mut target_names = target_arg
-        .split(',')
-        .map(str::trim)
-        .filter(|target| !target.is_empty());
-    let target = target_names.next()?;
-    if target_names.next().is_some() {
-        return None;
-    }
-
-    Some(target.to_string())
-}
 
 /// One row of `mem list`.
 #[derive(Tabled)]
@@ -93,58 +63,6 @@ struct MemoryRow {
     size: String,
     #[tabled(rename = "Serial")]
     serial: String,
-}
-
-fn unsupported_flash_targets(selected: &[String]) -> Vec<String> {
-    let supported = bootloader::get_hardcoded_list_of_targets();
-
-    selected
-        .iter()
-        .filter(|target| !supported.contains(&target.as_str()))
-        .cloned()
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn single_bare_bin_uses_single_explicit_target() {
-        let mut bin = HashMap::new();
-        bin.insert("lighthouse.bin".to_string(), None);
-        let targets = Some(Some("bcLighthouse4-fw".to_string()));
-
-        assert_eq!(
-            single_explicit_target_for_bare_bin(&Some(bin), &targets),
-            Some("bcLighthouse4-fw".to_string())
-        );
-    }
-
-    #[test]
-    fn single_bare_bin_does_not_use_multiple_explicit_targets() {
-        let mut bin = HashMap::new();
-        bin.insert("lighthouse.bin".to_string(), None);
-        let targets = Some(Some("bcLighthouse4-fw,stm32-fw".to_string()));
-
-        assert_eq!(single_explicit_target_for_bare_bin(&Some(bin), &targets), None);
-    }
-
-    #[test]
-    fn keyed_bin_does_not_get_rewritten_from_targets() {
-        let mut bin = HashMap::new();
-        bin.insert("bcLighthouse4-fw".to_string(), Some("lighthouse.bin".to_string()));
-        let targets = Some(Some("bcLighthouse4-fw".to_string()));
-
-        assert_eq!(single_explicit_target_for_bare_bin(&Some(bin), &targets), None);
-    }
-
-    #[test]
-    fn unsupported_flash_targets_reports_unknown_targets() {
-        let selected = vec!["stm32ohnooo-fw".to_string(), "stm32-fw".to_string()];
-
-        assert_eq!(unsupported_flash_targets(&selected), vec!["stm32ohnooo-fw".to_string()]);
-    }
 }
 
 impl MemoryTypeArg {
@@ -1569,85 +1487,19 @@ async fn run() -> Result<()> {
                     }
                 }
                 BootloadCommands::Flash(params) => {
-                  let release = match &params.release {
-                    Some(Some(r)) => {
-                      let labels = utils::firmware::get_release_labels().await?;
-                      if !labels.contains(r) {
-                        bail!(CliError::NotFound(format!("release '{}'", r)));
-                      }
-                      Some(r.clone())
-                    },
-                    Some(None) => {
-                      require_arg(non_interactive, "--release <NAME>")?;
-                      let labels = utils::firmware::get_release_labels().await?;
-                      let selected_release = Select::new("Select a firmware release to flash:", labels)
-                        .prompt()
-                        .map_err(|_| anyhow::anyhow!("No release selected"))?;
-                      Some(selected_release)
-                    }
-                    None => None,
-                  };
-
-                  // This case is special since we're not setting the key on the command-line,
-                  // we're actually setting the value and then we'll select they key here
-                  // Note that the list of tarets is hardcoded, this is because we cannot
-                  // query the Crazyflie for it, flashing new firmware might change this
-                  // until we reach the deck flashing stage.
-                  let bin_with_selections = {
-                    let mut result = HashMap::new();
-                    let target_from_single_bare_bin =
-                      single_explicit_target_for_bare_bin(&params.bin, &params.targets);
-                    if let Some(bin_map) = &params.bin {
-                      for (key, value_opt) in bin_map.iter() {
-                        let (k,v) = match (key, value_opt) {
-                          (k, Some(v)) => (k.clone(), v.clone()),
-                          (k, None) => {
-                            if let Some(selected_target) = &target_from_single_bare_bin {
-                              (selected_target.clone(), k.to_string())
-                            } else {
-                              require_arg(non_interactive, "--bin target=file (or: --targets <TARGET> for a single bare --bin)")?;
-                              let selected_target = Select::new(
-                                &format!("Select target for [{}]:", k),
-                                bootloader::get_hardcoded_list_of_targets()
-                              )
-                              .prompt()
-                              .map_err(|_| anyhow::anyhow!("No binary selected"))?;
-                              (selected_target.to_string(), k.to_string())
-                            }
-                          }
-                        };
-                        result.insert(k, v);
-                      }
-                    }
-                    Some(result)
-                  };
+                  let source = &params.source;
+                  let release = utils::flash_source::release(&source.release, non_interactive).await?;
+                  let bin_with_selections = utils::flash_source::bins(&source.bin, &source.targets, non_interactive)?;
 
                   let platform = if params.cold {
                     // In cold-boot/recovery mode the Crazyflie is not running firmware,
                     // so we cannot connect to query the platform. Use the --platform
                     // flag or ask the user interactively.
-                    let resolve_platform = |p: &str| -> Result<String> {
-                      match p.to_lowercase().as_str() {
-                        "cf21" => Ok("Crazyflie 2.1".to_string()),
-                        "cf21bl" => Ok("Crazyflie 2.1 Brushless".to_string()),
-                        "bolt11" => Ok("Crazyflie Bolt 1.1".to_string()),
-                        "flapper" => Ok("Flapper (Bolt 1.1)".to_string()),
-                        "tag" => Ok("Roadrunner 1.0".to_string()),
-                        _ => bail!("Unknown platform '{}'. Valid options: cf21, cf21bl, bolt11, flapper, tag", p),
-                      }
-                    };
                     match &params.platform {
-                      Some(p) => resolve_platform(p)?,
+                      Some(p) => utils::flash_source::platform_name(p)?.to_string(),
                       None => {
                         require_arg(non_interactive, "--platform")?;
-                        let platforms = vec![
-                          "Crazyflie 2.1",
-                          "Crazyflie 2.1 Brushless",
-                          "Crazyflie Bolt 1.1",
-                          "Flapper (Bolt 1.1)",
-                          "Roadrunner 1.0",
-                        ];
-                        Select::new("Select the platform:", platforms)
+                        Select::new("Select the platform:", utils::flash_source::platform_names())
                           .prompt()
                           .map_err(|_| anyhow::anyhow!("No platform selected"))?
                           .to_string()
@@ -1662,32 +1514,8 @@ async fn run() -> Result<()> {
                   };
 
                   // First create a list of firmwares and targets before starting the bootloading
-                  let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &params.zip, &bin_with_selections).await?;
-
-                  let selected_target_and_types = match &params.targets {
-                    Some(Some(t)) => t.split(',').map(|s| s.trim().to_string()).collect(),
-                    Some(None) => {
-                      require_arg(non_interactive, "--targets <list>")?;
-                      let available_target_and_types = upgrade.get_target_and_types();
-
-                      let selected_target_and_types = MultiSelect::new("Select targets to flash:", available_target_and_types)
-                        .prompt()
-                        .map_err(|_| anyhow::anyhow!("No targets selected"))?;
-                      selected_target_and_types
-                    }
-                    None => upgrade.get_target_and_types(),
-                  };
-
-                  if matches!(&params.targets, Some(Some(_))) {
-                    let unsupported_targets = unsupported_flash_targets(&selected_target_and_types);
-                    if !unsupported_targets.is_empty() {
-                      bail!(CliError::InvalidValue(format!(
-                        "unknown flash target(s): {}. Valid targets: {}",
-                        unsupported_targets.join(", "),
-                        bootloader::get_hardcoded_list_of_targets().join(", ")
-                      )));
-                    }
-                  }
+                  let mut upgrade = utils::firmware::FirmwareUpgrade::new(&platform, &release, &source.zip, &bin_with_selections).await?;
+                  let selected_target_and_types = utils::flash_source::targets(&upgrade, &source.targets, non_interactive)?;
 
                   upgrade.filter_targets(&selected_target_and_types);
 

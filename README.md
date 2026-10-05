@@ -241,7 +241,8 @@ prompt) a few flags make the output predictable:
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
   `platform info`, `swarm config list`/`show`, `swarm scan`,
   `swarm platform info`, `swarm param get`, `swarm log print`,
-  `swarm deck list`, `swarm debug assert`). Other commands ignore the flag.
+  `swarm deck list`, `swarm debug assert`, `swarm bootload info`). Other
+  commands ignore the flag.
 
 Exit codes:
 

@@ -46,7 +46,7 @@ struct BootloaderInfo {
     buffer_pages: u16,
     flash_pages: u16,
     start_page: u16,
-    cpuid: u16,
+    cpuid: Vec<u8>,
 }
 
 #[repr(u8)]
@@ -98,15 +98,18 @@ async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo> {
             .unwrap();
         let data = packet.get_data();
 
-        if packet.get_header() == 0xFF && data.len() >= 2 && data[0..2] == [target, 0x10] {
+        // [target, GET_INFO, page size (2), buffer pages (2), flash pages (2),
+        // start page (2), CPU ID (12), protocol version]. Bootloaders from
+        // before the protocol version stop after the CPU ID.
+        if packet.get_header() == 0xFF && data.len() >= 22 && data[0..2] == [target, 0x10] {
             return Ok(BootloaderInfo {
                 id: data[0],
-                protocol_version: data[1],
+                protocol_version: data.get(22).copied().unwrap_or(0),
                 page_size: LittleEndian::read_u16(&data[2..4]),
                 buffer_pages: LittleEndian::read_u16(&data[4..6]),
                 flash_pages: LittleEndian::read_u16(&data[6..8]),
                 start_page: LittleEndian::read_u16(&data[8..10]),
-                cpuid: LittleEndian::read_u16(&data[10..12]),
+                cpuid: data[10..22].to_vec(),
             });
         }
     }
@@ -245,7 +248,7 @@ fn print_target_info(name: &str, info: &BootloaderInfo) {
   println!("  Flash Size: {} bytes ({} KB)", flash_size, flash_size / 1024);
   println!("  Start Page: {}", info.start_page);
   println!("  Available Flash: {} bytes ({} KB)", available_flash, available_flash / 1024);
-  println!("  CPU ID: 0x{:04X}", info.cpuid);
+  println!("  CPU ID: {}", hex::encode_upper(&info.cpuid));
 }
 
 pub async fn print_bootloader_info(link_context: &LinkContext, cold: bool, uri: &str) -> Result<()> {
@@ -266,6 +269,20 @@ pub async fn print_bootloader_info(link_context: &LinkContext, cold: bool, uri: 
   link.close().await;
 
   Ok(())
+}
+
+/// The bootloader protocol versions of a Crazyflie that runs its firmware:
+/// (STM32, nRF51). The Crazyflie is restarted into its bootloader to read
+/// them, and back into its firmware afterwards.
+pub async fn bootloader_versions(link_context: &LinkContext, uri: &str) -> Result<(u8, u8)> {
+  let link = start_bootloader(link_context, false, uri).await?;
+  let stm32 = get_info(&link, TARGET_STM32).await?;
+  let nrf51 = get_info(&link, TARGET_NRF51).await?;
+  send_command(&link, BootloaderCommand::ResetInit, None).await?;
+  send_command(&link, BootloaderCommand::Reset, Some(&[0x01])).await?; // Reset to firmware
+  sleep(Duration::from_millis(500)).await;
+  link.close().await;
+  Ok((stm32.protocol_version, nrf51.protocol_version))
 }
 
 pub async fn reboot(link_context: &LinkContext, uri: &str,) -> Result<()> {
