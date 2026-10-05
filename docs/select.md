@@ -58,7 +58,7 @@ cfcli select --from-swarm CF-03
 cfcli select --from-swarm
 ```
 
-The URI is saved as it is written in the swarm. A `radio://*/` URI (any
+The URI is saved as it is written in the swarm. A `radio:///` URI (any
 Crazyradio) is resolved to the first Crazyradio that can be opened each time a
 command connects.
 

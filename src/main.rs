@@ -327,7 +327,7 @@ fn is_streaming_command(cmd: &Commands) -> bool {
 }
 
 /// Whether a command talks to the selected (or `--uri`) Crazyflie. Only those
-/// resolve a `radio://*/` URI, which opens the Crazyradios to find a free one.
+/// resolve a `radio:///` URI, which opens the Crazyradios to find a free one.
 fn uses_selected_uri(cmd: &Commands) -> bool {
     !matches!(
         cmd,
@@ -648,7 +648,7 @@ async fn run() -> Result<()> {
 
     let uri = {
         let base = args.uri.clone().unwrap_or(config.uri.clone());
-        // A radio://*/ URI (any Crazyradio) gets a real radio here, so every
+        // A radio:/// URI (any Crazyradio) gets a real radio here, so every
         // command below can hand it straight to crazyflie-link.
         let base = if uses_selected_uri(&args.command) {
             utils::radio::resolve(&link_context, &base).await

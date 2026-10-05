@@ -559,7 +559,7 @@ fn import(store: &Store, config: &mut Config, params: &SwarmImportParameters) ->
         store.save(id, swarm)?;
         print!("Imported swarm '{}' from {} ({})", id, file, crazyflies(swarm.units.len()));
         if any_radio > 0 {
-            print!(", {} URIs now use radio://*/ (any Crazyradio)", any_radio);
+            print!(", {} URIs now use radio:/// (any Crazyradio)", any_radio);
         }
         println!();
     }
@@ -689,8 +689,8 @@ async fn scan(link_context: &LinkContext, swarm: &Swarm, selected: &[usize], csv
 }
 
 /// The Crazyflie `cfcli select --from-swarm` picks from the selected swarm,
-/// by name or interactively. Returns its URI as written in the swarm (a `*`
-/// is resolved at connect time) and a description for the user.
+/// by name or interactively. Returns its URI as written in the swarm (an
+/// empty radio is filled in at connect time) and a description for the user.
 pub fn pick_unit(config: &Config, query: Option<&str>, non_interactive: bool) -> Result<(String, String)> {
     let store = Store::open()?;
     let id = swarm_id(config, None)?;

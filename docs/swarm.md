@@ -50,8 +50,8 @@ The bench
 
 CF    | URI                        | Description
 ------+----------------------------+-------------
-CF-01 | radio://*/80/2M/E7E7E7E701 |
-Rig   | radio://*/80/2M/E7E7E7E702 | Test bench
+CF-01 | radio:///80/2M/E7E7E7E701 |
+Rig   | radio:///80/2M/E7E7E7E702 | Test bench
 ```
 
 Delete a swarm with `cfcli swarm config delete <id>`, or leave the ID out to
@@ -73,8 +73,8 @@ cfcli swarm config add radio://0/80/2M/E7E7E7E703 radio://0/80/2M/E7E7E7E704
 ```
 
 ```text
-> Name for radio://*/80/2M/E7E7E7E701: (CF-01) Alpha
-Added Alpha radio://*/80/2M/E7E7E7E701
+> Name for radio:///80/2M/E7E7E7E701: (CF-01) Alpha
+Added Alpha radio:///80/2M/E7E7E7E701
 ```
 
 When running non-interactively, adding a single Crazyflie needs `--name`.
@@ -97,13 +97,13 @@ cfcli swarm config add --from-usb --name Alpha
 
 ```text
 Found Crazyflie on USB: usb://2F0040001347343439303733
-Added Alpha radio://*/80/2M/E7E7E7E704
+Added Alpha radio:///80/2M/E7E7E7E704
 ```
 
 A Crazyflie that is already in the swarm (same channel and address) is skipped.
 That includes Crazyflies that still have the default address: give each one its
-own address first, with `cfcli config set address=...`. A radio of 0, or an
-empty one, is stored as `*`, see [Any Crazyradio](#any-crazyradio).
+own address first, with `cfcli config set address=...`. A radio of 0 is
+stored empty, meaning any Crazyradio, see [Any Crazyradio](#any-crazyradio).
 
 Rename a Crazyflie, or remove Crazyflies by name or URI. Without arguments,
 `rename` lets you pick the Crazyflie from a list and asks for the new name, and
@@ -132,9 +132,9 @@ cfcli swarm config import ~/Documents/Swarmkeeper/swarms/*.yaml
 cfcli swarm config import set-1.yaml --id lab-set
 ```
 
-Every `radio://0/` URI (and any with an empty radio) in an imported file is
-stored as `radio://*/`, so the swarm isn't tied to the first Crazyradio. URIs
-with another radio are kept.
+Every `radio://0/` URI in an imported file is stored as `radio:///` (any
+Crazyradio), so the swarm isn't tied to the first Crazyradio. URIs with another
+radio are kept.
 
 Export the selected swarm, or another one by ID, to stdout or to a file:
 
@@ -145,11 +145,17 @@ cfcli swarm config export lab -o lab.yaml
 
 ## Any Crazyradio
 
-A `*` as the radio in a URI means any Crazyradio:
-`radio://*/80/2M/E7E7E7E7E7` is channel 80, address E7E7E7E7E7, on whichever
-Crazyradio cfcli picks. A number still means exactly that Crazyradio.
+Leaving the radio in a URI empty means any Crazyradio:
+`radio:///80/2M/E7E7E7E7E7` is channel 80, address E7E7E7E7E7, on whichever
+Crazyradio cfcli picks. A number still means exactly that Crazyradio. An empty
+host is how a URI asks for the default, the same way `file:///` means this
+machine, and it needs no quoting in any shell:
 
-* **One Crazyflie:** a selected (or `--uri`) URI with `*` uses the first
+```bash
+cfcli -u radio:///80/2M/E7E7E7E7E7 platform info
+```
+
+* **One Crazyflie:** a selected (or `--uri`) URI without a radio uses the first
   Crazyradio that can be opened. A Crazyradio that another program holds, such
   as Swarmkeeper, is skipped.
 * **A swarm:** the Crazyflies are spread over all Crazyradios that can be
@@ -162,18 +168,6 @@ Crazyradio cfcli picks. A number still means exactly that Crazyradio.
 A swarm on a single channel therefore always uses one Crazyradio; spread it
 over several channels to make use of more.
 
-On the command line the radio can also be left empty, which means the same as
-`*`. It saves quoting the URI in zsh (and in bash with `failglob`), where an
-unquoted `*` is taken as a file name pattern:
-
-```bash
-cfcli -u radio:///80/2M/E7E7E7E7E7 platform info
-cfcli -u 'radio://*/80/2M/E7E7E7E7E7' platform info
-```
-
-cfcli always writes `*`, in swarm files and in its output, since it is easier
-to read.
-
 ## Checking which Crazyflies answer
 
 ```bash
@@ -183,8 +177,8 @@ cfcli swarm scan
 ```text
 CF    | URI                        | Radio | Online
 ------+----------------------------+-------+--------
-CF-01 | radio://*/80/2M/E7E7E7E701 | 0     | yes
-Rig   | radio://*/80/2M/E7E7E7E702 | 0     | no
+CF-01 | radio:///80/2M/E7E7E7E701 | 0     | yes
+Rig   | radio:///80/2M/E7E7E7E702 | 0     | no
 1 of 2 Crazyflies answered
 ```
 
@@ -203,8 +197,8 @@ cfcli select --from-swarm Rig
 cfcli select --from-swarm
 ```
 
-The URI is saved as it is written in the swarm. A `*` is resolved each time a
-command connects.
+The URI is saved as it is written in the swarm. An empty radio is filled in
+each time a command connects.
 
 ## Where swarms are stored
 
@@ -218,9 +212,9 @@ and the selected swarm. Use `import` and `export` rather than editing the files.
 name: Lab Crazyflies
 description: The bench
 units:
-- uri: radio://*/80/2M/E7E7E7E701
+- uri: radio:///80/2M/E7E7E7E701
   name: CF-01
-- uri: radio://*/80/2M/E7E7E7E702
+- uri: radio:///80/2M/E7E7E7E702
   name: Rig
   description: Test bench
 ```

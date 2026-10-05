@@ -556,8 +556,8 @@ struct SwarmCreateParameters {
         .args(&["uris", "scan", "from_usb"])
 ))]
 struct SwarmAddParameters {
-    /// URIs of the Crazyflies to add. Use * (or leave the radio empty) to let
-    /// cfcli pick a Crazyradio, a radio of 0 is turned into *.
+    /// URIs of the Crazyflies to add. Leave the radio empty to let cfcli pick
+    /// a Crazyradio, a radio of 0 is emptied.
     /// Example: radio:///80/2M/E7E7E7E7E7
     #[clap(value_name = "URI", verbatim_doc_comment)]
     uris: Vec<String>,

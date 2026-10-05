@@ -8,7 +8,7 @@
 //! name: Set1 (100 units)
 //! description: Swarm of 100 Crazyflies on channel 72
 //! units:
-//!   - uri: radio://*/72/2M/D91F700101
+//!   - uri: radio:///72/2M/D91F700101
 //!     name: CF-101
 //!     description: Crazyflie 101
 //! ```
@@ -49,7 +49,7 @@ pub struct Unit {
 }
 
 /// What makes two URIs the same Crazyflie: the radio index doesn't count,
-/// so `radio://0/80/2M/E7E7E7E7E7` and `radio://*/80/2M/e7e7e7e7e7` match.
+/// so `radio://0/80/2M/E7E7E7E7E7` and `radio:///80/2M/e7e7e7e7e7` match.
 #[derive(Debug, PartialEq, Eq)]
 enum LinkKey {
     Radio { channel: u8, address: String },
@@ -132,8 +132,7 @@ impl Swarm {
         Ok(())
     }
 
-    /// Turn every `radio://0/` and `radio:///` URI into `radio://*/`.
-    /// Returns how many changed.
+    /// Empty the radio of every `radio://0/` URI. Returns how many changed.
     pub fn use_any_radio(&mut self) -> usize {
         let mut changed = 0;
         for unit in &mut self.units {
@@ -337,7 +336,7 @@ units:
         swarm.use_any_radio();
         let yaml = swarm.to_yaml().unwrap();
         assert!(yaml.starts_with("name: 49-unit swarm\n"), "{}", yaml);
-        assert!(yaml.contains("- uri: radio://*/84/2M/D91F700101\n  name: CF-01\n"), "{}", yaml);
+        assert!(yaml.contains("- uri: radio:///84/2M/D91F700101\n  name: CF-01\n"), "{}", yaml);
         assert_eq!(Swarm::from_yaml(&yaml).unwrap().units.len(), 2);
     }
 
@@ -374,21 +373,20 @@ units:
         let mut swarm = swarm(&[
             ("radio://0/80/2M/E7E7E7E701", "a"),
             ("radio://1/80/2M/E7E7E7E702", "b"),
-            ("radio://*/80/2M/E7E7E7E703", "c"),
-            ("radio:///80/2M/E7E7E7E704", "d"),
+            ("radio:///80/2M/E7E7E7E703", "c"),
         ]);
-        assert_eq!(swarm.use_any_radio(), 2);
-        assert_eq!(swarm.units[0].uri, "radio://*/80/2M/E7E7E7E701");
+        assert_eq!(swarm.use_any_radio(), 1);
+        assert_eq!(swarm.units[0].uri, "radio:///80/2M/E7E7E7E701");
         assert_eq!(swarm.units[1].uri, "radio://1/80/2M/E7E7E7E702");
-        assert_eq!(swarm.units[3].uri, "radio://*/80/2M/E7E7E7E704");
+        assert_eq!(swarm.units[2].uri, "radio:///80/2M/E7E7E7E703");
     }
 
     #[test]
     fn finds_by_name_or_uri() {
-        let swarm = swarm(&[("radio://*/80/2M/E7E7E7E701", "CF-01"), ("usb://0", "CF-02")]);
+        let swarm = swarm(&[("radio:///80/2M/E7E7E7E701", "CF-01"), ("usb://0", "CF-02")]);
         assert_eq!(swarm.find("cf-01"), Some(0));
         assert_eq!(swarm.find("radio://0/80/2M/e7e7e7e701"), Some(0));
-        assert_eq!(swarm.find("radio:///80/2M/E7E7E7E701"), Some(0));
+        assert_eq!(swarm.find("radio://1/80/2M/E7E7E7E701"), Some(0));
         assert_eq!(swarm.find("usb://0"), Some(1));
         assert_eq!(swarm.find("CF-03"), None);
         assert_eq!(swarm.find("radio://0/81/2M/E7E7E7E701"), None);
@@ -397,13 +395,13 @@ units:
     #[test]
     fn next_name_fills_the_first_gap() {
         assert_eq!(swarm(&[]).next_name(), "CF-01");
-        let swarm = swarm(&[("radio://*/80/2M/01", "CF-01"), ("radio://*/80/2M/03", "cf-02"), ("radio://*/80/2M/04", "CF-04")]);
+        let swarm = swarm(&[("radio:///80/2M/01", "CF-01"), ("radio:///80/2M/03", "cf-02"), ("radio:///80/2M/04", "CF-04")]);
         assert_eq!(swarm.next_name(), "CF-03");
     }
 
     #[test]
     fn select_applies_only_and_exclude_in_file_order() {
-        let swarm = swarm(&[("radio://*/80/2M/01", "CF-01"), ("radio://*/80/2M/02", "CF-02"), ("radio://*/80/2M/03", "CF-03")]);
+        let swarm = swarm(&[("radio:///80/2M/01", "CF-01"), ("radio:///80/2M/02", "CF-02"), ("radio:///80/2M/03", "CF-03")]);
         assert_eq!(swarm.select("s", &[], &[]).unwrap(), vec![0, 1, 2]);
         let only = vec!["CF-03".to_string(), "cf-01".to_string()];
         assert_eq!(swarm.select("s", &only, &[]).unwrap(), vec![0, 2]);

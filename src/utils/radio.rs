@@ -1,10 +1,12 @@
 //! Radio URIs that leave the Crazyradio open, and the choice of a real
 //! Crazyradio for them.
 //!
-//! `radio://*/80/2M/E7E7E7E7E7` means channel 80, address E7E7E7E7E7, on any
-//! Crazyradio. crazyflie-link only accepts a number for the radio, so the `*`
-//! is replaced with the index of an attached Crazyradio before the URI is
-//! handed to it:
+//! `radio:///80/2M/E7E7E7E7E7`, with the radio left empty, means channel 80,
+//! address E7E7E7E7E7, on any Crazyradio. An empty host is how a URI asks for
+//! the scheme's default (RFC 3986, section 3.2.2, the way `file:///` means this
+//! machine), and it can be typed in any shell without quotes. crazyflie-link
+//! only accepts a number for the radio, so the empty radio is filled in with
+//! the index of an attached Crazyradio before the URI is handed to it:
 //!
 //! * A single Crazyflie gets the first Crazyradio that can be opened, which
 //!   skips radios held by another program.
@@ -13,14 +15,9 @@
 //!   two radios on one channel collide, and channels less than 2 apart count
 //!   as the same channel: a 2 Mbit/s channel is about 2 MHz wide.
 //!
-//! The radio can also be left empty, `radio:///80/2M/E7E7E7E7E7`, which means
-//! the same as `*` but can be typed in zsh without quotes. cfcli always writes
-//! `*`, which is easier to read.
-//!
 //! Index 0 is what every tool writes when there is only one radio, so
-//! [`any_radio`] turns it into `*` when Crazyflies are added to a swarm, and
-//! an empty radio as well. Any other index is taken as a deliberate choice and
-//! kept.
+//! [`any_radio`] empties it when Crazyflies are added to a swarm. Any other
+//! index is taken as a deliberate choice and kept.
 
 use anyhow::Result;
 use crazyflie_lib::crazyflie_link::LinkContext;
@@ -39,7 +36,7 @@ const URI_FORMAT: &str = "expected radio://<radio>/<channel>/<datarate>/<address
 /// A parsed `radio://` URI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RadioUri {
-    /// The radio index, `None` for `*` or an empty radio (any radio).
+    /// The radio index, `None` for an empty radio (any radio).
     pub radio: Option<usize>,
     pub channel: u8,
     /// The address as 10 upper-case hex digits, zero padded on the left the
@@ -59,8 +56,11 @@ impl RadioUri {
 
         let (radio, rest) = after_scheme.split_once('/').ok_or_else(|| invalid(URI_FORMAT))?;
         let radio = match radio {
-            "*" | "" => None,
-            n => Some(n.parse::<usize>().map_err(|_| invalid("the radio must be a number, * or empty"))?),
+            "" => None,
+            n => Some(
+                n.parse::<usize>()
+                    .map_err(|_| invalid("the radio must be a number, or empty for any Crazyradio"))?,
+            ),
         };
 
         let path = rest.split('?').next().unwrap_or_default();
@@ -95,11 +95,11 @@ impl RadioUri {
     }
 }
 
-/// Turn `radio://0/…` and `radio:///…` into `radio://*/…`. Other URIs are
-/// returned unchanged. The flag tells whether the URI changed.
+/// Turn `radio://0/…` into `radio:///…`. Other URIs are returned unchanged.
+/// The flag tells whether the URI changed.
 pub fn any_radio(uri: &str) -> (String, bool) {
-    match uri.strip_prefix("radio://0/").or_else(|| uri.strip_prefix("radio:///")) {
-        Some(rest) => (format!("radio://*/{}", rest), true),
+    match uri.strip_prefix("radio://0/") {
+        Some(rest) => (format!("radio:///{}", rest), true),
         None => (uri.to_string(), false),
     }
 }
@@ -134,8 +134,8 @@ pub async fn available_radios(link_context: &LinkContext) -> Vec<usize> {
     available
 }
 
-/// Give a `radio://*/` URI the first Crazyradio that can be opened. Other
-/// URIs are returned unchanged. When no radio can be opened the `*` becomes
+/// Give a `radio:///` URI the first Crazyradio that can be opened. Other
+/// URIs are returned unchanged. When no radio can be opened the radio becomes
 /// 0, so connecting fails with the usual error.
 pub async fn resolve(link_context: &LinkContext, uri: &str) -> String {
     let Ok(Some(radio_uri)) = RadioUri::parse(uri) else {
@@ -155,7 +155,7 @@ pub async fn resolve(link_context: &LinkContext, uri: &str) -> String {
 /// What [`assign`] needs to know about one Crazyflie.
 #[derive(Debug, Clone, Copy)]
 pub struct Link {
-    /// The radio from the URI, `None` for `*`.
+    /// The radio from the URI, `None` for an empty radio.
     pub radio: Option<usize>,
     pub channel: u8,
 }
@@ -175,7 +175,8 @@ pub struct Assignment {
 /// 1. A pinned link (`radio://1/…`) uses its radio, and its channel then
 ///    belongs to that radio.
 /// 2. Channels less than 2 apart form one group, chained: 72, 73 and 74 are
-///    a single group. `*` links on a group with a pinned link follow it.
+///    a single group. Links without a radio on a group with a pinned link
+///    follow it.
 /// 3. The other groups go, largest first (equal ones in list order), to the
 ///    radio with the fewest links, the lowest index on a tie. The same input
 ///    always gives the same result.
@@ -216,7 +217,7 @@ pub fn assign(links: &[Link], available: &[usize]) -> Assignment {
             None => group_radio[g] = Some(radio),
             Some(claimed) if claimed != radio => {
                 let warning = format!(
-                    "{} is pinned to more than one Crazyradio; the Crazyflies with radio://*/ on it use radio {}",
+                    "{} is pinned to more than one Crazyradio; the Crazyflies with radio:/// on it use radio {}",
                     describe(g),
                     claimed
                 );
@@ -286,7 +287,7 @@ mod tests {
 
     #[test]
     fn parses_any_and_pinned_radios() {
-        let uri = RadioUri::parse("radio://*/80/2M/E7E7E7E7E7").unwrap().unwrap();
+        let uri = RadioUri::parse("radio:///80/2M/E7E7E7E7E7").unwrap().unwrap();
         assert_eq!(uri.radio, None);
         assert_eq!(uri.channel, 80);
         assert_eq!(uri.address, "E7E7E7E7E7");
@@ -296,13 +297,6 @@ mod tests {
         assert_eq!(uri.address, "00000000E7");
     }
 
-    #[test]
-    fn an_empty_radio_means_any_radio() {
-        let uri = RadioUri::parse("radio:///80/2M/E7E7E7E7E7").unwrap().unwrap();
-        assert_eq!(uri.radio, None);
-        assert_eq!(uri.channel, 80);
-        assert_eq!(uri.with_radio(1), "radio://1/80/2M/E7E7E7E7E7");
-    }
 
     #[test]
     fn other_schemes_are_not_radio_uris() {
@@ -313,12 +307,13 @@ mod tests {
     fn rejects_malformed_radio_uris() {
         for uri in [
             "radio://x/80/2M/E7E7E7E7E7",
-            "radio://*/126/2M/E7E7E7E7E7",
-            "radio://*/80/3M/E7E7E7E7E7",
-            "radio://*/80/E7E7E7E7E7",
-            "radio://*/80/2M/E7E7E7E7E7E7",
-            "radio://*/80/2M/XYZ",
+            "radio:///126/2M/E7E7E7E7E7",
+            "radio:///80/3M/E7E7E7E7E7",
+            "radio:///80/E7E7E7E7E7",
+            "radio:///80/2M/E7E7E7E7E7E7",
+            "radio:///80/2M/XYZ",
             "radio://*",
+            "radio://*/80/2M/E7E7E7E7E7",
         ] {
             assert!(RadioUri::parse(uri).is_err(), "{} should be rejected", uri);
         }
@@ -326,16 +321,15 @@ mod tests {
 
     #[test]
     fn with_radio_keeps_the_rest_of_the_uri() {
-        let uri = RadioUri::parse("radio://*/80/2M/E7E7E7E7E7?safelink=0").unwrap().unwrap();
+        let uri = RadioUri::parse("radio:///80/2M/E7E7E7E7E7?safelink=0").unwrap().unwrap();
         assert_eq!(uri.with_radio(2), "radio://2/80/2M/E7E7E7E7E7?safelink=0");
     }
 
     #[test]
-    fn any_radio_rewrites_radio_zero_and_empty() {
-        assert_eq!(any_radio("radio://0/80/2M/E7E7E7E7E7"), ("radio://*/80/2M/E7E7E7E7E7".to_string(), true));
-        assert_eq!(any_radio("radio:///80/2M/E7E7E7E7E7"), ("radio://*/80/2M/E7E7E7E7E7".to_string(), true));
+    fn any_radio_only_rewrites_radio_zero() {
+        assert_eq!(any_radio("radio://0/80/2M/E7E7E7E7E7"), ("radio:///80/2M/E7E7E7E7E7".to_string(), true));
         assert_eq!(any_radio("radio://1/80/2M/E7E7E7E7E7"), ("radio://1/80/2M/E7E7E7E7E7".to_string(), false));
-        assert_eq!(any_radio("radio://*/80/2M/E7E7E7E7E7"), ("radio://*/80/2M/E7E7E7E7E7".to_string(), false));
+        assert_eq!(any_radio("radio:///80/2M/E7E7E7E7E7"), ("radio:///80/2M/E7E7E7E7E7".to_string(), false));
         assert_eq!(any_radio("usb://0"), ("usb://0".to_string(), false));
     }
 
