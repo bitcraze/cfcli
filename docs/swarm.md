@@ -309,12 +309,29 @@ cfcli swarm bootload flash --bin stm32-fw=cf21bl.bin --cf CF-01,CF-02
 ```
 
 The release, the files and the targets are checked before any Crazyflie is
-touched. Each Crazyflie's platform then decides which files of a release it
-gets, so a swarm can mix platforms. A Crazyflie that fails doesn't stop the
-others, and a summary at the end shows how each one went. A unicast flash
-keeps the radio busy, so flashing several Crazyflies at once wouldn't be
-faster; plan for about 20 seconds per Crazyflie for the STM32 and nRF51
+touched, and the firmware for every platform in the swarm is prepared before
+anything is flashed: a `--zip` built for another platform stops the command
+instead of failing halfway. A Crazyflie that fails while flashing doesn't
+stop the others, and a summary at the end shows how each one went. A unicast
+flash keeps the radio busy, so flashing several Crazyflies at once wouldn't
+be faster; plan for about 20 seconds per Crazyflie for the STM32 and nRF51
 firmware, more with decks.
+
+#### Swarms with several platforms
+
+A release has the files for every platform, so `--release` flashes each
+Crazyflie with the files of its own platform. STM32 and nRF51 images given
+with `--bin` are built for one platform, so they are only flashed when all the
+Crazyflies to flash have the same platform; otherwise the command stops
+before flashing anything. Deck firmware works whatever the Crazyflie.
+
+`--platform` flashes only the Crazyflies of one platform (`cf21`, `cf21bl`,
+`bolt11`, `flapper` or `tag`), the others are skipped:
+
+```bash
+cfcli swarm bootload flash --platform cf21bl --bin stm32-fw=cf21bl.bin
+cfcli swarm bootload flash --platform cf21 --bin stm32-fw=cf21.bin
+```
 
 `swarm bootload info` shows the bootloader versions of each Crazyflie. It
 restarts each one into its bootloader to read them and back into its

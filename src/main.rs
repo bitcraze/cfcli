@@ -1495,28 +1495,11 @@ async fn run() -> Result<()> {
                     // In cold-boot/recovery mode the Crazyflie is not running firmware,
                     // so we cannot connect to query the platform. Use the --platform
                     // flag or ask the user interactively.
-                    let resolve_platform = |p: &str| -> Result<String> {
-                      match p.to_lowercase().as_str() {
-                        "cf21" => Ok("Crazyflie 2.1".to_string()),
-                        "cf21bl" => Ok("Crazyflie 2.1 Brushless".to_string()),
-                        "bolt11" => Ok("Crazyflie Bolt 1.1".to_string()),
-                        "flapper" => Ok("Flapper (Bolt 1.1)".to_string()),
-                        "tag" => Ok("Roadrunner 1.0".to_string()),
-                        _ => bail!("Unknown platform '{}'. Valid options: cf21, cf21bl, bolt11, flapper, tag", p),
-                      }
-                    };
                     match &params.platform {
-                      Some(p) => resolve_platform(p)?,
+                      Some(p) => utils::flash_source::platform_name(p)?.to_string(),
                       None => {
                         require_arg(non_interactive, "--platform")?;
-                        let platforms = vec![
-                          "Crazyflie 2.1",
-                          "Crazyflie 2.1 Brushless",
-                          "Crazyflie Bolt 1.1",
-                          "Flapper (Bolt 1.1)",
-                          "Roadrunner 1.0",
-                        ];
-                        Select::new("Select the platform:", platforms)
+                        Select::new("Select the platform:", utils::flash_source::platform_names())
                           .prompt()
                           .map_err(|_| anyhow::anyhow!("No platform selected"))?
                           .to_string()

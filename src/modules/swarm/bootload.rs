@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
@@ -17,7 +17,7 @@ use crate::modules::bootloader;
 use crate::utils::display::{csv_row, print_table, table};
 use crate::utils::firmware::FirmwareUpgrade;
 use crate::utils::flash_source;
-use crate::{ConfigTocCache, FirmwareSourceArgs, SwarmBootloadCommands};
+use crate::{ConfigTocCache, SwarmBootloadCommands, SwarmFlashParameters};
 
 /// How long reading the bootloader versions of one Crazyflie may take.
 const INFO_TIMEOUT: Duration = Duration::from_secs(15);
@@ -34,7 +34,7 @@ pub async fn bootload(
 ) -> Result<()> {
     match command {
         SwarmBootloadCommands::Info => info(runner, csv).await,
-        SwarmBootloadCommands::Flash(params) => flash(runner, &params.source, toc_cache, non_interactive).await,
+        SwarmBootloadCommands::Flash(params) => flash(runner, params, toc_cache, non_interactive).await,
     }
 }
 
@@ -106,12 +106,14 @@ struct FlashRow {
 
 async fn flash(
     runner: &Runner<'_>,
-    source: &FirmwareSourceArgs,
+    params: &SwarmFlashParameters,
     toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
+    let source = &params.source;
     // Everything that comes from the command line first, before any
     // Crazyflie is touched.
+    let only = params.platform.as_deref().map(flash_source::platform_name).transpose()?;
     let release = flash_source::release(&source.release, non_interactive).await?;
     let bins = flash_source::bins(&source.bin, &source.targets, non_interactive)?;
 
@@ -119,21 +121,51 @@ async fn flash(
     let platforms = runner
         .connected("Reading", async |cf, _| Ok(cf.platform.device_type_name().await?))
         .await;
-    let mut upgrades: Vec<(String, Result<FirmwareUpgrade>)> = Vec::new();
-    for platform in platforms.iter().flatten() {
-        if !upgrades.iter().any(|(p, _)| p == platform) {
-            let upgrade = FirmwareUpgrade::new(platform, &release, &source.zip, &bins).await;
-            upgrades.push((platform.clone(), upgrade));
+    let to_flash: Vec<(usize, &str)> = platforms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, platform)| platform.as_ref().ok().map(|p| (i, p.as_str())))
+        .filter(|(_, platform)| only.is_none_or(|only| *platform == only))
+        .collect();
+    if let Some(only) = only {
+        if to_flash.is_empty() && platforms.iter().any(Result::is_ok) {
+            bail!(CliError::NotFound(format!("Crazyflies of platform {} in the swarm", only)));
         }
     }
 
+    // STM32 and nRF51 images are built for one platform.
+    let named: Vec<(&str, &str)> = to_flash.iter().map(|(i, p)| (runner.targets[*i].name.as_str(), *p)).collect();
+    check_one_platform(&flash_source::platform_bound(&bins), &named)?;
+
+    // The files for every platform, all ready before anything is flashed.
+    let mut distinct: Vec<&str> = to_flash.iter().map(|(_, platform)| *platform).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let mut upgrades: Vec<(String, FirmwareUpgrade)> = Vec::new();
+    let mut unprepared = 0;
+    for platform in &distinct {
+        let platform = platform.to_string();
+        match FirmwareUpgrade::new(&platform, &release, &source.zip, &bins).await {
+            Ok(upgrade) => upgrades.push((platform, upgrade)),
+            Err(e) => {
+                eprintln!("{}: {:#}", platform, e);
+                unprepared += 1;
+            }
+        }
+    }
+    if unprepared > 0 {
+        let hint = if distinct.len() > 1 { ". Flash one platform at a time with --platform" } else { "" };
+        bail!(CliError::InvalidValue(format!(
+            "the firmware can't be prepared for {} of the platforms to flash, so nothing was flashed{}",
+            unprepared, hint
+        )));
+    }
+
     // The targets are picked once, from those of the first platform.
-    if let Some(first) = upgrades.iter().find_map(|(_, upgrade)| upgrade.as_ref().ok()) {
+    if let Some((_, first)) = upgrades.first() {
         let selected = flash_source::targets(first, &source.targets, non_interactive)?;
         for (_, upgrade) in upgrades.iter_mut() {
-            if let Ok(upgrade) = upgrade {
-                upgrade.filter_targets(&selected);
-            }
+            upgrade.filter_targets(&selected);
         }
     }
 
@@ -152,13 +184,10 @@ async fn flash(
             }
         };
         shown_platforms.push(platform.clone());
-        let upgrade = match upgrades.iter().find(|(p, _)| *p == platform).map(|(_, u)| u) {
-            Some(Ok(upgrade)) => upgrade,
-            Some(Err(e)) => {
-                results.push(Err(anyhow!("{:#}", e)));
-                continue;
-            }
-            None => unreachable!("every platform found has an upgrade"),
+        let Some((_, upgrade)) = upgrades.iter().find(|(p, _)| *p == platform) else {
+            // Left out by --platform.
+            results.push(Ok("skipped".to_string()));
+            continue;
         };
         if upgrade.get_target_and_types().is_empty() {
             results.push(Ok(format!("nothing to flash for {}", platform)));
@@ -188,4 +217,53 @@ async fn flash(
     print_table(&table(&rows));
     let (_, outcome) = split(results);
     outcome.finish()
+}
+
+/// Refuse STM32 and nRF51 images (`bound`, the `--bin` keys) for Crazyflies
+/// of more than one platform (`to_flash`: name and platform each).
+fn check_one_platform(bound: &[String], to_flash: &[(&str, &str)]) -> Result<()> {
+    if bound.is_empty() {
+        return Ok(());
+    }
+    let mut by_platform: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (name, platform) in to_flash {
+        match by_platform.iter_mut().find(|(p, _)| p == platform) {
+            Some((_, names)) => names.push(name),
+            None => by_platform.push((platform, vec![name])),
+        }
+    }
+    if by_platform.len() <= 1 {
+        return Ok(());
+    }
+    let groups: Vec<String> =
+        by_platform.iter().map(|(platform, names)| format!("{} ({})", platform, names.join(", "))).collect();
+    bail!(CliError::InvalidValue(format!(
+        "--bin {} {} built for one platform, but the Crazyflies to flash are {}. Flash one platform at a \
+         time with --platform, or use --release, which has the files for every platform",
+        bound.join(", "),
+        if bound.len() == 1 { "is" } else { "are" },
+        groups.join(" and ")
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_bound_images_need_one_platform() {
+        let bound = vec!["stm32-fw".to_string()];
+        let mixed = [("CF-01", "Crazyflie 2.1"), ("CF-02", "Crazyflie 2.1 Brushless"), ("CF-03", "Crazyflie 2.1")];
+        let err = check_one_platform(&bound, &mixed).unwrap_err();
+        let message = format!("{:#}", err);
+        assert!(
+            message.contains("Crazyflie 2.1 (CF-01, CF-03) and Crazyflie 2.1 Brushless (CF-02)"),
+            "{}",
+            message
+        );
+
+        // One platform, or no STM32/nRF51 image, is fine.
+        assert!(check_one_platform(&bound, &mixed[..1]).is_ok());
+        assert!(check_one_platform(&[], &mixed).is_ok());
+    }
 }

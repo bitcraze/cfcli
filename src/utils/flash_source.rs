@@ -10,6 +10,51 @@ use crate::error::CliError;
 use crate::modules::bootloader;
 use crate::utils::firmware::{self, FirmwareUpgrade};
 
+/// The platforms `--platform` takes: the short name, and the name the
+/// Crazyflie reports.
+const PLATFORMS: [(&str, &str); 5] = [
+    ("cf21", "Crazyflie 2.1"),
+    ("cf21bl", "Crazyflie 2.1 Brushless"),
+    ("bolt11", "Crazyflie Bolt 1.1"),
+    ("flapper", "Flapper (Bolt 1.1)"),
+    ("tag", "Roadrunner 1.0"),
+];
+
+/// The name a Crazyflie reports for a `--platform` short name.
+pub fn platform_name(short: &str) -> Result<&'static str> {
+    PLATFORMS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(short))
+        .map(|(_, platform)| *platform)
+        .ok_or_else(|| {
+            let valid: Vec<&str> = PLATFORMS.iter().map(|(name, _)| *name).collect();
+            anyhow!(CliError::InvalidValue(format!(
+                "unknown platform '{}'. Valid options: {}",
+                short,
+                valid.join(", ")
+            )))
+        })
+}
+
+/// The names Crazyflies report, to pick from.
+pub fn platform_names() -> Vec<&'static str> {
+    PLATFORMS.iter().map(|(_, platform)| *platform).collect()
+}
+
+/// The `--bin` keys for the STM32 or the nRF51, whose images are built for
+/// one platform. Deck firmware works whatever the Crazyflie.
+pub fn platform_bound(bins: &Option<HashMap<String, String>>) -> Vec<String> {
+    let mut keys: Vec<String> = bins
+        .iter()
+        .flatten()
+        .map(|(key, _)| key)
+        .filter(|key| matches!(key.split(['-', '@']).next(), Some("stm32") | Some("nrf51")))
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
 /// The release to flash: the one named (checked to exist), one picked from
 /// the list, or none.
 pub async fn release(release: &Option<Option<String>>, non_interactive: bool) -> Result<Option<String>> {
@@ -179,6 +224,29 @@ mod tests {
         let targets = Some(Some("bcLighthouse4-fw".to_string()));
 
         assert_eq!(single_explicit_target_for_bare_bin(&Some(bin), &targets), None);
+    }
+
+    #[test]
+    fn platform_short_names() {
+        assert_eq!(platform_name("cf21bl").unwrap(), "Crazyflie 2.1 Brushless");
+        assert_eq!(platform_name("CF21").unwrap(), "Crazyflie 2.1");
+        assert!(platform_name("cf3").is_err());
+    }
+
+    #[test]
+    fn stm32_and_nrf51_images_are_platform_bound() {
+        let bins: HashMap<String, String> = [
+            ("stm32-fw", "a.bin"),
+            ("nrf51-fw", "b.bin"),
+            ("stm32-fw@0x08004000", "c.bin"),
+            ("bcLighthouse4-fw", "d.bin"),
+            ("deckctrl-cfg", "e.bin"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(platform_bound(&Some(bins)), vec!["nrf51-fw", "stm32-fw", "stm32-fw@0x08004000"]);
+        assert!(platform_bound(&None).is_empty());
     }
 
     #[test]

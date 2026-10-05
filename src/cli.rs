@@ -602,6 +602,13 @@ enum SwarmBootloadCommands {
 struct SwarmFlashParameters {
     #[clap(flatten)]
     source: FirmwareSourceArgs,
+    /// Only flash the Crazyflies of this platform. STM32 and nRF51 images
+    /// given with --bin are built for one platform, so a swarm with several
+    /// platforms is flashed one platform at a time.
+    ///
+    /// Valid values: cf21, cf21bl, bolt11, flapper, tag
+    #[clap(long, verbatim_doc_comment)]
+    platform: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
