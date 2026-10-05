@@ -132,7 +132,8 @@ impl Swarm {
         Ok(())
     }
 
-    /// Turn every `radio://0/` URI into `radio://*/`. Returns how many changed.
+    /// Turn every `radio://0/` and `radio:///` URI into `radio://*/`.
+    /// Returns how many changed.
     pub fn use_any_radio(&mut self) -> usize {
         let mut changed = 0;
         for unit in &mut self.units {
@@ -374,10 +375,12 @@ units:
             ("radio://0/80/2M/E7E7E7E701", "a"),
             ("radio://1/80/2M/E7E7E7E702", "b"),
             ("radio://*/80/2M/E7E7E7E703", "c"),
+            ("radio:///80/2M/E7E7E7E704", "d"),
         ]);
-        assert_eq!(swarm.use_any_radio(), 1);
+        assert_eq!(swarm.use_any_radio(), 2);
         assert_eq!(swarm.units[0].uri, "radio://*/80/2M/E7E7E7E701");
         assert_eq!(swarm.units[1].uri, "radio://1/80/2M/E7E7E7E702");
+        assert_eq!(swarm.units[3].uri, "radio://*/80/2M/E7E7E7E704");
     }
 
     #[test]
@@ -385,6 +388,7 @@ units:
         let swarm = swarm(&[("radio://*/80/2M/E7E7E7E701", "CF-01"), ("usb://0", "CF-02")]);
         assert_eq!(swarm.find("cf-01"), Some(0));
         assert_eq!(swarm.find("radio://0/80/2M/e7e7e7e701"), Some(0));
+        assert_eq!(swarm.find("radio:///80/2M/E7E7E7E701"), Some(0));
         assert_eq!(swarm.find("usb://0"), Some(1));
         assert_eq!(swarm.find("CF-03"), None);
         assert_eq!(swarm.find("radio://0/81/2M/E7E7E7E701"), None);

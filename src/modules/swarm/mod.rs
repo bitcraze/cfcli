@@ -559,7 +559,7 @@ fn import(store: &Store, config: &mut Config, params: &SwarmImportParameters) ->
         store.save(id, swarm)?;
         print!("Imported swarm '{}' from {} ({})", id, file, crazyflies(swarm.units.len()));
         if any_radio > 0 {
-            print!(", {} radio://0/ URIs now radio://*/ (any Crazyradio)", any_radio);
+            print!(", {} URIs now use radio://*/ (any Crazyradio)", any_radio);
         }
         println!();
     }

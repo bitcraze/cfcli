@@ -102,8 +102,8 @@ Added Alpha radio://*/80/2M/E7E7E7E704
 
 A Crazyflie that is already in the swarm (same channel and address) is skipped.
 That includes Crazyflies that still have the default address: give each one its
-own address first, with `cfcli config set address=...`. A radio of 0 in the URI
-is stored as `*`, see [Any Crazyradio](#any-crazyradio).
+own address first, with `cfcli config set address=...`. A radio of 0, or an
+empty one, is stored as `*`, see [Any Crazyradio](#any-crazyradio).
 
 Rename a Crazyflie, or remove Crazyflies by name or URI. Without arguments,
 `rename` lets you pick the Crazyflie from a list and asks for the new name, and
@@ -132,8 +132,9 @@ cfcli swarm config import ~/Documents/Swarmkeeper/swarms/*.yaml
 cfcli swarm config import set-1.yaml --id lab-set
 ```
 
-Every `radio://0/` URI in an imported file is stored as `radio://*/`, so the
-swarm isn't tied to the first Crazyradio. URIs with another radio are kept.
+Every `radio://0/` URI (and any with an empty radio) in an imported file is
+stored as `radio://*/`, so the swarm isn't tied to the first Crazyradio. URIs
+with another radio are kept.
 
 Export the selected swarm, or another one by ID, to stdout or to a file:
 
@@ -161,12 +162,17 @@ Crazyradio cfcli picks. A number still means exactly that Crazyradio.
 A swarm on a single channel therefore always uses one Crazyradio; spread it
 over several channels to make use of more.
 
-In zsh (and bash with `failglob`) the `*` has to be quoted, or the shell tries
-to expand it as a file name:
+On the command line the radio can also be left empty, which means the same as
+`*`. It saves quoting the URI in zsh (and in bash with `failglob`), where an
+unquoted `*` is taken as a file name pattern:
 
 ```bash
+cfcli -u radio:///80/2M/E7E7E7E7E7 platform info
 cfcli -u 'radio://*/80/2M/E7E7E7E7E7' platform info
 ```
+
+cfcli always writes `*`, in swarm files and in its output, since it is easier
+to read.
 
 ## Checking which Crazyflies answer
 
