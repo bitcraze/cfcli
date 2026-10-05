@@ -505,6 +505,14 @@ enum SwarmCommands {
         #[clap(subcommand)]
         command: SwarmDeckCommands,
     },
+    /// Log variables of the Crazyflies in the swarm
+    Log {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmLogCommands,
+    },
     /// Debugging utilities for the Crazyflies in the swarm
     Debug {
         #[clap(flatten)]
@@ -565,6 +573,12 @@ enum SwarmParamCommands {
     Store(VariableName),
     /// Clear stored parameter values from EEPROM on each Crazyflie (reverts to firmware default)
     Clear(VariableName),
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmLogCommands {
+    /// Start logging and print variable values from each Crazyflie
+    Print(VariablesAndPeriod),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1311,4 +1325,7 @@ struct VariablesAndPeriod {
     /// The period in milliseconds to log at
     #[clap(long, short = 'p', default_value_t = 100)]
     period: u16,
+    /// Print one sample as a table and stop
+    #[clap(long)]
+    once: bool,
 }

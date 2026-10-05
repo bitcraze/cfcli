@@ -98,4 +98,23 @@ When `--timeout` fires on a streaming command, the process exits **0** (the
 timer is the intended way to stop it). This is the recommended pattern when
 running `cfcli log print` from a script or CI step.
 
+### One sample
+
+Add `--once` to read one sample and stop, shown as a table with a column per
+variable:
+
+```bash
+cfcli log print pm.vbat,pm.state --once
+```
+
+```text
+pm.vbat  | pm.state
+---------+----------
+4.196481 | 2
+```
+
+With `--csv` it is the same header and row as `log print --csv` gives for the
+first sample. `--once` is not a streaming command, so a `--timeout` that fires
+before the sample arrives exits **40**.
+
 ## Set up base station (i.e set channel and download calib data?)

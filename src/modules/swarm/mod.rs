@@ -75,6 +75,10 @@ pub(crate) async fn run(
             let runner = runner(&store, config, target, link_context, toc_cache).await?;
             commands::deck(&runner, command, csv).await
         }
+        SwarmCommands::Log { target, command } => {
+            let runner = runner(&store, config, target, link_context, toc_cache).await?;
+            commands::log(&runner, command, non_interactive, csv).await
+        }
         SwarmCommands::Debug { target, command } => {
             let runner = runner(&store, config, target, link_context, toc_cache).await?;
             commands::debug(&runner, command, csv).await

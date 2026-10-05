@@ -110,6 +110,24 @@ where
     I::Item: Tabled,
 {
     let mut table = Table::new(rows);
+    style(&mut table);
+    table
+}
+
+/// A table whose columns are only known at run time (`header`), in the same
+/// style as [`table`].
+pub fn table_from_records(header: &[String], rows: &[Vec<String>]) -> Table {
+    let mut builder = tabled::builder::Builder::default();
+    builder.push_record(header);
+    for row in rows {
+        builder.push_record(row);
+    }
+    let mut table = builder.build();
+    style(&mut table);
+    table
+}
+
+fn style(table: &mut Table) {
     table
         .with(
             Style::empty()
@@ -119,7 +137,6 @@ where
         // The first column sits flush left; every other column keeps the
         // single space that separates it from the `|`.
         .with(Modify::new(Columns::first()).with(Padding::new(0, 1, 0, 0)));
-    table
 }
 
 /// Print a table built by [`table`], without trailing whitespace on any row.

@@ -6,18 +6,21 @@
 //! reported on stderr, see [`Outcome::finish`] for the exit code.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Result;
 use crazyflie_lib::Crazyflie;
+use futures::stream::StreamExt;
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Outcome, Runner, SwarmRow};
-use crate::modules::{bootloader, debug, deck, param, platform};
-use crate::utils::display::{csv_row, print_table, table};
+use crate::error::CliError;
+use crate::modules::{bootloader, debug, deck, log, param, platform};
+use crate::utils::display::{csv_row, print_table, table, table_from_records};
 use crate::{
-    AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmParamCommands, SwarmPlatformCommands,
-    VariableName, VariableNameAndValue,
+    AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmLogCommands, SwarmParamCommands,
+    SwarmPlatformCommands, VariableName, VariableNameAndValue, VariablesAndPeriod,
 };
 
 pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv: bool) -> Result<()> {
@@ -110,6 +113,129 @@ pub async fn deck(runner: &Runner<'_>, command: &SwarmDeckCommands, csv: bool) -
         print_table(&table(&rows));
     }
     finish(runner, outcome)
+}
+
+pub async fn log(runner: &Runner<'_>, command: &SwarmLogCommands, non_interactive: bool, csv: bool) -> Result<()> {
+    let SwarmLogCommands::Print(VariablesAndPeriod { names, period, once }) = command;
+    let names = match names {
+        Some(names) => names.clone(),
+        None => pick(runner, non_interactive, "<names>", async |cf| log::pick_names(cf)).await?,
+    };
+    let names = log::split_names(&names);
+    let period = u64::from(*period);
+    if *once {
+        log_once(runner, &names, period, csv).await
+    } else {
+        log_stream(runner, &names, period, csv).await
+    }
+}
+
+/// One sample from each Crazyflie: a row per Crazyflie, a column per
+/// variable.
+async fn log_once(runner: &Runner<'_>, names: &[String], period: u64, csv: bool) -> Result<()> {
+    let results = runner.connected("Reading", async |cf, _| log::sample(cf, names, period).await).await;
+    let (done, outcome) = split(results);
+    if csv {
+        let mut header = vec!["cf", "uri", "timestamp_ms"];
+        header.extend(names.iter().map(String::as_str));
+        csv_row(&header);
+        for (i, data) in &done {
+            let timestamp = data.timestamp.to_string();
+            let values = log::values(data, names);
+            let mut fields = vec![timestamp.as_str()];
+            fields.extend(values.iter().map(String::as_str));
+            csv_row_for(&runner.targets[*i], &fields);
+        }
+    } else if !done.is_empty() {
+        let mut header = vec!["CF".to_string()];
+        header.extend(names.iter().cloned());
+        let rows: Vec<Vec<String>> = done
+            .iter()
+            .map(|(i, data)| {
+                let mut row = vec![runner.targets[*i].name.clone()];
+                row.extend(log::values(data, names));
+                row
+            })
+            .collect();
+        print_table(&table_from_records(&header, &rows));
+    }
+    finish(runner, outcome)
+}
+
+/// Log from every Crazyflie at the same time, each line with the
+/// Crazyflie's name in front, until stopped (Ctrl-C or `--timeout`) or until
+/// every Crazyflie has dropped out.
+async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: bool) -> Result<()> {
+    let connections = runner.connect_all("Connecting").await;
+    let starts = futures::future::join_all(connections.into_iter().map(|connection| async move {
+        let cf = connection?;
+        match log::start(&cf, names, period).await {
+            Ok(stream) => Ok((cf, stream)),
+            Err(e) => {
+                cf.disconnect().await;
+                Err(e)
+            }
+        }
+    }))
+    .await;
+
+    let mut results: Vec<Result<()>> = Vec::with_capacity(starts.len());
+    let mut connections = Vec::new();
+    let mut streams = Vec::new();
+    for (i, start) in starts.into_iter().enumerate() {
+        match start {
+            Ok((cf, stream)) => {
+                connections.push(cf);
+                streams.push(Box::pin(futures::stream::unfold(Some(stream), move |stream| async move {
+                    let stream = stream?;
+                    match stream.next().await {
+                        Ok(data) => Some(((i, Ok(data)), Some(stream))),
+                        Err(e) => Some(((i, Err(e)), None)),
+                    }
+                })));
+                results.push(Ok(()));
+            }
+            Err(e) => {
+                eprintln!("{}: {:#}", runner.targets[i].name, e);
+                results.push(Err(e));
+            }
+        }
+    }
+
+    if csv {
+        let mut header = vec!["cf", "uri", "timestamp_ms"];
+        header.extend(names.iter().map(String::as_str));
+        csv_row(&header);
+    }
+    let width = runner.targets.iter().map(|t| t.name.len()).max().unwrap_or(0) + 1;
+    let mut stdout = std::io::stdout();
+    let mut merged = futures::stream::select_all(streams);
+    while let Some((i, sample)) = merged.next().await {
+        let target = &runner.targets[i];
+        match sample {
+            Ok(data) if csv => {
+                let timestamp = data.timestamp.to_string();
+                let values = log::values(&data, names);
+                let mut fields = vec![timestamp.as_str()];
+                fields.extend(values.iter().map(String::as_str));
+                csv_row_for(target, &fields);
+                // Flush per row, like `log print --csv`, so a consumer sees
+                // the samples as they come.
+                let _ = stdout.flush();
+            }
+            Ok(data) => println!("{:<width$} {:?}", format!("{}:", target.name), data, width = width),
+            Err(e) => {
+                eprintln!("{}: stopped: {}", target.name, e);
+                results[i] = Err(CliError::Connection(format!("{} stopped logging: {}", target.link_uri, e)).into());
+            }
+        }
+    }
+
+    for cf in connections {
+        cf.disconnect().await;
+    }
+    let (_, outcome) = split(results);
+    outcome.finish()
 }
 
 /// One row of `swarm debug assert`.
