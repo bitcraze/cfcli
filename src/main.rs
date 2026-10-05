@@ -2,7 +2,7 @@ use crate::modules::bootloader;
 use crate::utils::deckctrl::DeckConfig;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_num::maybe_hex;
-use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, RadioSpeed, RawMemory};
+use crazyflie_lib::subsystems::memory::{MemoryDevice, MemoryType, RadioSpeed, RawMemory};
 use crazyflie_lib::TocCache;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
@@ -21,6 +21,7 @@ use tabled::Tabled;
 pub mod error;
 
 pub mod modules {
+    pub mod config;
     pub mod log;
     pub mod param;
     pub mod memory;
@@ -457,16 +458,7 @@ async fn radio_uri_from_usb(
 }
 
 async fn read_radio_uri(cf: &crazyflie_lib::Crazyflie) -> Result<String> {
-    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
-    if memories.len() != 1 {
-        bail!("No EEPROMConfig memory found or more than one ({})", memories.len());
-    }
-
-    let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
-        Some(Ok(m)) => m,
-        Some(Err(e)) => bail!("Could not read EEPROM config: {}", e),
-        None => bail!("No EEPROM memory found"),
-    };
+    let eeprom = modules::config::open(cf).await?;
 
     let speed_str = match eeprom.get_radio_speed() {
         RadioSpeed::R250Kbps => "250K",
@@ -996,17 +988,7 @@ async fn run() -> Result<()> {
                 ConfigCommands::Set(var) => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-                    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
-
-                    if memories.len() != 1 {
-                      bail!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
-                    }
-
-                    let mut eeprom_memory = match cf.memory.open_memory::<EEPROMConfigMemory>(memories[0].clone()).await {
-                      Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access EEPROM memory: {}", e),
-                      None => bail!("No EEPROM memory found"),
-                    };
+                    let mut eeprom_memory = modules::config::open(cf).await?;
 
                     for (key, value) in &var.settings {
                       match key.as_str() {

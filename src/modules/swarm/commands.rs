@@ -69,7 +69,7 @@ pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv:
 }
 
 async fn platform_info(runner: &Runner<'_>, csv: bool) -> Result<()> {
-    let results = runner.connected("Reading", async |cf| platform::info(cf).await).await;
+    let results = runner.connected("Reading", async |cf, _| platform::info(cf).await).await;
     let (done, outcome) = split(results);
     if csv {
         let mut header = vec!["cf", "uri"];
@@ -87,7 +87,7 @@ async fn platform_info(runner: &Runner<'_>, csv: bool) -> Result<()> {
 
 pub async fn deck(runner: &Runner<'_>, command: &SwarmDeckCommands, csv: bool) -> Result<()> {
     let SwarmDeckCommands::List = command;
-    let results = runner.connected("Reading", async |cf| Ok(deck::decks(cf).await)).await;
+    let results = runner.connected("Reading", async |cf, _| Ok(deck::decks(cf).await)).await;
     let (done, outcome) = split(results);
     if csv {
         csv_row(&["cf", "uri", "name", "revision", "serial"]);
@@ -122,7 +122,7 @@ struct AssertRow {
 pub async fn debug(runner: &Runner<'_>, command: &SwarmDebugCommands, csv: bool) -> Result<()> {
     let SwarmDebugCommands::Assert(AssertArgs { wait_timeout_ms }) = command;
     let wait = Duration::from_millis(*wait_timeout_ms);
-    let results = runner.connected("Reading", async |cf| debug::assert_info(cf, wait).await).await;
+    let results = runner.connected("Reading", async |cf, _| debug::assert_info(cf, wait).await).await;
     let (done, outcome) = split(results);
     if csv {
         csv_row(&["cf", "uri", "assert_info"]);
@@ -162,7 +162,7 @@ pub async fn param(
                 None => pick(runner, non_interactive, "<params>", async |cf| param::pick_values(cf).await).await?,
             };
             let results = runner
-                .connected("Setting", async |cf| {
+                .connected("Setting", async |cf, _| {
                     param::check_params_exist(cf, params.keys().map(String::as_str))?;
                     for (name, value) in &params {
                         param::set_value(cf, name, value).await?;
@@ -178,7 +178,7 @@ pub async fn param(
         SwarmParamCommands::Store(VariableName { names }) => {
             let names = persistent_names(runner, names, non_interactive, "Select parameters to store:").await?;
             let results = runner
-                .connected("Storing", async |cf| {
+                .connected("Storing", async |cf, _| {
                     param::check_params_exist(cf, names.split(','))?;
                     for name in names.split(',') {
                         cf.param.persistent_store(name).await?;
@@ -191,7 +191,7 @@ pub async fn param(
         SwarmParamCommands::Clear(VariableName { names }) => {
             let names = persistent_names(runner, names, non_interactive, "Select parameters to clear:").await?;
             let results = runner
-                .connected("Clearing", async |cf| {
+                .connected("Clearing", async |cf, _| {
                     param::check_params_exist(cf, names.split(','))?;
                     for name in names.split(',') {
                         cf.param.persistent_clear(name).await?;
@@ -207,7 +207,7 @@ pub async fn param(
 async fn param_get(runner: &Runner<'_>, names: &str, csv: bool) -> Result<()> {
     if csv {
         let results = runner
-            .connected("Reading", async |cf| {
+            .connected("Reading", async |cf, _| {
                 param::check_params_exist(cf, names.split(','))?;
                 let mut rows = Vec::new();
                 for name in names.split(',') {
@@ -228,7 +228,7 @@ async fn param_get(runner: &Runner<'_>, names: &str, csv: bool) -> Result<()> {
     }
 
     let results = runner
-        .connected("Reading", async |cf| {
+        .connected("Reading", async |cf, _| {
             param::check_params_exist(cf, names.split(','))?;
             param::get_rows(cf, names).await
         })

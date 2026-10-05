@@ -89,6 +89,13 @@ impl RadioUri {
         }))
     }
 
+    /// The same URI on another channel, with the radio as it was written.
+    pub fn with_channel(&self, channel: u8) -> String {
+        let (_, after_channel) = self.rest.split_once('/').expect("a parsed URI has a channel");
+        let radio = self.radio.map(|r| r.to_string()).unwrap_or_default();
+        format!("radio://{}/{}/{}", radio, channel, after_channel)
+    }
+
     /// The same URI on the given Crazyradio.
     pub fn with_radio(&self, radio: usize) -> String {
         format!("radio://{}/{}", radio, self.rest)
@@ -323,6 +330,14 @@ mod tests {
     fn with_radio_keeps_the_rest_of_the_uri() {
         let uri = RadioUri::parse("radio:///80/2M/E7E7E7E7E7?safelink=0").unwrap().unwrap();
         assert_eq!(uri.with_radio(2), "radio://2/80/2M/E7E7E7E7E7?safelink=0");
+    }
+
+    #[test]
+    fn with_channel_keeps_the_radio_and_the_rest() {
+        let uri = RadioUri::parse("radio:///80/2M/E7E7E7E701?safelink=0").unwrap().unwrap();
+        assert_eq!(uri.with_channel(76), "radio:///76/2M/E7E7E7E701?safelink=0");
+        let uri = RadioUri::parse("radio://1/80/250K/E7").unwrap().unwrap();
+        assert_eq!(uri.with_channel(4), "radio://1/4/250K/E7");
     }
 
     #[test]

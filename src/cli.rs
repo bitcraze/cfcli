@@ -513,6 +513,32 @@ enum SwarmCommands {
         #[clap(subcommand)]
         command: SwarmDebugCommands,
     },
+    /// Spread the swarm over several radio channels (reprograms and reboots the Crazyflies that move)
+    Rechannel(SwarmRechannelParameters),
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("channel_set")
+        .required(true)
+        .args(&["count", "channels"])
+))]
+struct SwarmRechannelParameters {
+    #[clap(flatten)]
+    target: SwarmTargetArgs,
+    /// Number of channels to use: 80, 78, 76, ... (the lower channels are
+    /// more crowded, so the swarm starts at 80 and goes down in steps of 2)
+    #[clap(long, value_parser = clap::value_parser!(u8).range(1..=41))]
+    count: Option<u8>,
+    /// The channels to use instead, comma-separated (0-125)
+    #[clap(long, value_delimiter = ',', value_parser = clap::value_parser!(u8).range(0..=125))]
+    channels: Vec<u8>,
+    /// Show which Crazyflies would move and stop
+    #[clap(long)]
+    dry_run: bool,
+    /// Don't ask before reprogramming
+    #[clap(long, short = 'y')]
+    yes: bool,
 }
 
 #[derive(Debug, Subcommand)]

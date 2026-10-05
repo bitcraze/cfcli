@@ -7,6 +7,7 @@
 //! what `--cf`/`--exclude` and `select --from-swarm` take.
 
 mod commands;
+mod rechannel;
 mod runner;
 pub mod store;
 
@@ -77,6 +78,9 @@ pub(crate) async fn run(
         SwarmCommands::Debug { target, command } => {
             let runner = runner(&store, config, target, link_context, toc_cache).await?;
             commands::debug(&runner, command, csv).await
+        }
+        SwarmCommands::Rechannel(params) => {
+            rechannel::rechannel(&store, config, params, link_context, toc_cache, non_interactive).await
         }
     }
 }
