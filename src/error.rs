@@ -13,6 +13,9 @@ pub enum CliError {
     MissingArg(String),
     InvalidValue(String),
     Timeout(String),
+    /// A swarm command failed on some of its Crazyflies but not on all of
+    /// them (or on all of them for different reasons).
+    SomeFailed(String),
 }
 
 impl CliError {
@@ -22,6 +25,7 @@ impl CliError {
             CliError::NotFound(_) => 20,
             CliError::MissingArg(_) | CliError::InvalidValue(_) => 30,
             CliError::Timeout(_) => 40,
+            CliError::SomeFailed(_) => 50,
         }
     }
 }
@@ -34,6 +38,7 @@ impl fmt::Display for CliError {
             CliError::MissingArg(s) => write!(f, "missing argument: {}", s),
             CliError::InvalidValue(s) => write!(f, "invalid value: {}", s),
             CliError::Timeout(s) => write!(f, "timeout: {}", s),
+            CliError::SomeFailed(s) => write!(f, "some Crazyflies failed: {}", s),
         }
     }
 }

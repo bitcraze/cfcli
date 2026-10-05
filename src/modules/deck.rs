@@ -43,13 +43,13 @@ const UNKNOWN: &str = "?";
 
 /// One deck as presented by `deck list`.
 #[derive(Tabled)]
-struct Deck {
+pub struct Deck {
     #[tabled(rename = "Name")]
-    name: String,
+    pub name: String,
     #[tabled(rename = "Rev")]
-    revision: String,
+    pub revision: String,
     #[tabled(rename = "Serial")]
-    serial: String,
+    pub serial: String,
 }
 
 impl Deck {
@@ -68,21 +68,7 @@ impl Deck {
 
 /// Print the decks attached to the Crazyflie.
 pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
-    let devices: Vec<MemoryDevice> = cf
-        .memory
-        .get_memories(None)
-        .into_iter()
-        .filter(|m| matches!(m.memory_type, MemoryType::OneWire | MemoryType::DeckCtrl))
-        .cloned()
-        .collect();
-
-    let mut decks = Vec::with_capacity(devices.len());
-    for device in &devices {
-        decks.push(match device.memory_type {
-            MemoryType::DeckCtrl => read_deckctrl_deck(cf, device).await,
-            _ => read_ow_deck(cf, device).await,
-        });
-    }
+    let decks = decks(cf).await;
 
     if csv {
         csv_row(&["name", "revision", "serial"]);
@@ -100,6 +86,26 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
     print_table(&table(&decks));
 
     Ok(())
+}
+
+/// The decks attached to the Crazyflie.
+pub async fn decks(cf: &Crazyflie) -> Vec<Deck> {
+    let devices: Vec<MemoryDevice> = cf
+        .memory
+        .get_memories(None)
+        .into_iter()
+        .filter(|m| matches!(m.memory_type, MemoryType::OneWire | MemoryType::DeckCtrl))
+        .cloned()
+        .collect();
+
+    let mut decks = Vec::with_capacity(devices.len());
+    for device in &devices {
+        decks.push(match device.memory_type {
+            MemoryType::DeckCtrl => read_deckctrl_deck(cf, device).await,
+            _ => read_ow_deck(cf, device).await,
+        });
+    }
+    decks
 }
 
 /// Read name and revision from a 1-wire deck memory.

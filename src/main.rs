@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::sync::Arc;
 use inquire::{Select, MultiSelect};
-use crazyflie_lib::Value;
 use anyhow::{bail, Context, Result};
 use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
@@ -35,6 +34,7 @@ pub mod modules {
     pub mod debug;
     pub mod lighthouse;
     pub mod deck;
+    pub mod platform;
     pub mod swarm;
 }
 
@@ -259,6 +259,16 @@ impl Config {
     fn effective_timeout(&self) -> u32 {
         self.timeout_ms.unwrap_or(1000)
     }
+}
+
+/// Add the connection timeout from the settings to a radio URI. It goes on
+/// at connection time and is never stored in the selected URI.
+fn with_timeout(config: &Config, uri: String) -> String {
+    if config.timeout_ms.is_none() || uri.starts_with("usb://") {
+        return uri;
+    }
+    let separator = if uri.contains('?') { '&' } else { '?' };
+    format!("{}{}timeout={}", uri, separator, config.effective_timeout())
 }
 
 #[derive(Clone)]
@@ -655,16 +665,7 @@ async fn run() -> Result<()> {
         } else {
             base
         };
-        if config.timeout_ms.is_some() && !base.starts_with("usb://") {
-            let timeout = config.effective_timeout();
-            if base.contains('?') {
-                format!("{}&timeout={}", base, timeout)
-            } else {
-                format!("{}?timeout={}", base, timeout)
-            }
-        } else {
-            base
-        }
+        with_timeout(&config, base)
     };
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
@@ -860,11 +861,7 @@ async fn run() -> Result<()> {
                       Some(n) => n.clone(),
                       None => {
                         require_arg(non_interactive, "<names>")?;
-                        let available_vars = cf.param.names();
-                        let selected_vars = MultiSelect::new("Select parameters to show:", available_vars)
-                          .prompt()
-                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
-                        selected_vars.join(",")
+                        modules::param::pick_names(cf, "Select parameters to show:").await?
                       }
                     };
 
@@ -877,24 +874,7 @@ async fn run() -> Result<()> {
                       Some(p) => p.clone(),
                       None => {
                         require_arg(non_interactive, "<params>")?;
-                        let available_vars = cf.param.names();
-                        let available_vars: Vec<String> = available_vars
-                          .into_iter()
-                          .filter(|name| cf.param.is_writable(name).unwrap_or(false))
-                          .collect();
-                        let selected_vars = MultiSelect::new("Select parameters to set:", available_vars)
-                          .prompt()
-                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
-
-                        let mut param_map = HashMap::new();
-                        for name in selected_vars {
-                          let param: Value = cf.param.get(&name).await?;
-                          let value: String = inquire::Text::new(&format!("[{}] {:?}:", name, param))
-                            .prompt()
-                            .map_err(|_| anyhow::anyhow!("No value entered for parameter '{}'", name))?;
-                          param_map.insert(name, value);
-                        }
-                        param_map
+                        modules::param::pick_values(cf).await?
                       }
                     };
 
@@ -907,17 +887,7 @@ async fn run() -> Result<()> {
                       Some(n) => n.clone(),
                       None => {
                         require_arg(non_interactive, "<names>")?;
-                        let available_vars = cf.param.names();
-                        let mut persistent_vars = Vec::new();
-                        for name in available_vars {
-                            if cf.param.is_persistent(&name).await? {
-                                persistent_vars.push(name);
-                            }
-                        }
-                        let selected_vars = MultiSelect::new("Select parameters to store:", persistent_vars)
-                          .prompt()
-                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
-                        selected_vars.join(",")
+                        modules::param::pick_persistent(cf, "Select parameters to store:").await?
                       }
                     };
 
@@ -930,17 +900,7 @@ async fn run() -> Result<()> {
                       Some(n) => n.clone(),
                       None => {
                         require_arg(non_interactive, "<names>")?;
-                        let available_vars = cf.param.names();
-                        let mut persistent_vars = Vec::new();
-                        for name in available_vars {
-                            if cf.param.is_persistent(&name).await? {
-                                persistent_vars.push(name);
-                            }
-                        }
-                        let selected_vars = MultiSelect::new("Select parameters to clear:", persistent_vars)
-                          .prompt()
-                          .map_err(|_| anyhow::anyhow!("No parameters selected"))?;
-                        selected_vars.join(",")
+                        modules::param::pick_persistent(cf, "Select parameters to clear:").await?
                       }
                     };
 
@@ -1345,19 +1305,17 @@ async fn run() -> Result<()> {
                 PlatformCommands::Info => {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-                    let protocol_version = cf.platform.protocol_version().await?;
-                    let firmware_version = cf.platform.firmware_version().await?;
-                    let device_type_name = cf.platform.device_type_name().await?;
+                    let info = modules::platform::info(cf).await?;
 
                     if csv {
                         println!("field,value");
-                        utils::display::csv_row(&["platform", &device_type_name]);
-                        utils::display::csv_row(&["firmware", &firmware_version]);
-                        utils::display::csv_row(&["crtp_protocol", &protocol_version.to_string()]);
+                        for (field, value) in modules::platform::PlatformInfo::CSV_HEADER.iter().zip(info.csv_fields()) {
+                            utils::display::csv_row(&[field, value]);
+                        }
                     } else {
-                        println!("Platform\t: {}", device_type_name);
-                        println!("Firmware\t: {}", firmware_version);
-                        println!("CRTP protocol\t: {}", protocol_version);
+                        println!("Platform\t: {}", info.platform);
+                        println!("Firmware\t: {}", info.firmware);
+                        println!("CRTP protocol\t: {}", info.protocol);
                     }
 
                 }
@@ -1602,7 +1560,7 @@ async fn run() -> Result<()> {
             modules::swarm::add_uris(&id, params, vec![radio_uri], non_interactive)?;
         }
         Commands::Swarm { command } => {
-            modules::swarm::run(&mut config, command, &link_context, non_interactive, csv).await?;
+            modules::swarm::run(&mut config, command, &link_context, toc_cache, non_interactive, csv).await?;
         }
         Commands::Deck { command } => {
             match command {

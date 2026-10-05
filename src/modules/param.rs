@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::Crazyflie;
 use crazyflie_lib::Value;
 use crazyflie_lib::ValueType;
@@ -24,7 +24,7 @@ struct ParamListRow {
 
 /// One row of `param get`, which also shows the persisted default and value.
 #[derive(Tabled)]
-struct ParamGetRow {
+pub struct ParamGetRow {
     #[tabled(rename = "Name")]
     name: String,
     #[tabled(rename = "Access")]
@@ -40,15 +40,23 @@ struct ParamGetRow {
 }
 
 /// CSV header shared by `param list` and `param get` so consumers see the
-/// same columns from both commands. Ordering matters — the `print_csv_row`
-/// helper below emits fields in this order.
-const PARAM_CSV_HEADER: &str = "name,access,persistent,default,stored_value,value";
+/// same columns from both commands. Ordering matters — the `csv_fields`
+/// helper below returns fields in this order.
+pub const PARAM_CSV_HEADER: &str = "name,access,persistent,default,stored_value,value";
 
-/// Build and emit one CSV row describing a single parameter. Reads:
-/// access, persistence state, stored/default values (if persistent), and
-/// the current value. Empty cells for fields that don't apply (e.g.
-/// non-persistent params have empty default/stored_value).
+/// Emit one CSV row describing a single parameter.
 async fn print_csv_row(cf: &Crazyflie, name: &str) -> Result<()> {
+    let fields = csv_fields(cf, name).await?;
+    let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
+    csv_row(&fields);
+    Ok(())
+}
+
+/// The CSV fields describing a single parameter. Reads: access,
+/// persistence state, stored/default values (if persistent), and the
+/// current value. Empty cells for fields that don't apply (e.g.
+/// non-persistent params have empty default/stored_value).
+pub async fn csv_fields(cf: &Crazyflie, name: &str) -> Result<Vec<String>> {
     let value: Value = cf.param.get(name).await?;
     let writable = if cf.param.is_writable(name)? { "RW" } else { "RO" };
 
@@ -68,14 +76,20 @@ async fn print_csv_row(cf: &Crazyflie, name: &str) -> Result<()> {
         ("no", String::new(), String::new())
     };
 
-    csv_row(&[name, writable, persistent, &default_s, &stored_s, &value_to_csv_string(&value)]);
-    Ok(())
+    Ok(vec![
+        name.to_string(),
+        writable.to_string(),
+        persistent.to_string(),
+        default_s,
+        stored_s,
+        value_to_csv_string(&value),
+    ])
 }
 
 /// Verify each `name` is in the parameter TOC. Bails with `CliError::NotFound`
 /// (exit 20) on the first miss. Avoids relying on string-matching the lib's
 /// `ParamError` messages downstream in `classify_exit_code`.
-fn check_params_exist<'a, I: IntoIterator<Item = &'a str>>(cf: &Crazyflie, names: I) -> Result<()> {
+pub fn check_params_exist<'a, I: IntoIterator<Item = &'a str>>(cf: &Crazyflie, names: I) -> Result<()> {
     let toc: HashSet<String> = cf.param.names().into_iter().collect();
     for name in names {
         if !toc.contains(name) {
@@ -139,6 +153,20 @@ pub async fn get(cf: &Crazyflie, names: &str, csv: bool) -> Result<()> {
         return Ok(());
     }
 
+    print_get_table(&get_rows(cf, names).await?, 1);
+    Ok(())
+}
+
+/// Print `param get` rows. `access_column` is the index of the Access
+/// column, which is centred.
+pub fn print_get_table<R: Tabled>(rows: &[R], access_column: usize) {
+    let mut table = table(rows);
+    table.with(Modify::new(Columns::one(access_column)).with(Alignment::center()));
+    print_table(&table);
+}
+
+/// The `param get` rows for `names` (comma-separated, checked to exist).
+pub async fn get_rows(cf: &Crazyflie, names: &str) -> Result<Vec<ParamGetRow>> {
     let mut rows = Vec::new();
     for name in names.split(',') {
         let value: Value = cf.param.get(name).await?;
@@ -170,65 +198,14 @@ pub async fn get(cf: &Crazyflie, names: &str, csv: bool) -> Result<()> {
             value: format!("{:?}", value),
         });
     }
-
-    let mut table = table(&rows);
-    table.with(Modify::new(Columns::one(1)).with(Alignment::center()));
-    print_table(&table);
-
-    Ok(())
+    Ok(rows)
 }
 
 pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>, store: bool) -> Result<()> {
   check_params_exist(cf, param_list.keys().map(|s| s.as_str()))?;
 
   for (name, value) in param_list {
-    match cf.param.get_type(&name) {
-      Ok(ValueType::U8) => {
-        let value:u8 = value.parse()?;
-        cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::U16) => {
-      let value:u16 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::U32) => {
-      let value:u32 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::U64) => {
-      let value:u64 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::I8) => {
-      let value:i8 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::I16) => {
-      let value:i16 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::I32) => {
-      let value:i32 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::I64) => {
-      let value:i64 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::F16) => {
-      let value:f32 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::F32) => {
-      let value:f32 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Ok(ValueType::F64) => {
-      let value:f64 = value.parse()?;
-      cf.param.set(name, value).await?;
-    },
-    Err(e) => bail!("Failed to get type for parameter '{}': {}", name, e),
-  }
+    set_value(cf, name, value).await?;
 
     if store {
       cf.param.persistent_store(name).await?;
@@ -237,6 +214,103 @@ pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>, store: bo
   }
 
   Ok(())
+}
+
+/// Set one parameter from its text form, parsed as the parameter's type.
+pub async fn set_value(cf: &Crazyflie, name: &str, value: &str) -> Result<()> {
+    match cf.param.get_type(name) {
+        Ok(ValueType::U8) => {
+            let value: u8 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::U16) => {
+            let value: u16 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::U32) => {
+            let value: u32 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::U64) => {
+            let value: u64 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::I8) => {
+            let value: i8 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::I16) => {
+            let value: i16 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::I32) => {
+            let value: i32 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::I64) => {
+            let value: i64 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::F16) => {
+            let value: f32 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::F32) => {
+            let value: f32 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Ok(ValueType::F64) => {
+            let value: f64 = value.parse()?;
+            cf.param.set(name, value).await?;
+        }
+        Err(e) => bail!("Failed to get type for parameter '{}': {}", name, e),
+    }
+    Ok(())
+}
+
+/// Let the user pick parameters, returned comma-separated.
+pub async fn pick_names(cf: &Crazyflie, message: &str) -> Result<String> {
+    let selected = inquire::MultiSelect::new(message, cf.param.names())
+        .prompt()
+        .map_err(|_| anyhow!("No parameters selected"))?;
+    Ok(selected.join(","))
+}
+
+/// Let the user pick persistent parameters, returned comma-separated.
+pub async fn pick_persistent(cf: &Crazyflie, message: &str) -> Result<String> {
+    let mut persistent = Vec::new();
+    for name in cf.param.names() {
+        if cf.param.is_persistent(&name).await? {
+            persistent.push(name);
+        }
+    }
+    let selected = inquire::MultiSelect::new(message, persistent)
+        .prompt()
+        .map_err(|_| anyhow!("No parameters selected"))?;
+    Ok(selected.join(","))
+}
+
+/// Let the user pick writable parameters and type a value for each.
+pub async fn pick_values(cf: &Crazyflie) -> Result<HashMap<String, String>> {
+    let writable: Vec<String> = cf
+        .param
+        .names()
+        .into_iter()
+        .filter(|name| cf.param.is_writable(name).unwrap_or(false))
+        .collect();
+    let selected = inquire::MultiSelect::new("Select parameters to set:", writable)
+        .prompt()
+        .map_err(|_| anyhow!("No parameters selected"))?;
+
+    let mut values = HashMap::new();
+    for name in selected {
+        let current: Value = cf.param.get(&name).await?;
+        let value = inquire::Text::new(&format!("[{}] {:?}:", name, current))
+            .prompt()
+            .map_err(|_| anyhow!("No value entered for parameter '{}'", name))?;
+        values.insert(name, value);
+    }
+    Ok(values)
 }
 
 pub async fn store(cf: &Crazyflie, names: &str) -> Result<()> {

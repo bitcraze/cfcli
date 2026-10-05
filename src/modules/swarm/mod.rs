@@ -6,6 +6,8 @@
 //! single command. Crazyflies are named by their short `name`, which is also
 //! what `--cf`/`--exclude` and `select --from-swarm` take.
 
+mod commands;
+mod runner;
 pub mod store;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -16,20 +18,19 @@ use tabled::Tabled;
 
 use crate::error::CliError;
 use crate::utils::display::{csv_row, print_table, table};
-use crate::utils::radio::{self, RadioUri};
+use crate::utils::radio;
 use crate::{
-    Config, SwarmAddParameters, SwarmCommands, SwarmConfigCommands, SwarmCreateParameters,
+    Config, ConfigTocCache, SwarmAddParameters, SwarmCommands, SwarmConfigCommands, SwarmCreateParameters,
     SwarmExportParameters, SwarmImportParameters, SwarmTargetArgs,
 };
+use runner::Runner;
 use store::{Store, Swarm, Unit};
-
-/// Attempts at reaching a Crazyflie in `swarm scan` before calling it offline.
-const SCAN_ATTEMPTS: usize = 3;
 
 pub(crate) async fn run(
     config: &mut Config,
     command: &SwarmCommands,
     link_context: &LinkContext,
+    toc_cache: ConfigTocCache,
     non_interactive: bool,
     csv: bool,
 ) -> Result<()> {
@@ -59,18 +60,39 @@ pub(crate) async fn run(
             SwarmConfigCommands::Export(params) => export(&store, &swarm_id(config, params.id.as_deref())?, params),
         },
         SwarmCommands::Scan(target) => {
-            let (swarm, selected) = target_units(&store, config, target)?;
-            scan(link_context, &swarm, &selected, csv).await
+            scan(&runner(&store, config, target, link_context, toc_cache).await?, csv).await
+        }
+        SwarmCommands::Platform { target, command } => {
+            let runner = runner(&store, config, target, link_context, toc_cache).await?;
+            commands::platform(&runner, command, csv).await
+        }
+        SwarmCommands::Param { target, command } => {
+            let runner = runner(&store, config, target, link_context, toc_cache).await?;
+            commands::param(&runner, command, non_interactive, csv).await
+        }
+        SwarmCommands::Deck { target, command } => {
+            let runner = runner(&store, config, target, link_context, toc_cache).await?;
+            commands::deck(&runner, command, csv).await
+        }
+        SwarmCommands::Debug { target, command } => {
+            let runner = runner(&store, config, target, link_context, toc_cache).await?;
+            commands::debug(&runner, command, csv).await
         }
     }
 }
 
-/// The swarm and the Crazyflies in it that a command contacts.
-fn target_units(store: &Store, config: &Config, target: &SwarmTargetArgs) -> Result<(Swarm, Vec<usize>)> {
+/// A runner for the Crazyflies of the swarm that a command contacts.
+async fn runner<'a>(
+    store: &Store,
+    config: &Config,
+    target: &SwarmTargetArgs,
+    link_context: &'a LinkContext,
+    toc_cache: ConfigTocCache,
+) -> Result<Runner<'a>> {
     let id = swarm_id(config, target.swarm.as_deref())?;
     let swarm = store.load(&id)?;
     let selected = swarm.select(&id, &target.cf, &target.exclude)?;
-    Ok((swarm, selected))
+    Runner::new(link_context, config, toc_cache, &swarm, &selected).await
 }
 
 /// The swarm a command acts on: the one given, else the selected one.
@@ -594,84 +616,32 @@ struct ScanRow {
     online: String,
 }
 
-/// Check which of the selected Crazyflies answer. Each Crazyradio checks its
-/// own Crazyflies, all radios at the same time.
-async fn scan(link_context: &LinkContext, swarm: &Swarm, selected: &[usize], csv: bool) -> Result<()> {
-    let units: Vec<&Unit> = selected.iter().map(|i| &swarm.units[*i]).collect();
-
-    // Radio for each radio:// Crazyflie, None for usb://.
-    let parsed = units.iter().map(|unit| RadioUri::parse(&unit.uri)).collect::<Result<Vec<_>>>()?;
-    let links: Vec<radio::Link> = parsed
-        .iter()
-        .flatten()
-        .map(|r| radio::Link { radio: r.radio, channel: r.channel })
-        .collect();
-    let mut radios: Vec<Option<usize>> = vec![None; units.len()];
-    if !links.is_empty() {
-        let available = radio::available_radios(link_context).await;
-        if available.is_empty() {
-            bail!(CliError::Connection("no Crazyradio could be opened".to_string()));
-        }
-        let assignment = radio::assign(&links, &available);
-        for warning in &assignment.warnings {
-            eprintln!("Warning: {}", warning);
-        }
-        let mut assigned = assignment.radios.into_iter();
-        for (radio, parsed) in radios.iter_mut().zip(&parsed) {
-            if parsed.is_some() {
-                *radio = assigned.next();
-            }
-        }
-    }
-
-    let usb_present = if parsed.iter().any(|p| p.is_none()) {
+/// Check which Crazyflies answer: one packet each (a few tries), no
+/// connection.
+async fn scan(runner: &Runner<'_>, csv: bool) -> Result<()> {
+    let link_context = runner.link_context();
+    let usb_present = if runner.targets.iter().any(|t| t.radio.is_none()) {
         crate::scan_usb(link_context).await?
     } else {
         Vec::new()
     };
+    let results = runner
+        .each("Checking", async |t| match t.radio {
+            Some(_) => Ok(t.answers(link_context).await),
+            None => Ok(usb_present.contains(&t.uri)),
+        })
+        .await;
+    let online: Vec<bool> = results.into_iter().map(|r| r.unwrap_or(false)).collect();
 
-    let mut by_radio: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
-    for (i, radio) in radios.iter().enumerate() {
-        if let Some(radio) = radio {
-            by_radio.entry(*radio).or_default().push(i);
-        }
-    }
-    let probes = by_radio.into_iter().map(|(radio, members)| {
-        let parsed = &parsed;
-        async move {
-            let mut results = Vec::new();
-            for i in members {
-                let uri = parsed[i].as_ref().expect("only radio URIs get a radio").with_radio(radio);
-                let mut online = false;
-                for _ in 0..SCAN_ATTEMPTS {
-                    if matches!(link_context.scan_selected(vec![uri.as_str()]).await, Ok(found) if !found.is_empty()) {
-                        online = true;
-                        break;
-                    }
-                }
-                results.push((i, online));
-            }
-            results
-        }
-    });
-    let mut online = vec![false; units.len()];
-    for (i, answered) in futures::future::join_all(probes).await.into_iter().flatten() {
-        online[i] = answered;
-    }
-    for (i, unit) in units.iter().enumerate() {
-        if parsed[i].is_none() {
-            online[i] = usb_present.contains(&unit.uri);
-        }
-    }
-
-    let rows: Vec<ScanRow> = units
+    let rows: Vec<ScanRow> = runner
+        .targets
         .iter()
-        .enumerate()
-        .map(|(i, unit)| ScanRow {
-            name: unit.name.clone(),
-            uri: unit.uri.clone(),
-            radio: radios[i].map(|r| r.to_string()).unwrap_or_else(|| "USB".to_string()),
-            online: if online[i] { "yes" } else { "no" }.to_string(),
+        .zip(&online)
+        .map(|(t, online)| ScanRow {
+            name: t.name.clone(),
+            uri: t.uri.clone(),
+            radio: t.radio.map(|r| r.to_string()).unwrap_or_else(|| "USB".to_string()),
+            online: if *online { "yes" } else { "no" }.to_string(),
         })
         .collect();
 
@@ -683,7 +653,7 @@ async fn scan(link_context: &LinkContext, swarm: &Swarm, selected: &[usize], csv
     } else {
         print_table(&table(&rows));
         let answered = online.iter().filter(|o| **o).count();
-        println!("{} of {} answered", answered, crazyflies(units.len()));
+        println!("{} of {} answered", answered, crazyflies(rows.len()));
     }
     Ok(())
 }

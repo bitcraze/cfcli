@@ -9,8 +9,8 @@
     $cfcliDynKind = ''
     $cfcliSuffix = ''
     switch -regex ($command) {
-        'cfcli;param;set$'             { $cfcliDynKind = 'param-names-writable'; $cfcliSuffix = '=' }
-        'cfcli;param;(get|store|clear)$' { $cfcliDynKind = 'param-names' }
+        'cfcli;(swarm;)?param;set$'    { $cfcliDynKind = 'param-names-writable'; $cfcliSuffix = '=' }
+        'cfcli;(swarm;)?param;(get|store|clear)$' { $cfcliDynKind = 'param-names' }
         'cfcli;config;set$'            { $cfcliDynKind = 'config-keys'; $cfcliSuffix = '=' }
         'cfcli;log;print$'             { $cfcliDynKind = 'log-names' }
         'cfcli;swarm;config;(select|delete|show|export)$' { $cfcliDynKind = 'swarm-configs' }

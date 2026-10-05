@@ -86,7 +86,7 @@ Commands:
   debug        Debugging utilities (assert info dumps, etc.)
   lh           Lighthouse positioning system configuration
   deck         Decks attached to the Crazyflie
-  swarm        Swarms of Crazyflies: store them, select one, check which ones answer
+  swarm        Swarms of Crazyflies: store them and run commands on them
   completions  Generate a shell completion script (printed to stdout)
   help         Print this message or the help of the given subcommand(s)
 
@@ -109,6 +109,7 @@ Exit codes:
   20  resource not found (param/log/memory, swarm or Crazyflie by name, release name)
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
+  50  a swarm command failed on some of the Crazyflies
 ```
 
 To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies
@@ -237,8 +238,9 @@ prompt) a few flags make the output predictable:
   commands a timeout means the command got stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
-  `platform info`, `swarm config list`/`show`, `swarm scan`). Other commands
-  ignore the flag.
+  `platform info`, `swarm config list`/`show`, `swarm scan`,
+  `swarm platform info`, `swarm param get`, `swarm deck list`,
+  `swarm debug assert`). Other commands ignore the flag.
 
 Exit codes:
 
@@ -251,6 +253,7 @@ Exit codes:
 | 20   | Resource not found (param/log/memory, swarm or Crazyflie by name, release name) |
 | 30   | Invalid value (range, type, malformed input)                                    |
 | 40   | `--timeout` expired on a bounded command                                        |
+| 50   | A swarm command failed on some of the Crazyflies                                |
 
 Worked example — read one parameter into a shell variable:
 
