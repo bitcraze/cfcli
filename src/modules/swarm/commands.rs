@@ -17,7 +17,7 @@ use tabled::Tabled;
 use super::runner::{csv_row_for, split, Outcome, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::{bootloader, debug, deck, log, param, platform};
-use crate::utils::display::{csv_row, print_table, table, table_from_records};
+use crate::utils::display::{csv_row, print_table, table, table_from_records, StreamTable};
 use crate::{
     AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmLogCommands, SwarmParamCommands,
     SwarmPlatformCommands, VariableName, VariableNameAndValue, VariablesAndPeriod,
@@ -202,28 +202,42 @@ async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: boo
         }
     }
 
-    if csv {
-        let mut header = vec!["cf", "uri", "timestamp_ms"];
-        header.extend(names.iter().map(String::as_str));
-        csv_row(&header);
+    // The header only once some Crazyflie is logging.
+    let mut table = None;
+    if !streams.is_empty() {
+        if csv {
+            let mut header = vec!["cf", "uri", "timestamp_ms"];
+            header.extend(names.iter().map(String::as_str));
+            csv_row(&header);
+        } else {
+            let name_width = runner.targets.iter().map(|t| t.name.len()).max().unwrap_or(0);
+            let mut columns = vec![("CF", name_width)];
+            columns.extend(log::stream_columns(names));
+            table = Some(StreamTable::new(&columns));
+        }
     }
-    let width = runner.targets.iter().map(|t| t.name.len()).max().unwrap_or(0) + 1;
     let mut stdout = std::io::stdout();
     let mut merged = futures::stream::select_all(streams);
     while let Some((i, sample)) = merged.next().await {
         let target = &runner.targets[i];
         match sample {
-            Ok(data) if csv => {
-                let timestamp = data.timestamp.to_string();
-                let values = log::values(&data, names);
-                let mut fields = vec![timestamp.as_str()];
-                fields.extend(values.iter().map(String::as_str));
-                csv_row_for(target, &fields);
-                // Flush per row, like `log print --csv`, so a consumer sees
-                // the samples as they come.
-                let _ = stdout.flush();
+            Ok(data) => {
+                let fields = log::stream_fields(&data, names);
+                let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
+                match &table {
+                    Some(table) => {
+                        let mut row = vec![target.name.as_str()];
+                        row.extend(fields);
+                        table.row(&row);
+                    }
+                    None => {
+                        csv_row_for(target, &fields);
+                        // Flush per row, like `log print --csv`, so a
+                        // consumer sees the samples as they come.
+                        let _ = stdout.flush();
+                    }
+                }
             }
-            Ok(data) => println!("{:<width$} {:?}", format!("{}:", target.name), data, width = width),
             Err(e) => {
                 eprintln!("{}: stopped: {}", target.name, e);
                 results[i] = Err(CliError::Connection(format!("{} stopped logging: {}", target.link_uri, e)).into());

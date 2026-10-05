@@ -145,3 +145,74 @@ pub fn print_table(table: &Table) {
         println!("{}", line.trim_end());
     }
 }
+
+/// A table printed a row at a time, for output that streams, in the style
+/// of [`table`]. The rows aren't known up front, so each column is as wide
+/// as its header or its minimum width, whichever is wider; a longer value
+/// pushes the rest of its row to the right.
+pub struct StreamTable {
+    widths: Vec<usize>,
+}
+
+impl StreamTable {
+    /// A table with these columns: a name and a minimum width each.
+    pub fn new(columns: &[(&str, usize)]) -> Self {
+        let table = StreamTable {
+            widths: columns.iter().map(|(name, min)| name.len().max(*min)).collect(),
+        };
+        let names: Vec<&str> = columns.iter().map(|(name, _)| *name).collect();
+        println!("{}", table.line(&names));
+        println!("{}", table.rule());
+        table
+    }
+
+    /// Print one row, flushed so that a consumer reading a pipe sees it
+    /// right away.
+    pub fn row(&self, fields: &[&str]) {
+        use std::io::Write;
+        println!("{}", self.line(fields));
+        let _ = std::io::stdout().flush();
+    }
+
+    fn line(&self, fields: &[&str]) -> String {
+        let mut line = String::new();
+        for (i, (field, width)) in fields.iter().zip(&self.widths).enumerate() {
+            if i > 0 {
+                line.push_str("| ");
+            }
+            line.push_str(&format!("{:<width$} ", field, width = width));
+        }
+        line.trim_end().to_string()
+    }
+
+    fn rule(&self) -> String {
+        self.widths
+            .iter()
+            .enumerate()
+            .map(|(i, width)| "-".repeat(if i == 0 { width + 1 } else { width + 2 }))
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_tables_look_like_tables() {
+        let header: Vec<String> = ["CF", "Time (ms)", "pm.vbat"].iter().map(|s| s.to_string()).collect();
+        let row: Vec<String> = ["CF-01", "8112423", "4.117302"].iter().map(|s| s.to_string()).collect();
+        let expected: Vec<String> = table_from_records(&header, &[row.clone()])
+            .to_string()
+            .lines()
+            .map(|line| line.trim_end().to_string())
+            .collect();
+
+        // Columns as wide as the widest of header and row, like `table`.
+        let streamed = StreamTable { widths: vec![5, 9, 8] };
+        let header: Vec<&str> = header.iter().map(String::as_str).collect();
+        let row: Vec<&str> = row.iter().map(String::as_str).collect();
+        assert_eq!(vec![streamed.line(&header), streamed.rule(), streamed.line(&row)], expected);
+    }
+}

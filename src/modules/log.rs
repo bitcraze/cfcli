@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use crazyflie_lib::subsystems::log::{LogData, LogPeriod, LogStream};
 use crazyflie_lib::Crazyflie;
 use std::io::Write;
-use crate::utils::display::{csv_row, print_table, table, table_from_records, value_to_csv_string};
+use crate::utils::display::{csv_row, print_table, table, table_from_records, value_to_csv_string, StreamTable};
 use tabled::Tabled;
 
 /// One row of `log list`.
@@ -59,6 +59,27 @@ pub fn values(data: &LogData, names: &[String]) -> Vec<String> {
     .collect()
 }
 
+/// Width of the time column of streamed samples: a u32 of milliseconds.
+const TIME_WIDTH: usize = 10;
+/// Minimum width of a value column of streamed samples, enough for most
+/// floats.
+const VALUE_WIDTH: usize = 12;
+
+/// The columns of streamed samples: the Crazyflie's time, then a column per
+/// variable in the order asked for.
+pub fn stream_columns(names: &[String]) -> Vec<(&str, usize)> {
+  let mut columns = vec![("Time (ms)", TIME_WIDTH)];
+  columns.extend(names.iter().map(|name| (name.as_str(), VALUE_WIDTH)));
+  columns
+}
+
+/// A streamed sample as table fields: the time, then the values.
+pub fn stream_fields(data: &LogData, names: &[String]) -> Vec<String> {
+  let mut fields = vec![data.timestamp.to_string()];
+  fields.extend(values(data, names));
+  fields
+}
+
 /// Split a comma-separated list of variable names.
 pub fn split_names(names: &str) -> Vec<String> {
   names.split(',').map(|s| s.to_string()).collect()
@@ -102,8 +123,7 @@ pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Resul
     csv_row(&header);
     let mut stdout = std::io::stdout();
     while let Ok(data) = stream.next().await {
-      let mut row = vec![data.timestamp.to_string()];
-      row.extend(values(&data, &name_list));
+      let row = stream_fields(&data, &name_list);
       let row_refs: Vec<&str> = row.iter().map(|s| s.as_str()).collect();
       csv_row(&row_refs);
       // Flush per row so consumers piping `log print --csv` see samples in
@@ -111,8 +131,10 @@ pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Resul
       let _ = stdout.flush();
     }
   } else {
+    let table = StreamTable::new(&stream_columns(&name_list));
     while let Ok(data) = stream.next().await {
-        println!("{:?}", data);
+      let row = stream_fields(&data, &name_list);
+      table.row(&row.iter().map(String::as_str).collect::<Vec<_>>());
     }
   }
 

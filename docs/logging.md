@@ -58,12 +58,18 @@ cfcli log print acc.x,acc.y -p 10
 
 The period defaults to 100 ms if `-p`/`--period` is omitted.
 
-This will produce an output similar to this:
+This prints a table with the Crazyflie's time and a column per variable, one
+row per sample:
 
 ```text
-LogData { timestamp: 377433600, data: {"acc.x": F32(0.02040638), "acc.y": F32(-0.011233097)} }
-LogData { timestamp: 377436160, data: {"acc.x": F32(0.018765358), "acc.y": F32(-0.01344875)} }
+Time (ms)  | acc.x        | acc.y
+-----------+--------------+--------------
+377433600  | 0.02040638   | -0.011233097
+377436160  | 0.018765358  | -0.01344875
 ```
+
+The columns can't be sized from samples that haven't arrived yet, so a value
+longer than its column pushes the rest of its row to the right.
 
 ### CSV output
 
