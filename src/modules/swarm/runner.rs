@@ -178,10 +178,14 @@ impl<'a> Runner<'a> {
 
     /// Connect to every target, run `op` on it and disconnect again. Each
     /// TOC missing from the cache is downloaded from one Crazyflie only.
-    pub async fn connected<T>(&self, label: &str, op: impl AsyncFn(&Crazyflie) -> Result<T>) -> Vec<Result<T>> {
+    pub async fn connected<T>(
+        &self,
+        label: &str,
+        op: impl AsyncFn(&Crazyflie, &Target) -> Result<T>,
+    ) -> Vec<Result<T>> {
         let connect_and_run = async |target: &Target| {
             let cf = self.connect(target).await?;
-            let result = op(&cf).await;
+            let result = op(&cf, target).await;
             cf.disconnect().await;
             result
         };
@@ -204,7 +208,11 @@ impl<'a> Runner<'a> {
                         Err(e) => return Probe::Done(Err(e)),
                     };
                     let missed = probe.missed();
-                    let probed = if missed.is_empty() { Probe::Done(op(&cf).await) } else { Probe::Missed(missed) };
+                    let probed = if missed.is_empty() {
+                        Probe::Done(op(&cf, &self.targets[i]).await)
+                    } else {
+                        Probe::Missed(missed)
+                    };
                     cf.disconnect().await;
                     probed
                 })

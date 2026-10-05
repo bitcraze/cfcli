@@ -167,7 +167,8 @@ cfcli -u radio:///80/2M/E7E7E7E7E7 platform info
   Crazyflies so far. With a single Crazyradio everything runs on it.
 
 A swarm on a single channel therefore always uses one Crazyradio; spread it
-over several channels to make use of more.
+over several channels with [`swarm rechannel`](#spreading-a-swarm-over-channels)
+to make use of more.
 
 ## Checking which Crazyflies answer
 
@@ -259,6 +260,59 @@ Crazyflies running the same firmware share their parameter and log TOCs. A
 TOC that isn't in the cache yet is downloaded from one Crazyflie only; the
 others wait and then use the cache. Run with `-n` (no TOC cache) and every
 Crazyflie downloads its own.
+
+## Spreading a swarm over channels
+
+Crazyflies on the same channel always share a Crazyradio (see
+[Any Crazyradio](#any-crazyradio)), so a swarm on one channel can't use more
+than one Crazyradio. `swarm rechannel` moves the Crazyflies of a swarm onto
+several channels. With one Crazyradio per channel, `--count` set to the number
+of Crazyradios lets each one serve its own part of the swarm.
+
+```bash
+cfcli swarm rechannel --count 3            # 80, 78 and 76
+cfcli swarm rechannel --channels 80,76,72  # these channels
+```
+
+`--count` starts at channel 80 and goes down in steps of 2: the lower channels
+are more crowded, and channels less than 2 apart interfere at 2M. Only the
+channel of each Crazyflie changes, not its address, datarate or radio.
+
+Each channel gets an equal share of the Crazyflies. Crazyflies that are
+already on one of the channels stay there, as far as its share allows, so as
+few Crazyflies as possible are reprogrammed, and running the same command
+again changes nothing. A swarm on 72, 76 and 80, moved with `--count 3`, only
+reprograms the Crazyflies on 72 (to 78).
+
+cfcli shows which Crazyflies move and asks before doing anything. `--dry-run`
+stops after showing it, and `--yes` skips the question (needed when running
+non-interactively):
+
+```text
+$ cfcli swarm rechannel --count 2
+CF    | URI                       | From | To
+------+---------------------------+------+----
+CF-01 | radio:///90/2M/ABAD1DEA01 | 90   | 80
+CF-02 | radio:///90/2M/ABAD1DEA02 | 90   | 78
+2 of 3 Crazyflies move
+? Reprogram 2 Crazyflies? (y/N)
+```
+
+The channel is stored in the EEPROM config of each Crazyflie, and the firmware
+only reads it at boot. So each Crazyflie that moves is reprogrammed on its old
+channel (the same as `cfcli config set channel=...`), rebooted, and then looked
+for on its new channel. Its URI in the swarm file, and the selected URI if it
+was this Crazyflie's, change only once it answers there. A summary shows what
+happened to each one, and the exit code follows the same rules as the other
+swarm commands.
+
+If the command is interrupted, run it again. A Crazyflie that no longer
+answers on its old channel but does on its new one only gets its URI updated.
+
+Two Crazyflies on the same channel with the same address can't be told apart,
+so a plan that would put them together is refused before anything is changed.
+Crazyflies that still have the default address need their own address first,
+with `cfcli config set address=...`.
 
 ## Using one Crazyflie from a swarm
 
