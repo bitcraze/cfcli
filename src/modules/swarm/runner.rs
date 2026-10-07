@@ -481,6 +481,7 @@ mod tests {
             timeout_ms: None,
             addresses: Vec::new(),
             swarm: None,
+            sync: None,
         };
         let probe = ProbeCache::new(ConfigTocCache::new(config, false));
         assert_eq!(probe.get_toc(&[1, 0xaa, 0xbb, 0xcc, 0xdd]).as_deref(), Some("{\"a\":[1,8]}"));

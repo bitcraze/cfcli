@@ -87,6 +87,7 @@ Commands:
   lh           Lighthouse positioning system configuration
   deck         Decks attached to the Crazyflie
   swarm        Swarms of Crazyflies: store them and run commands on them
+  auth         Your account for sharing swarms: sign in, sign out
   completions  Generate a shell completion script (printed to stdout)
   help         Print this message or the help of the given subcommand(s)
 
@@ -198,6 +199,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Select](/docs/select.md)
 * [Settings](/docs/settings.md)
 * [Swarms](/docs/swarm.md)
+* [Signing in](/docs/auth.md)
 * [Crazyradio](/docs/crazyradio.md)
 * [Debug](/docs/debug.md)
 * [Test](/docs/test.md)

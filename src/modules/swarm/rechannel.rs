@@ -21,7 +21,7 @@ use inquire::Confirm;
 use tabled::Tabled;
 
 use super::runner::{split, Runner, Target};
-use super::store::Store;
+use super::Swarms;
 use crate::error::CliError;
 use crate::modules::{bootloader, config};
 use crate::utils::display::{print_table, table};
@@ -111,7 +111,7 @@ struct ResultRow {
 }
 
 pub(super) async fn rechannel(
-    store: &Store,
+    swarms: &Swarms,
     config: &mut Config,
     params: &SwarmRechannelParameters,
     link_context: &LinkContext,
@@ -120,7 +120,7 @@ pub(super) async fn rechannel(
 ) -> Result<()> {
     let target = &params.target;
     let id = super::swarm_id(config, target.swarm.as_deref())?;
-    let mut swarm = store.load(&id)?;
+    let swarm = swarms.load(&id).await?;
     let selected = swarm.select(&id, &target.cf, &target.exclude)?;
 
     let channels = match params.count {
@@ -274,18 +274,30 @@ pub(super) async fn rechannel(
 
     // 5. The swarm file (and the selected URI) follow the Crazyflies that
     // answer on their new channel.
+    // A shared swarm's change may run again on a newer version, so the
+    // Crazyflies are found by name.
     let mut changed = false;
+    let mut moved: Vec<(String, String)> = Vec::new();
     for (i, m) in moves.iter().enumerate() {
         if found[i] {
-            swarm.units[m.unit].uri = m.new_uri.clone();
+            moved.push((swarm.units[m.unit].name.clone(), m.new_uri.clone()));
             if let Some(uri) = follow_move(&config.uri, &m.old_uri, m.to) {
                 config.uri = uri;
                 changed = true;
             }
         }
     }
-    if found.iter().any(|f| *f) {
-        store.save(&id, &swarm)?;
+    if !moved.is_empty() {
+        swarms
+            .change(&id, |swarm| {
+                for (name, uri) in &moved {
+                    if let Some(i) = swarm.find(name) {
+                        swarm.units[i].uri = uri.clone();
+                    }
+                }
+                Ok(())
+            })
+            .await?;
     }
     if changed {
         super::save_config(config);

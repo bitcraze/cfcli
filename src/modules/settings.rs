@@ -11,6 +11,7 @@ pub fn show(config: &Config) {
     }
     println!("Preserved console history file: {}", console_preserve_path().display());
     println!("Selected swarm: {}", config.swarm.as_deref().unwrap_or("none"));
+    sync_show(config);
     if let Ok(store) = Store::open() {
         println!("Swarm folder: {}", store.dir().display());
     }
@@ -83,4 +84,27 @@ pub fn address_clear(config: &mut Config) {
         println!("Could not save settings: {:?}", err);
     });
     println!("Addresses reset to default (E7E7E7E7E7)");
+}
+
+pub fn sync_show(config: &Config) {
+    println!(
+        "Sync shared swarms: {}{}",
+        if config.sync_on() { "on" } else { "off" },
+        if config.sync.is_none() { " (default)" } else { "" }
+    );
+}
+
+pub fn sync_set(config: &mut Config, on: bool) {
+    config.sync = Some(on);
+    confy::store("cf-cli", None, config.clone()).unwrap_or_else(|err| {
+        println!("Could not save settings: {:?}", err);
+    });
+    if on {
+        println!("Sync is on: swarm commands check the server first and upload changes right away");
+    } else {
+        println!(
+            "Sync is off: swarm commands use this computer's copies of shared swarms; \
+             'cfcli swarm config pull' and 'push' sync them"
+        );
+    }
 }
