@@ -1232,6 +1232,17 @@ async fn run() -> Result<()> {
                 PlatformCommands::Wakeup => {
                     crazyflie_lib::Crazyflie::power_on_stm32_domain(&link_context, uri.as_str()).await?;
                 }
+                PlatformCommands::Dfu => {
+                    if !modules::bootloader::stm32_dfu(&link_context, uri.as_str()).await? {
+                        bail!(
+                            "the STM32 did not show up on USB in DFU mode. The Crazyflie has to be connected \
+                             over USB, and its nRF51 firmware has to support the command. If the STM32 did \
+                             restart, `cfcli platform reboot` brings it back to its firmware."
+                        );
+                    }
+                    println!("STM32 is in USB DFU mode (0483:df11)");
+                    println!("When done, restart it into its firmware with: cfcli platform reboot");
+                }
             }
             
         }
