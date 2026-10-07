@@ -1601,6 +1601,8 @@ async fn run() -> Result<()> {
 
                   if upgrade.get_target_and_types().is_empty() {
                     println!("No valid targets to flash, exiting!");
+                  } else if !utils::flash_source::confirm_nrf51_bootloader(&upgrade, 1, source.accept_bootloader_risk, non_interactive)? {
+                    println!("Nothing flashed");
                   } else {
                     modules::bootloader::flash(
                       &link_context,

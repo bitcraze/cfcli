@@ -67,6 +67,11 @@ Options:
 
           Example: stm32-fw,nrf51-fw
 
+      --accept-bootloader-risk
+          Don't ask before flashing an nRF51 bootloader+softdevice given with
+          --bin. If that bootloader does not start, the Crazyflie can only be
+          recovered with an SWD debug probe.
+
       --cold
           Use coldboot (i.e rescue mode) to flash the device
 
@@ -173,12 +178,31 @@ cfcli bootload flash --bin stm32-fw@0x08004000=custom-stm.bin,nrf51-fw=cf2_nrf.b
 
 - `stm32-fw` — STM32 main firmware, flashed via the Crazyflie bootloader. **Requires a radio URI** (USB is not supported for this target; use `select` or `--uri radio://…`).
 - `nrf51-fw` — nRF51 radio/power firmware, flashed via the Crazyflie bootloader. **Requires a radio URI** (USB is not supported for this target).
+- `nrf51-bootloader+softdevice` — nRF51 bootloader and softdevice, flashed via the Crazyflie bootloader before the nRF51 firmware. **Requires a radio URI**. See [Flashing the nRF51 bootloader](#flashing-the-nrf51-bootloader).
 - `bcAI:esp-fw` — AI deck ESP32 firmware, flashed via the deck memory.
 - `bcLighthouse4-fw` — Lighthouse deck firmware, flashed via the deck memory.
 - `bcColorLedTop:col-fw` — Color LED deck (top) firmware, flashed via the deck memory.
 - `bcColorLedBot:col-fw` — Color LED deck (bottom) firmware, flashed via the deck memory.
 - `deckctrl-fw` — DeckCtrl firmware, flashed via the `DeckCtrlDFU` memory. Requires exactly one DeckCtrl deck attached.
 - `deckctrl-cfg` — DeckCtrl configuration blob (as produced by `cfcli util deck-ctrl bingen`), flashed alongside the firmware.
+
+#### Flashing the nRF51 bootloader
+
+Releases and ZIP files carry the nRF51 bootloader and softdevice as one
+`nrf51-bootloader+softdevice` binary. It is flashed before the nRF51 firmware,
+and only when the Crazyflie has an older bootloader or softdevice than the
+release.
+
+A bootloader+softdevice given with `--bin` is always flashed. If that
+bootloader does not start, the Crazyflie can no longer be flashed over the
+radio and can only be recovered with an SWD debug probe, so `cfcli` asks
+before flashing it. `--accept-bootloader-risk` flashes it without asking, and
+is needed when running non-interactively. Replacing the bootloader erases the
+start of the nRF51 firmware, so flash that in the same command:
+
+```text
+cfcli bootload flash --bin nrf51-bootloader+softdevice=sd130_bootloader.bin,nrf51-fw=cf2_nrf.bin
+```
 
 #### Recovery mode boot
 
