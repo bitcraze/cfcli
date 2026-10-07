@@ -21,6 +21,7 @@ use tabled::Tabled;
 pub mod error;
 
 pub mod modules {
+    pub mod auth;
     pub mod config;
     pub mod log;
     pub mod param;
@@ -155,6 +156,10 @@ pub struct Config {
     /// ID of the selected swarm (see `cfcli swarm config select`)
     #[serde(default)]
     swarm: Option<String>,
+    /// Whether swarm commands sync shared swarms with the server (see
+    /// `cfcli settings sync`); None is the default, on.
+    #[serde(default)]
+    sync: Option<bool>,
 }
 
 fn default_addresses() -> Vec<String> {
@@ -170,11 +175,16 @@ impl Default for Config {
             timeout_ms: None,
             addresses: default_addresses(),
             swarm: None,
+            sync: None,
         }
     }
 }
 
 impl Config {
+    fn sync_on(&self) -> bool {
+        self.sync.unwrap_or(true)
+    }
+
     fn effective_timeout(&self) -> u32 {
         self.timeout_ms.unwrap_or(1000)
     }
@@ -263,6 +273,7 @@ fn uses_selected_uri(cmd: &Commands) -> bool {
     !matches!(
         cmd,
         Commands::Completions { .. }
+            | Commands::Auth { .. }
             | Commands::Scan(_)
             | Commands::Select(_)
             | Commands::Settings { .. }
@@ -466,8 +477,8 @@ fn selected_swarm_units() -> Vec<String> {
     let Some(id) = selected else {
         return Vec::new();
     };
-    modules::swarm::store::Store::open()
-        .and_then(|store| store.load(&id))
+    modules::swarm::Swarms::open_cached()
+        .and_then(|swarms| swarms.cached(&id))
         .map(|swarm| swarm.units.into_iter().map(|unit| unit.name).collect())
         .unwrap_or_default()
 }
@@ -521,8 +532,8 @@ fn emit_dynamic_completions(kind: CompletionKind, partial: &str) {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-        CompletionKind::SwarmConfigs => modules::swarm::store::Store::open()
-            .and_then(|store| store.ids())
+        CompletionKind::SwarmConfigs => modules::swarm::Swarms::open_cached()
+            .and_then(|swarms| swarms.cached_ids())
             .unwrap_or_default(),
         CompletionKind::SwarmUnits => selected_swarm_units(),
     };
@@ -635,7 +646,7 @@ async fn run() -> Result<()> {
         Commands::Select(select_options) => {
             let mut selected_from = None;
             let selected_uri = if let Some(name) = &select_options.from_swarm {
-                let (uri, from) = modules::swarm::pick_unit(&config, name.as_deref(), non_interactive)?;
+                let (uri, from) = modules::swarm::pick_unit(&config, name.as_deref(), non_interactive).await?;
                 selected_from = Some(from);
                 uri
             } else if select_options.from_usb {
@@ -996,6 +1007,13 @@ async fn run() -> Result<()> {
                         SettingsAddressCommands::Add { address } => settings::address_add(&mut config, address)?,
                         SettingsAddressCommands::Remove { address } => settings::address_remove(&mut config, address),
                         SettingsAddressCommands::Clear => settings::address_clear(&mut config),
+                    }
+                }
+                SettingsCommands::Sync { command: sync_cmd } => {
+                    match sync_cmd {
+                        SettingsSyncCommands::Show => settings::sync_show(&config),
+                        SettingsSyncCommands::On => settings::sync_set(&mut config, true),
+                        SettingsSyncCommands::Off => settings::sync_set(&mut config, false),
                     }
                 }
             }
@@ -1453,7 +1471,7 @@ async fn run() -> Result<()> {
             if params.from_usb =>
         {
             // Check the swarm before connecting to anything.
-            let id = modules::swarm::swarm_to_change(&config, params.swarm.as_deref())?;
+            let id = modules::swarm::swarm_to_change(&config, params.swarm.as_deref()).await?;
             // One Crazyflie at a time, so --name can't end up on the wrong one.
             let found = scan_usb(&link_context).await?;
             if found.is_empty() {
@@ -1469,10 +1487,13 @@ async fn run() -> Result<()> {
             let usb_uri = &found[0];
             println!("Found Crazyflie on USB: {}", usb_uri);
             let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache, args.debug, preserve_console).await?;
-            modules::swarm::add_uris(&id, params, vec![radio_uri], non_interactive)?;
+            modules::swarm::add_uris(&config, &id, params, vec![radio_uri], non_interactive).await?;
         }
         Commands::Swarm { command } => {
             modules::swarm::run(&mut config, command, &link_context, toc_cache, non_interactive, csv).await?;
+        }
+        Commands::Auth { command } => {
+            modules::auth::run(command).await?;
         }
         Commands::Deck { command } => {
             match command {

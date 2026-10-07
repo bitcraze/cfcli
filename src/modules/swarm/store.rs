@@ -215,7 +215,7 @@ impl Store {
         Ok(Store { dir: config.with_file_name("swarms") })
     }
 
-    #[cfg(test)]
+    /// A store in another folder: the copies of shared swarms, and tests.
     pub fn at(dir: PathBuf) -> Self {
         Store { dir }
     }

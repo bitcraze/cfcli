@@ -20,14 +20,15 @@ cfcli swarm config list
 ```
 
 ```text
-  | ID   | Name           | Crazyflies
---+------+----------------+------------
-* | lab  | Lab Crazyflies | 3
-  | show | Show swarm     | 49
+  | ID   | Name           | Crazyflies | Stored
+--+------+----------------+------------+---------------
+* | lab  | Lab Crazyflies | 3          | this computer
+  | show | Show swarm     | 49         | this computer
 ```
 
 The ID (`lab`) is what you type in commands. It is also the file name, so it
 can only contain letters, digits, `-`, `_` and `.`. The name is only shown.
+Shared swarms (see [Sharing swarms](#sharing-swarms)) are listed too.
 
 Select another swarm by ID, or run `select` without an ID to pick one from a
 list. When running non-interactively, `select` without an ID prints the list
@@ -143,6 +144,70 @@ Export the selected swarm, or another one by ID, to stdout or to a file:
 cfcli swarm config export
 cfcli swarm config export lab -o lab.yaml
 ```
+
+## Sharing swarms
+
+When cfcli is [signed in](auth.md), swarms can be shared with the people you
+fly with through the server. A shared swarm's ID is `<organization>/<swarm>`,
+for instance `bitcraze-lab/cage`; a local swarm's is just `<swarm>`. Every swarm
+command takes either, and `list` shows both:
+
+```text
+  | ID                | Name        | Crazyflies | Stored
+--+-------------------+-------------+------------+----------------------------
+* | lab               | Lab         | 3          | this computer
+  | bitcraze-lab/cage | Flight cage | 8          | arc.bitcraze.io, revision 3
+```
+
+Create a shared swarm, change it like any other, and delete it (for everyone
+in the organization):
+
+```bash
+cfcli swarm config create bitcraze-lab/demo --name "Demo"
+cfcli swarm config add radio:///80/2M/E7E7E7E701 --name CF-01 --swarm bitcraze-lab/demo
+cfcli swarm config delete bitcraze-lab/demo
+```
+
+Share a local swarm by moving it to the server, and move it back to stop
+sharing it. Moving it back deletes it on the server, so cfcli asks first. The
+selected swarm follows the move:
+
+```bash
+cfcli swarm config move lab bitcraze-lab/lab
+cfcli swarm config move bitcraze-lab/lab lab
+```
+
+`move` also renames a swarm (`move lab lab-old`). `import` can put a file
+straight into a shared swarm with `--id bitcraze-lab/<swarm>`.
+
+### Sync
+
+cfcli keeps a copy of each shared swarm it uses. With sync on, which is the
+default, every command checks the server first (a quick check when nothing
+changed) and changes go to the server right away. If someone else changed the
+swarm in the meantime, your change is made again on their version, so nobody's
+work is lost.
+
+Turn sync off to make commands faster; they then use this computer's copies,
+and you sync them yourself:
+
+```bash
+cfcli settings sync off
+cfcli swarm config pull          # get the latest version of every shared swarm
+cfcli swarm config push          # upload the changes made here
+```
+
+`list` marks copies with changes that aren't pushed. When someone else changed
+a swarm since your copy, `push` stops and tells you how to choose: `pull
+--force <swarm>` keeps their version and drops yours, `push --force <swarm>`
+keeps yours and overwrites theirs. `pull` never drops changes that aren't
+pushed unless you give `--force`.
+
+When the server can't be reached, commands use the copies and say so, and
+changes are kept: with sync on they are uploaded when the server answers
+again, with sync off by `push`. Working with the Crazyflies never waits for
+the internet. Creating and deleting shared swarms needs the server, except
+that a swarm created without it is uploaded later.
 
 ## Any Crazyradio
 
@@ -419,6 +484,11 @@ each time a command connects.
 Swarms are files in a `swarms` folder next to the cfcli config file, on Linux
 `~/.config/cf-cli/swarms/<id>.yaml`. `cfcli settings show` prints the folder
 and the selected swarm. Use `import` and `export` rather than editing the files.
+
+The copies of shared swarms are kept apart from them, in
+`~/.config/cf-cli/synced/<server>/<organization>/<swarm>.yaml`, with
+`state.json` saying which revision each copy is and whether it has changes
+that aren't pushed. Don't edit those; change shared swarms with the commands.
 
 ### File format
 

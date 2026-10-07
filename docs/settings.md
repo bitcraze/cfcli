@@ -11,6 +11,7 @@ Commands:
   show     Show all current settings
   timeout  Manage the connection timeout
   address  Manage scan addresses
+  sync     Whether swarm commands sync shared swarms with the server
   help     Print this message or the help of the given subcommand(s)
 ```
 
@@ -90,3 +91,17 @@ If all addresses are removed, the list is automatically reset to the default
 ```bash
 cfcli settings address clear
 ```
+
+## Syncing shared swarms
+
+Whether swarm commands check the server before using a [shared swarm](swarm.md#sharing-swarms)
+and upload changes right away (on, the default), or use this computer's copies
+so they run faster (off). With sync off, `cfcli swarm config pull` and `push`
+sync the copies.
+
+```bash
+cfcli settings sync show
+cfcli settings sync off
+cfcli settings sync on
+```
+

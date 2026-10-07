@@ -352,6 +352,12 @@ enum Commands {
         command: SwarmCommands,
     },
 
+    /// Your account for sharing swarms: sign in, sign out
+    Auth {
+        #[clap(subcommand)]
+        command: AuthCommands,
+    },
+
     /// Generate a shell completion script (printed to stdout)
     Completions {
         /// Shell to generate the completion script for
@@ -455,6 +461,23 @@ struct SelectOptions {
     /// Select a Crazyflie from the selected swarm by name (prompts for one if no name is given)
     #[clap(long, value_name = "CF", conflicts_with_all = ["address", "auto", "from_usb"])]
     from_swarm: Option<Option<String>>,
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthCommands {
+    /// Sign in through the browser; cfcli gets its key by itself
+    Login {
+        /// Server to sign in to
+        #[clap(long, default_value = "https://arc.bitcraze.io", value_name = "URL")]
+        server: String,
+        /// Print the sign-in link instead of opening the browser
+        #[clap(long)]
+        no_browser: bool,
+    },
+    /// Sign out and revoke cfcli's key
+    Logout,
+    /// Show who cfcli is signed in as
+    Status,
 }
 
 /// The Crazyflies a swarm command contacts. Flattened into every command
@@ -673,11 +696,42 @@ enum SwarmConfigCommands {
     Import(SwarmImportParameters),
     /// Export a swarm (Swarmkeeper format)
     Export(SwarmExportParameters),
+    /// Share a swarm (lab -> org/lab), take it back (org/lab -> lab), or rename it
+    ///
+    /// Taking a shared swarm back deletes it on the server, for everyone in
+    /// the organization. The selected swarm follows the move.
+    Move {
+        /// The swarm to move
+        #[clap(value_name = "SWARM")]
+        from: String,
+        /// Its new ID: <swarm> on this computer, <org>/<swarm> on the server
+        #[clap(value_name = "NEW_ID")]
+        to: String,
+    },
+    /// Get the latest version of the shared swarms (needed with sync off)
+    Pull {
+        /// Only this shared swarm (<org>/<swarm>)
+        #[clap(value_name = "SWARM")]
+        id: Option<String>,
+        /// Drop changes on this computer that aren't pushed
+        #[clap(long)]
+        force: bool,
+    },
+    /// Upload changes to shared swarms made with sync off or without the server
+    Push {
+        /// Only this shared swarm (<org>/<swarm>)
+        #[clap(value_name = "SWARM")]
+        id: Option<String>,
+        /// Overwrite what others uploaded since
+        #[clap(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Args)]
 struct SwarmCreateParameters {
-    /// Swarm ID, also its file name (letters, digits, '-', '_' and '.')
+    /// Swarm ID, also its file name (letters, digits, '-', '_' and '.').
+    /// <org>/<swarm> creates a shared swarm on the server.
     id: String,
     /// Name shown for the swarm (defaults to the ID)
     #[clap(long)]
@@ -780,6 +834,21 @@ enum SettingsCommands {
         #[clap(subcommand)]
         command: SettingsAddressCommands,
     },
+    /// Whether swarm commands sync shared swarms with the server
+    Sync {
+        #[clap(subcommand)]
+        command: SettingsSyncCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SettingsSyncCommands {
+    /// Show whether sync is on
+    Show,
+    /// Check the server before each command and upload changes right away (the default)
+    On,
+    /// Use this computer's copies; sync with 'swarm config pull' and 'push' (faster)
+    Off,
 }
 
 #[derive(Debug, Subcommand)]
