@@ -1,8 +1,9 @@
 # Lighthouse Positioning System
 
 The `lh` command manages the Lighthouse positioning system configuration stored
-on the Crazyflie. It can read, write and display the base station geometry and
-calibration data needed for lighthouse-based positioning.
+on the Crazyflie. It can read, write, display and check the base station
+geometry and calibration data needed for lighthouse-based positioning. Only
+Lighthouse V2 base stations are supported.
 
 ```text
 Usage: cfcli lh <COMMAND>
@@ -23,10 +24,16 @@ base station:
 - **Calibration** — the base station's intrinsic sweep parameters
   (`phase`, `tilt`, `curve`, `gibmag`/`gibphase`, `ogeemag`/`ogeephase` for
   each of two sweeps, plus the base station UID). This data is broadcast by
-  the base stations themselves and stored on the Crazyflie.
+  the base stations themselves and stored on the Crazyflie. When a base station
+  with another UID shows up on a channel, the Crazyflie takes that base
+  station's calibration and stores it.
 
-Both are kept in a dedicated lighthouse memory on the Crazyflie. There are 16
-base station slots (IDs `0..15`), each marked valid or invalid.
+Both are kept in a dedicated lighthouse memory on the Crazyflie, with a slot
+per base station ID, each marked valid or invalid. The memory has room for 16
+(IDs `0..15`), but the firmware supports as many as it was built for:
+4 by default (IDs `0..3`), up to 16 with a larger
+`CONFIG_DECK_LIGHTHOUSE_MAX_N_BS`. cfcli finds the number from the size of
+the lighthouse memory.
 
 ## Config
 
@@ -37,6 +44,7 @@ Commands:
   display  Display lighthouse configuration in human-readable form
   read     Read lighthouse configuration as YAML (to file or stdout)
   write    Write lighthouse configuration from YAML (from file or stdin)
+  check    Compare the Crazyflie's lighthouse configuration with YAML (from file or stdin)
 ```
 
 ### YAML File Format
@@ -84,13 +92,18 @@ calibs:
 Top-level fields:
 
 - `type` — file type marker, always `lighthouse_system_configuration`
-- `version` — file format version, `'1'`, the only version cflib reads. Files
-  written as `'2'` by earlier cfcli versions are read too
-- `systemType` — `1` for V1 base stations, `2` for V2
+- `version` — file format version: cfcli writes `'1'`, the version cflib
+  reads, and also reads `'2'`, which earlier cfcli versions wrote for the same
+  format
+- `systemType` — `2`, Lighthouse V2 base stations. A file for V1 base
+  stations (`1`) is refused; when the field is missing, V2 is assumed, as in
+  cflib
 - `geos` — map of `bs_id -> { origin, rotation }`
 - `calibs` — map of `bs_id -> { uid, sweeps[2] }`
 
 Either map can be omitted or empty if you only want to read/write one half.
+The maps are written in base station order, so reading the same configuration
+twice gives the same file. Other top-level fields are kept.
 
 ### Display
 
@@ -152,7 +165,8 @@ Options:
   to stdout and informational messages go to stderr so the output can be piped
   directly.
 
-Read iterates all 16 base station slots and includes only those marked valid.
+Read goes through the base station slots the firmware supports and includes
+only those marked valid.
 
 #### Read Examples
 
@@ -180,9 +194,15 @@ Options:
 - `-i, --input <FILE>` — read YAML from a file. If omitted, YAML is read from
   stdin.
 
-All base station slots are written. Slots present in the YAML are uploaded as
-valid, while slots omitted from the YAML are written as invalid to clear
-stale configuration. The resulting configuration is then persisted to flash.
+All base station slots the firmware supports are written. Slots present in
+the YAML are uploaded as valid, while slots omitted from the YAML are written
+as invalid to clear stale configuration. The resulting configuration is then
+persisted to flash.
+
+The file is checked before cfcli connects, and a configuration with base
+station IDs the firmware doesn't support is refused before anything is
+written (exit code 30), for example 8 base stations for a Crazyflie with the
+default firmware.
 
 #### Write Examples
 
@@ -192,6 +212,58 @@ cfcli lh config write -i my_setup.yaml
 
 # Pipe YAML in from stdin
 cat my_setup.yaml | cfcli lh config write
+```
+
+### Check
+
+Compare the configuration on the Crazyflie with a YAML file (or stdin), base
+station by base station.
+
+```text
+cfcli lh config check [-i <FILE>]
+```
+
+Options:
+
+- `-i, --input <FILE>` — read YAML from a file. If omitted, YAML is read from
+  stdin.
+
+Values are compared exactly, as the Crazyflie stores them. For each base
+station, the geometry and the calibration are:
+
+- `same`
+- for geometry: how far the Crazyflie's is from the file's, `moved 4.1 cm,
+  turned 0.62°`
+- for calibration: `other base station` when the UIDs differ. The Crazyflie
+  has seen another base station on that channel and taken its calibration,
+  so the base station was probably replaced and the geometry may need a new
+  estimate. `other values` when the UID is the same.
+- `not on the Crazyflie` or `not in the file`
+
+The command exits with 0 when the Crazyflie has the configuration in the
+file and with **60** when it differs, so scripts can tell which Crazyflies
+need a `write`.
+
+With `--csv` the result is one row per base station:
+
+```text
+bs_id,geometry,moved_m,turned_deg,calibration,file_uid,cf_uid
+0,same,,,same,3900185618,3900185618
+1,differs,0.041,0.62,same,824402352,824402352
+2,only_in_file,,,only_in_file,2148461594,
+```
+
+`geometry` and `calibration` are `same`, `differs`, `only_in_file`,
+`only_on_cf` or `absent` (in neither).
+
+#### Check Examples
+
+```text
+# Is the Crazyflie up to date?
+cfcli lh config check -i my_setup.yaml
+
+# Write only when it differs
+cfcli lh config check -i my_setup.yaml; [ $? -eq 60 ] && cfcli lh config write -i my_setup.yaml
 ```
 
 ## Copy a Configuration Between Crazyflies

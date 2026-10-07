@@ -200,6 +200,7 @@ const HELP_EPILOG: &str = "\x1b[1m\x1b[4mExit codes:\x1b[0m
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
   50  a swarm command failed on some of the Crazyflies
+  60  a check found differences (lh config check)
 ";
 
 #[derive(Parser, Debug)]
@@ -401,6 +402,8 @@ enum LighthouseConfigCommands {
     Read(LighthouseReadParameters),
     /// Write lighthouse configuration from YAML (from file or stdin)
     Write(LighthouseWriteParameters),
+    /// Compare the Crazyflie's lighthouse configuration with YAML (from file or stdin)
+    Check(LighthouseCheckParameters),
 }
 
 #[derive(Debug, Args)]
@@ -413,6 +416,13 @@ struct LighthouseDisplayParameters {
 #[derive(Debug, Args)]
 struct LighthouseWriteParameters {
     /// YAML file to read configuration from (reads stdin if omitted)
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseCheckParameters {
+    /// YAML file to compare with (reads stdin if omitted)
     #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
     input: Option<String>,
 }

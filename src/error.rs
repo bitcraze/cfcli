@@ -16,6 +16,9 @@ pub enum CliError {
     /// A swarm command failed on some of its Crazyflies but not on all of
     /// them (or on all of them for different reasons).
     SomeFailed(String),
+    /// A check found that the Crazyflie differs from what it was compared
+    /// with (`lh config check`).
+    Differs(String),
 }
 
 impl CliError {
@@ -26,6 +29,7 @@ impl CliError {
             CliError::MissingArg(_) | CliError::InvalidValue(_) => 30,
             CliError::Timeout(_) => 40,
             CliError::SomeFailed(_) => 50,
+            CliError::Differs(_) => 60,
         }
     }
 }
@@ -39,6 +43,7 @@ impl fmt::Display for CliError {
             CliError::InvalidValue(s) => write!(f, "invalid value: {}", s),
             CliError::Timeout(s) => write!(f, "timeout: {}", s),
             CliError::SomeFailed(s) => write!(f, "some Crazyflies failed: {}", s),
+            CliError::Differs(s) => write!(f, "differs: {}", s),
         }
     }
 }

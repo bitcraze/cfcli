@@ -1441,29 +1441,30 @@ async fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Lh { command } => {
+        Commands::Lh { command: LighthouseCommands::Config { command } } => {
+            // Files are loaded before connecting, so a bad one fails at once.
             match command {
-                LighthouseCommands::Config { command } => {
-                    if let LighthouseConfigCommands::Display(params) = &command {
-                        if let Some(file_path) = &params.input {
-                            modules::lighthouse::display_file(file_path)?;
-                            return Ok(());
-                        }
+                LighthouseConfigCommands::Display(params) => match &params.input {
+                    Some(file_path) => modules::lighthouse::display_file(file_path, csv)?,
+                    None => {
+                        let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                        modules::lighthouse::display(cf, csv, non_interactive).await?;
                     }
-
+                },
+                LighthouseConfigCommands::Write(params) => {
+                    let file = modules::lighthouse::load(params.input.as_deref())?;
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-
-                    match command {
-                        LighthouseConfigCommands::Display(_) => {
-                            modules::lighthouse::display(&cf, csv, non_interactive).await?;
-                        }
-                        LighthouseConfigCommands::Write(params) => {
-                            modules::lighthouse::write(&cf, params.input.as_deref(), non_interactive).await?;
-                        }
-                        LighthouseConfigCommands::Read(params) => {
-                            modules::lighthouse::read(&cf, params.output.as_deref(), non_interactive).await?;
-                        }
-                    }
+                    modules::lighthouse::write(cf, &file, non_interactive).await?;
+                }
+                LighthouseConfigCommands::Read(params) => {
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    modules::lighthouse::read(cf, params.output.as_deref(), non_interactive).await?;
+                }
+                LighthouseConfigCommands::Check(params) => {
+                    let file = modules::lighthouse::load(params.input.as_deref())?;
+                    let source = params.input.as_deref().unwrap_or("the configuration from stdin");
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    modules::lighthouse::check(cf, &file, source, csv, non_interactive).await?;
                 }
             }
         }

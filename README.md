@@ -111,6 +111,7 @@ Exit codes:
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
   50  a swarm command failed on some of the Crazyflies
+  60  a check found differences (lh config check)
 ```
 
 To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies
@@ -243,7 +244,8 @@ prompt) a few flags make the output predictable:
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
   `platform info`, `swarm config list`/`show`, `swarm scan`,
   `swarm platform info`, `swarm param get`, `swarm log print`,
-  `swarm deck list`, `swarm debug assert`, `swarm bootload info`). Other
+  `swarm deck list`, `swarm debug assert`, `swarm bootload info`,
+  `lh config display`, `lh config check`). Other
   commands ignore the flag.
 
 Exit codes:
@@ -258,6 +260,7 @@ Exit codes:
 | 30   | Invalid value (range, type, malformed input)                                    |
 | 40   | `--timeout` expired on a bounded command                                        |
 | 50   | A swarm command failed on some of the Crazyflies                                |
+| 60   | A check found differences (`lh config check`)                                   |
 
 Worked example — read one parameter into a shell variable:
 
