@@ -1023,6 +1023,11 @@ struct FirmwareSourceArgs {
   /// Example: stm32-fw,nrf51-fw
   #[clap(long, verbatim_doc_comment)]
   targets: Option<Option<String>>,
+  /// Don't ask before flashing an nRF51 bootloader+softdevice given with
+  /// --bin. If that bootloader does not start, the Crazyflie can only be
+  /// recovered with an SWD debug probe.
+  #[clap(long)]
+  accept_bootloader_risk: bool,
 }
 
 #[derive(Debug, Args)]

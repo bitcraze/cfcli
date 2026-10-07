@@ -169,6 +169,16 @@ async fn flash(
         }
     }
 
+    // An nRF51 bootloader from a file is asked about once, for the whole
+    // swarm. Being an nRF51 --bin it limits the swarm to one platform, so
+    // the first upgrade is the only one.
+    if let Some((_, first)) = upgrades.first() {
+        if !flash_source::confirm_nrf51_bootloader(first, to_flash.len(), source.accept_bootloader_risk, non_interactive)? {
+            println!("Nothing flashed");
+            return Ok(());
+        }
+    }
+
     // One Crazyflie after another.
     let link_context = runner.link_context();
     let total = runner.targets.len();

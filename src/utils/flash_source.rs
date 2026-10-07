@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Result};
-use inquire::{MultiSelect, Select};
+use inquire::{Confirm, MultiSelect, Select};
 
 use crate::error::CliError;
 use crate::modules::bootloader;
@@ -151,6 +151,38 @@ pub fn targets(
     Ok(selected)
 }
 
+/// Asks before an nRF51 bootloader+softdevice given with --bin is flashed.
+/// The one in a release or zip is a released bootloader, but a file can be
+/// anything, and a Crazyflie whose nRF51 bootloader does not start can only
+/// be recovered with an SWD debug probe. `crazyflies` is how many would get
+/// it. Returns whether to go on.
+pub fn confirm_nrf51_bootloader(
+    upgrade: &FirmwareUpgrade,
+    crazyflies: usize,
+    accepted: bool,
+    non_interactive: bool,
+) -> Result<bool> {
+    let Some(bundle) = upgrade.nrf51_softdevice_from_bin() else {
+        return Ok(true);
+    };
+    if accepted {
+        return Ok(true);
+    }
+
+    eprintln!(
+        "Warning: this replaces the nRF51 bootloader with {}. If that bootloader does not start, \
+         the Crazyflie can only be recovered with an SWD debug probe.",
+        bundle.file_name
+    );
+    crate::require_arg(non_interactive, "--accept-bootloader-risk")?;
+    let question = if crazyflies == 1 {
+        "Flash the nRF51 bootloader?".to_string()
+    } else {
+        format!("Flash the nRF51 bootloader to {} Crazyflies?", crazyflies)
+    };
+    Ok(Confirm::new(&question).with_default(false).prompt().unwrap_or(false))
+}
+
 fn single_explicit_target_for_bare_bin(
     bin: &Option<HashMap<String, Option<String>>>,
     targets: &Option<Option<String>>,
@@ -195,6 +227,7 @@ fn unsupported_flash_targets(selected: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::firmware::tests::binary;
 
     #[test]
     fn single_bare_bin_uses_single_explicit_target() {
@@ -255,5 +288,22 @@ mod tests {
 
         assert_eq!(unsupported_flash_targets(&selected), vec!["stm32ohnooo-fw".to_string()]);
     }
-}
 
+    #[test]
+    fn released_nrf51_bootloader_is_flashed_without_asking() {
+        let upgrade = FirmwareUpgrade::from_binaries(vec![binary(
+            "nrf51",
+            firmware::NRF51_SOFTDEVICE_TYPE,
+            Some("2026.08"),
+        )]);
+        assert!(confirm_nrf51_bootloader(&upgrade, 1, false, true).unwrap());
+    }
+
+    #[test]
+    fn nrf51_bootloader_from_bin_needs_accepting_non_interactively() {
+        let upgrade = FirmwareUpgrade::from_binaries(vec![binary("nrf51", firmware::NRF51_SOFTDEVICE_TYPE, None)]);
+        let refused = confirm_nrf51_bootloader(&upgrade, 1, false, true).unwrap_err();
+        assert!(matches!(refused.downcast_ref::<CliError>(), Some(CliError::MissingArg(_))));
+        assert!(confirm_nrf51_bootloader(&upgrade, 1, true, true).unwrap());
+    }
+}

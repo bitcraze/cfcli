@@ -324,6 +324,9 @@ Crazyflie with the files of its own platform. STM32 and nRF51 images given
 with `--bin` are built for one platform, so they are only flashed when all the
 Crazyflies to flash have the same platform; otherwise the command stops
 before flashing anything. Deck firmware works whatever the Crazyflie.
+An nRF51 bootloader given with `--bin` is asked about once for the whole
+swarm, or accepted up front with `--accept-bootloader-risk` (see
+[Flashing the nRF51 bootloader](bootload.md#flashing-the-nrf51-bootloader)).
 
 `--platform` flashes only the Crazyflies of one platform (`cf21`, `cf21bl`,
 `bolt11`, `flapper` or `tag`), the others are skipped:
