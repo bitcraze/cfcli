@@ -492,9 +492,9 @@ A swarm can name the lighthouse configuration it flies in, a stored one (see
 swarm can only name a shared configuration, so everyone who uses it gets it.
 
 ```text
-cfcli swarm config lighthouse lab/cage    # the selected swarm flies in lab/cage
-cfcli swarm config lighthouse             # show which one it names
-cfcli swarm config lighthouse --clear
+cfcli swarm config lh lab/cage    # the selected swarm flies in lab/cage
+cfcli swarm config lh             # show which one it names
+cfcli swarm config lh --clear
 ```
 
 `swarm lh check` compares each Crazyflie's configuration with it, and

@@ -859,7 +859,7 @@ enum SwarmConfigCommands {
         to: String,
     },
     /// Show or set the lighthouse config the swarm flies in (see 'cfcli lh config')
-    Lighthouse {
+    Lh {
         /// Lighthouse config ID; a shared swarm needs a shared one (<org>/<config>)
         #[clap(value_name = "CONFIG")]
         config: Option<String>,

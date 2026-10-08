@@ -15,7 +15,7 @@
         'cfcli;(swarm;)?log;print$'    { $cfcliDynKind = 'log-names' }
         'cfcli;swarm;config;(select|delete|show|export)$' { $cfcliDynKind = 'swarm-configs' }
         'cfcli;swarm;config;(remove|rename)$' { $cfcliDynKind = 'swarm-units' }
-        'cfcli;swarm;config;lighthouse$' { $cfcliDynKind = 'lh-configs' }
+        'cfcli;swarm;config;lh$' { $cfcliDynKind = 'lh-configs' }
         'cfcli;lh;config;(display|save|write|check|export|delete|move|pull|push)$' { $cfcliDynKind = 'lh-configs' }
     }
     # Option values: `--targets x,y` (plain list) / `--bin t=f` (key=value),

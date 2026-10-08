@@ -79,7 +79,7 @@ pub(crate) async fn run(
                 export(&swarms, &swarm_id(config, params.id.as_deref())?, params).await
             }
             SwarmConfigCommands::Move { from, to } => move_swarm(&swarms, config, from, to, non_interactive).await,
-            SwarmConfigCommands::Lighthouse { config: new, clear, swarm } => {
+            SwarmConfigCommands::Lh { config: new, clear, swarm } => {
                 let id = swarm_id(config, swarm.as_deref())?;
                 lighthouse::link(&swarms, config, &id, new.as_deref(), *clear).await
             }

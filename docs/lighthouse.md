@@ -333,7 +333,7 @@ has seen elsewhere.
 `move` shares a local configuration (`move cage lab/cage`), takes a shared one
 back (which deletes it on the server for everyone in the organization), or
 renames one. Swarms that fly in it keep the old ID: `move` lists them and the
-`cfcli swarm config lighthouse` command that gives them the new one. A shared
+`cfcli swarm config lh` command that gives them the new one. A shared
 swarm can only name a shared configuration, so taking one back leaves its
 shared swarms without it.
 
@@ -342,14 +342,14 @@ the organization. Before asking, it lists the swarms that fly in it: the
 local ones and, for a shared configuration, the organization's shared swarms
 (the server's list, or this computer's copies when the server can't be
 reached). They keep naming it, so give them another one, or none with
-`cfcli swarm config lighthouse --clear`.
+`cfcli swarm config lh --clear`.
 
 ```text
 $ cfcli lh config delete lab/cage
 Swarms that fly in lighthouse config 'lab/cage': 'lab/flight-test'
 ? Delete lighthouse config 'lab/cage' on arc.bitcraze.io, for everyone in lab? Yes
 Deleted lighthouse config 'lab/cage'
-'lab/flight-test' still names it: give it another with 'cfcli swarm config lighthouse <CONFIG> --swarm <SWARM>', or none with '--clear'
+'lab/flight-test' still names it: give it another with 'cfcli swarm config lh <CONFIG> --swarm <SWARM>', or none with '--clear'
 ```
 
 ## Copy a Configuration Between Crazyflies

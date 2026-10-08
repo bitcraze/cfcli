@@ -100,7 +100,7 @@ fn main() {
             "or lists them when non-interactive):_cfcli_swarm_configs",
         );
         // Lighthouse config IDs: `--config`, `import --id` and the positional
-        // ID of the `lh config` commands and `swarm config lighthouse`.
+        // ID of the `lh config` commands and `swarm config lh`.
         s = s.replace(":CONFIG:_default", ":CONFIG:_cfcli_lh_configs");
         for help in [
             "Stored lighthouse config to display",

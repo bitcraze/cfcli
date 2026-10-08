@@ -443,7 +443,7 @@ pub async fn delete(configs: &LhConfigs, id: Option<&str>, non_interactive: bool
     if !naming.is_empty() {
         let (names, them) = verb_and_pronoun(&naming);
         println!(
-            "{} still {} it: give {} another with 'cfcli swarm config lighthouse <CONFIG> --swarm <SWARM>', \
+            "{} still {} it: give {} another with 'cfcli swarm config lh <CONFIG> --swarm <SWARM>', \
              or none with '--clear'",
             quoted(&naming),
             names,
@@ -504,7 +504,7 @@ pub async fn move_config(configs: &LhConfigs, from: &str, to: &str, non_interact
         if !can.is_empty() {
             let (names, them) = verb_and_pronoun(&can);
             println!(
-                "{} still {} '{}': 'cfcli swarm config lighthouse {} --swarm <SWARM>' gives {} '{}'",
+                "{} still {} '{}': 'cfcli swarm config lh {} --swarm <SWARM>' gives {} '{}'",
                 quoted(&can),
                 names,
                 from,

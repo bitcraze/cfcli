@@ -1,5 +1,5 @@
 //! The lighthouse configuration of a swarm: which one it flies in (`swarm
-//! config lighthouse`), and checking and writing it on its Crazyflies
+//! config lh`), and checking and writing it on its Crazyflies
 //! (`swarm lh check|write`).
 //!
 //! A swarm names a stored lighthouse configuration (`lighthouse:` in the
@@ -23,14 +23,14 @@ use crate::modules::lighthouse::{
 use crate::utils::display::{csv_row, print_table, table};
 use crate::{Config, SwarmLhCommands};
 
-/// `swarm config lighthouse [CONFIG] [--clear]`
+/// `swarm config lh [CONFIG] [--clear]`
 pub async fn link(swarms: &Swarms, config: &Config, id: &str, new: Option<&str>, clear: bool) -> Result<()> {
     if !clear && new.is_none() {
         let swarm = swarms.load(id).await?;
         match swarm.lighthouse {
             Some(lighthouse) => println!("Swarm '{}' flies in lighthouse config '{}'", id, lighthouse),
             None => println!(
-                "Swarm '{}' names no lighthouse config; set one with 'cfcli swarm config lighthouse <CONFIG>'",
+                "Swarm '{}' names no lighthouse config; set one with 'cfcli swarm config lh <CONFIG>'",
                 id
             ),
         }
@@ -76,7 +76,7 @@ pub async fn run(
     };
     let Some(id) = given.or(linked) else {
         bail!(CliError::NotFound(format!(
-            "lighthouse config of swarm '{}'; name one with 'cfcli swarm config lighthouse <CONFIG>' or give --config",
+            "lighthouse config of swarm '{}'; name one with 'cfcli swarm config lh <CONFIG>' or give --config",
             swarm_id
         )));
     };
