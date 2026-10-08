@@ -159,6 +159,13 @@ command takes either, and `list` shows both:
   | bitcraze-lab/cage | Flight cage | 8          | arc.bitcraze.io, revision 3
 ```
 
+The organization part is your own ID for the organization, set on the server.
+The people you fly with usually have the same one, but not always: someone who
+already has an organization with that ID picks another one when they join. If
+you change yours on the server, cfcli moves its copies and the selected swarm
+to the new ID the next time it talks to the server, and tells you when you use
+an old one.
+
 Create a shared swarm, change it like any other, and delete it (for everyone
 in the organization):
 
@@ -488,7 +495,8 @@ and the selected swarm. Use `import` and `export` rather than editing the files.
 The copies of shared swarms are kept apart from them, in
 `~/.config/cf-cli/synced/<server>/<organization>/<swarm>.yaml`, with
 `state.json` saying which revision each copy is and whether it has changes
-that aren't pushed. Don't edit those; change shared swarms with the commands.
+that aren't pushed, and `orgs.json` remembering your organizations' IDs. Don't
+edit those; change shared swarms with the commands.
 
 ### File format
 
