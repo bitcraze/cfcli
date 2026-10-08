@@ -107,6 +107,7 @@ fn main() {
             "Stored lighthouse config to write",
             "Stored lighthouse config to compare with",
             "Stored lighthouse config to export",
+            "Lighthouse config to name",
             "Lighthouse config ID (prompts for one if omitted)",
             "The lighthouse config to move",
             "Only this shared lighthouse config (<org>/<config>)",

@@ -423,6 +423,15 @@ enum LighthouseConfigCommands {
     Import(LighthouseImportParameters),
     /// Write a stored lighthouse configuration to a file the Crazyflie client opens (or stdout)
     Export(LighthouseExportParameters),
+    /// Show or set the name shown for a lighthouse config (its ID stays the same; 'move' changes the ID)
+    Name {
+        /// Lighthouse config to name
+        #[clap(value_name = "CONFIG")]
+        id: String,
+        /// New name (shows the current one if omitted)
+        #[clap(value_name = "NAME")]
+        name: Option<String>,
+    },
     /// Delete a stored lighthouse configuration
     Delete {
         /// Lighthouse config ID (prompts for one if omitted)

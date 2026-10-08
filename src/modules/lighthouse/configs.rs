@@ -1,6 +1,6 @@
 //! Stored lighthouse configurations: `lh config list`, `save`, `import`,
-//! `export`, `delete`, `move`, `pull` and `push`, and the configuration
-//! that `write` and `check` use.
+//! `export`, `name`, `delete`, `move`, `pull` and `push`, and the
+//! configuration that `write` and `check` use.
 //!
 //! Like swarms, local configurations are files in a `lighthouse` folder next
 //! to the cfcli config, named `<config>`, and shared ones are on the server,
@@ -387,6 +387,33 @@ pub async fn export(configs: &LhConfigs, id: &str, output: Option<&str>) -> Resu
         }
         None => print!("{}", yaml),
     }
+    Ok(())
+}
+
+/// `lh config name <CONFIG> [NAME]`: show the name a configuration is shown
+/// with, or set it. The ID stays the same.
+pub async fn name(configs: &LhConfigs, id: &str, name: Option<&str>) -> Result<()> {
+    let Some(name) = name else {
+        match configs.load(id).await?.name() {
+            Some(name) => println!("{}", name),
+            None => eprintln!(
+                "Lighthouse config '{}' has no name; give it one with 'cfcli lh config name {} <NAME>'",
+                id, id
+            ),
+        }
+        return Ok(());
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        bail!(CliError::InvalidValue("a lighthouse config's name can't be empty".to_string()));
+    }
+    configs
+        .change(id, |file| {
+            file.set_name(name);
+            Ok(())
+        })
+        .await?;
+    println!("Lighthouse config {} is named '{}' now", describe(configs, id), name);
     Ok(())
 }
 

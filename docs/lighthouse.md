@@ -49,6 +49,7 @@ Commands:
   check    Compare the Crazyflie's lighthouse configuration with one
   import   Store a lighthouse configuration file (from the Crazyflie client or read)
   export   Write a stored lighthouse configuration to a file the Crazyflie client opens (or stdout)
+  name     Show or set the name shown for a lighthouse config (its ID stays the same; 'move' changes the ID)
   delete   Delete a stored lighthouse configuration
   move     Share a lighthouse config (cage -> org/cage), take it back (org/cage -> cage), or rename it
   pull     Get the latest version of the shared lighthouse configs (needed with sync off)
@@ -345,6 +346,16 @@ when not interactive). A configuration without any base station positions is
 refused: estimate the geometry first. `base stations` in the list counts the
 positioned ones; a Crazyflie also keeps the calibration of base stations it
 has seen elsewhere.
+
+`name` shows the name a configuration is shown with, or gives it one; the ID
+stays the same, and a shared configuration gets a new revision. Files from
+the Crazyflie client have no name, so this names one after importing it
+(`import --name` names it at once):
+
+```text
+cfcli lh config name lab/cage "The cage"
+cfcli lh config name lab/cage            # prints: The cage
+```
 
 `move` shares a local configuration (`move cage lab/cage`), takes a shared one
 back (which deletes it on the server for everyone in the organization), or

@@ -1494,6 +1494,9 @@ async fn run() -> Result<()> {
                 LighthouseConfigCommands::Export(params) => {
                     configs::export(&LhConfigs::open(&config)?, &params.id, params.output.as_deref()).await?
                 }
+                LighthouseConfigCommands::Name { id, name } => {
+                    configs::name(&LhConfigs::open(&config)?, id, name.as_deref()).await?
+                }
                 LighthouseConfigCommands::Delete { id } => {
                     configs::delete(&LhConfigs::open(&config)?, id.as_deref(), non_interactive).await?
                 }

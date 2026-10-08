@@ -47,7 +47,7 @@ _cfcli_dynamic() {
                                                       kind="swarm-configs" ;;
         *" swarm config remove "*|*" swarm config rename "*) kind="swarm-units" ;;
         *" swarm config lh "*|*" lh config display "*|*" lh config save "*|*" lh config write "*|\
-        *" lh config check "*|*" lh config export "*|*" lh config delete "*|*" lh config move "*|\
+        *" lh config check "*|*" lh config export "*|*" lh config name "*|*" lh config delete "*|*" lh config move "*|\
         *" lh config pull "*|*" lh config push "*) kind="lh-configs" ;;
     esac
 
