@@ -680,6 +680,15 @@ enum SwarmConfigCommands {
         #[clap(value_name = "SWARM")]
         id: Option<String>,
     },
+    /// Show or set the name shown for the swarm (its ID stays the same)
+    Name {
+        /// New name (shows the current one if omitted)
+        #[clap(value_name = "NAME")]
+        name: Option<String>,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
+    },
     /// Add Crazyflies to the swarm
     Add(SwarmAddParameters),
     /// Remove Crazyflies from the swarm
@@ -743,7 +752,7 @@ struct SwarmCreateParameters {
     /// Swarm ID, also its file name (letters, digits, '-', '_' and '.').
     /// <org>/<swarm> creates a shared swarm on the server.
     id: String,
-    /// Name shown for the swarm (defaults to the ID)
+    /// Name shown for the swarm (defaults to the ID, without the <org>/)
     #[clap(long)]
     name: Option<String>,
     /// Description of the swarm

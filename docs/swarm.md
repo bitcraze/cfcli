@@ -30,6 +30,14 @@ The ID (`lab`) is what you type in commands. It is also the file name, so it
 can only contain letters, digits, `-`, `_` and `.`. The name is only shown.
 Shared swarms (see [Sharing swarms](#sharing-swarms)) are listed too.
 
+Show the name of the selected swarm, or give it another one (the ID stays the
+same; `--swarm` changes another swarm):
+
+```bash
+cfcli swarm config name
+cfcli swarm config name "Lab bench"
+```
+
 Select another swarm by ID, or run `select` without an ID to pick one from a
 list. When running non-interactively, `select` without an ID prints the list
 instead:
@@ -174,6 +182,9 @@ cfcli swarm config create bitcraze-lab/demo --name "Demo"
 cfcli swarm config add radio:///80/2M/E7E7E7E701 --name CF-01 --swarm bitcraze-lab/demo
 cfcli swarm config delete bitcraze-lab/demo
 ```
+
+Without `--name`, a shared swarm is named after its ID without the
+organization (`demo` for `bitcraze-lab/demo`).
 
 Share a local swarm by moving it to the server, and move it back to stop
 sharing it. Moving it back deletes it on the server, so cfcli asks first. The
