@@ -680,6 +680,15 @@ enum SwarmConfigCommands {
         #[clap(value_name = "SWARM")]
         id: Option<String>,
     },
+    /// Show or set the name shown for the swarm (its ID stays the same)
+    Name {
+        /// New name (shows the current one if omitted)
+        #[clap(value_name = "NAME")]
+        name: Option<String>,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
+    },
     /// Add Crazyflies to the swarm
     Add(SwarmAddParameters),
     /// Remove Crazyflies from the swarm

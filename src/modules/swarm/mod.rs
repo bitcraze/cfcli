@@ -162,6 +162,9 @@ pub(crate) async fn run(
             SwarmConfigCommands::Create(params) => create(&swarms, config, params).await,
             SwarmConfigCommands::Delete { id } => delete(&swarms, config, id.as_deref(), non_interactive).await,
             SwarmConfigCommands::Show { id } => show(&swarms, &swarm_id(config, id.as_deref())?, csv).await,
+            SwarmConfigCommands::Name { name, swarm } => {
+                swarm_name(&swarms, &swarm_id(config, swarm.as_deref())?, name.as_deref()).await
+            }
             SwarmConfigCommands::Add(params) => {
                 let id = swarm_id(config, params.swarm.as_deref())?;
                 add(&swarms, config, &id, params, link_context, non_interactive).await
@@ -465,6 +468,26 @@ async fn create(swarms: &Swarms, config: &mut Config, params: &SwarmCreateParame
     } else {
         select_if_none(swarms, config, &params.id, &swarm);
     }
+    Ok(())
+}
+
+/// `swarm config name`: show the name the swarm is shown with, or set it.
+async fn swarm_name(swarms: &Swarms, id: &str, name: Option<&str>) -> Result<()> {
+    let Some(name) = name else {
+        println!("{}", swarms.load(id).await?.name);
+        return Ok(());
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        bail!(CliError::InvalidValue("a swarm's name can't be empty".to_string()));
+    }
+    swarms
+        .change(id, |swarm| {
+            swarm.name = name.to_string();
+            Ok(())
+        })
+        .await?;
+    println!("Swarm '{}' is named '{}' now", id, name);
     Ok(())
 }
 

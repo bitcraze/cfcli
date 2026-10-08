@@ -30,6 +30,14 @@ The ID (`lab`) is what you type in commands. It is also the file name, so it
 can only contain letters, digits, `-`, `_` and `.`. The name is only shown.
 Shared swarms (see [Sharing swarms](#sharing-swarms)) are listed too.
 
+Show the name of the selected swarm, or give it another one (the ID stays the
+same; `--swarm` changes another swarm):
+
+```bash
+cfcli swarm config name
+cfcli swarm config name "Lab bench"
+```
+
 Select another swarm by ID, or run `select` without an ID to pick one from a
 list. When running non-interactively, `select` without an ID prints the list
 instead:
