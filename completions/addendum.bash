@@ -46,6 +46,9 @@ _cfcli_dynamic() {
         *" swarm config select "*|*" swarm config delete "*|*" swarm config show "*|*" swarm config export "*)
                                                       kind="swarm-configs" ;;
         *" swarm config remove "*|*" swarm config rename "*) kind="swarm-units" ;;
+        *" swarm config lighthouse "*|*" lh config display "*|*" lh config save "*|*" lh config write "*|\
+        *" lh config check "*|*" lh config export "*|*" lh config delete "*|*" lh config move "*|\
+        *" lh config pull "*|*" lh config push "*) kind="lh-configs" ;;
     esac
 
     # Option values: `--targets x,y` (plain list) / `--bin t=f` (key=value),
@@ -54,14 +57,16 @@ _cfcli_dynamic() {
         --bin)     kind="flash-targets"; suffix="="; nospace=1 ;;
         --targets) kind="flash-targets" ;;
         --swarm)   kind="swarm-configs" ;;
+        --config)  kind="lh-configs" ;;
         --cf|--exclude) kind="swarm-units"; nospace=1 ;;
         --from-swarm)   kind="swarm-units" ;;
         # Values that are a new name, a file or free text.
-        -o|--output|--id|--name|--description) kind="" ;;
+        -o|--output|-i|--input|--id|--name|--description) kind="" ;;
         =) case "${COMP_WORDS[COMP_CWORD-2]}" in
                --bin)     kind="flash-targets"; suffix="="; nospace=1 ;;
                --targets) kind="flash-targets" ;;
                --swarm)   kind="swarm-configs" ;;
+               --config)  kind="lh-configs" ;;
                --cf|--exclude) kind="swarm-units"; nospace=1 ;;
                --from-swarm)   kind="swarm-units" ;;
            esac ;;

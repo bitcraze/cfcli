@@ -200,7 +200,7 @@ const HELP_EPILOG: &str = "\x1b[1m\x1b[4mExit codes:\x1b[0m
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
   50  a swarm command failed on some of the Crazyflies
-  60  a check found differences (lh config check)
+  60  a check found differences (lh config check, swarm lh check)
 ";
 
 #[derive(Parser, Debug)]
@@ -383,6 +383,8 @@ enum CompletionKind {
     SwarmConfigs,
     /// Crazyflie names in the selected swarm (for `--cf` and `select --from-swarm`)
     SwarmUnits,
+    /// Stored lighthouse config IDs (for `lh config` and `--config`)
+    LhConfigs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -396,33 +398,90 @@ enum LighthouseCommands {
 
 #[derive(Debug, Subcommand)]
 enum LighthouseConfigCommands {
-    /// Display lighthouse configuration in human-readable form
+    /// List the stored lighthouse configs: local ones and shared ones (<org>/<config>)
+    List,
+    /// Display a lighthouse configuration: a stored one, a file, or the Crazyflie's
     Display(LighthouseDisplayParameters),
-    /// Read lighthouse configuration as YAML (to file or stdout)
+    /// Read the Crazyflie's lighthouse configuration as YAML (to file or stdout)
     Read(LighthouseReadParameters),
-    /// Write lighthouse configuration from YAML (from file or stdin)
+    /// Store the Crazyflie's lighthouse configuration as <CONFIG> (new, or an update)
+    Save(LighthouseSaveParameters),
+    /// Write a lighthouse configuration to the Crazyflie
+    ///
+    /// The configuration is a stored one (<CONFIG>), a file (-i), YAML piped
+    /// in, or else the one the selected swarm names.
+    #[clap(verbatim_doc_comment)]
     Write(LighthouseWriteParameters),
-    /// Compare the Crazyflie's lighthouse configuration with YAML (from file or stdin)
+    /// Compare the Crazyflie's lighthouse configuration with one (as for write)
     Check(LighthouseCheckParameters),
+    /// Store a lighthouse configuration file (from the Crazyflie client or read)
+    Import(LighthouseImportParameters),
+    /// Write a stored lighthouse configuration to a file the Crazyflie client opens (or stdout)
+    Export(LighthouseExportParameters),
+    /// Delete a stored lighthouse configuration
+    Delete {
+        /// Lighthouse config ID (prompts for one if omitted)
+        #[clap(value_name = "CONFIG")]
+        id: Option<String>,
+    },
+    /// Share a lighthouse config (cage -> org/cage), take it back (org/cage -> cage), or rename it
+    ///
+    /// Taking a shared one back deletes it on the server, for everyone in the
+    /// organization.
+    Move {
+        /// The lighthouse config to move
+        #[clap(value_name = "CONFIG")]
+        from: String,
+        /// Its new ID: <config> on this computer, <org>/<config> on the server
+        #[clap(value_name = "NEW_ID")]
+        to: String,
+    },
+    /// Get the latest version of the shared lighthouse configs (needed with sync off)
+    Pull {
+        /// Only this shared lighthouse config (<org>/<config>)
+        #[clap(value_name = "CONFIG")]
+        id: Option<String>,
+        /// Drop changes on this computer that aren't pushed
+        #[clap(long)]
+        force: bool,
+    },
+    /// Upload changes to shared lighthouse configs made with sync off or without the server
+    Push {
+        /// Only this shared lighthouse config (<org>/<config>)
+        #[clap(value_name = "CONFIG")]
+        id: Option<String>,
+        /// Overwrite what others uploaded since
+        #[clap(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Args)]
 struct LighthouseDisplayParameters {
-    /// YAML file to display (reads from Crazyflie if omitted)
+    /// Stored lighthouse config to display
+    #[clap(value_name = "CONFIG", conflicts_with = "input")]
+    id: Option<String>,
+    /// YAML file to display (reads from the Crazyflie if neither is given)
     #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
     input: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct LighthouseWriteParameters {
-    /// YAML file to read configuration from (reads stdin if omitted)
+    /// Stored lighthouse config to write
+    #[clap(value_name = "CONFIG", conflicts_with = "input")]
+    id: Option<String>,
+    /// YAML file to read the configuration from
     #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
     input: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct LighthouseCheckParameters {
-    /// YAML file to compare with (reads stdin if omitted)
+    /// Stored lighthouse config to compare with
+    #[clap(value_name = "CONFIG", conflicts_with = "input")]
+    id: Option<String>,
+    /// YAML file to compare with
     #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
     input: Option<String>,
 }
@@ -430,6 +489,45 @@ struct LighthouseCheckParameters {
 #[derive(Debug, Args)]
 struct LighthouseReadParameters {
     /// YAML file to write configuration to (writes to stdout if omitted)
+    #[clap(long, short = 'o', value_hint = ValueHint::FilePath)]
+    output: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseSaveParameters {
+    /// ID to store it as (letters, digits, '-', '_' and '.'); <org>/<config> shares it on the server
+    #[clap(value_name = "CONFIG")]
+    id: String,
+    /// Name shown for the configuration
+    #[clap(long)]
+    name: Option<String>,
+    /// Replace an existing configuration without asking
+    #[clap(long)]
+    force: bool,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseImportParameters {
+    /// The file (Crazyflie client format)
+    #[clap(value_hint = ValueHint::FilePath)]
+    file: String,
+    /// ID to store it as (default: the file name); <org>/<config> shares it on the server
+    #[clap(long, value_name = "CONFIG")]
+    id: Option<String>,
+    /// Name shown for the configuration
+    #[clap(long)]
+    name: Option<String>,
+    /// Replace an existing configuration without asking
+    #[clap(long)]
+    force: bool,
+}
+
+#[derive(Debug, Args)]
+struct LighthouseExportParameters {
+    /// Stored lighthouse config to export
+    #[clap(value_name = "CONFIG")]
+    id: String,
+    /// File to write (stdout if omitted)
     #[clap(long, short = 'o', value_hint = ValueHint::FilePath)]
     output: Option<String>,
 }
@@ -564,6 +662,39 @@ enum SwarmCommands {
     },
     /// Spread the swarm over several radio channels (reprograms and reboots the Crazyflies that move)
     Rechannel(SwarmRechannelParameters),
+    /// Lighthouse configuration of the Crazyflies in the swarm
+    Lh {
+        #[clap(flatten)]
+        target: SwarmTargetArgs,
+
+        #[clap(subcommand)]
+        command: SwarmLhCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SwarmLhCommands {
+    /// Compare each Crazyflie's lighthouse configuration with the swarm's
+    Check(SwarmLhParameters),
+    /// Write the swarm's lighthouse configuration to the Crazyflies that don't have it
+    Write(SwarmLhWriteParameters),
+}
+
+#[derive(Debug, Args)]
+struct SwarmLhParameters {
+    /// Lighthouse config to use instead of the one the swarm names
+    #[clap(long, value_name = "CONFIG")]
+    config: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct SwarmLhWriteParameters {
+    /// Lighthouse config to use instead of the one the swarm names
+    #[clap(long, value_name = "CONFIG")]
+    config: Option<String>,
+    /// Write it also to Crazyflies that already have it
+    #[clap(long)]
+    force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -726,6 +857,18 @@ enum SwarmConfigCommands {
         /// Its new ID: <swarm> on this computer, <org>/<swarm> on the server
         #[clap(value_name = "NEW_ID")]
         to: String,
+    },
+    /// Show or set the lighthouse config the swarm flies in (see 'cfcli lh config')
+    Lighthouse {
+        /// Lighthouse config ID; a shared swarm needs a shared one (<org>/<config>)
+        #[clap(value_name = "CONFIG")]
+        config: Option<String>,
+        /// The swarm flies in no particular lighthouse config
+        #[clap(long, conflicts_with = "config")]
+        clear: bool,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
     },
     /// Get the latest version of the shared swarms (needed with sync off)
     Pull {

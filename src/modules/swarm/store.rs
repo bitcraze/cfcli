@@ -14,13 +14,14 @@
 //! ```
 //!
 //! Fields cfcli doesn't know are kept when a file is rewritten, so nothing
-//! Swarmkeeper adds later is lost.
+//! Swarmkeeper adds later is lost. A swarm may name the lighthouse
+//! configuration it flies in (`lighthouse: lab/cage`).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 use crate::error::CliError;
+use crate::modules::documents::{self, Document};
 use crate::utils::radio::{self, RadioUri};
 
 /// One swarm file.
@@ -29,6 +30,10 @@ pub struct Swarm {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The lighthouse configuration the swarm flies in: a local `<id>` or a
+    /// shared `<org>/<id>` (see `cfcli lh config`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lighthouse: Option<String>,
     // Always written, even when empty: Swarmkeeper requires the field.
     #[serde(default)]
     pub units: Vec<Unit>,
@@ -90,21 +95,12 @@ pub fn check_name(name: &str) -> Result<()> {
 
 /// Check a swarm ID, which is also a file name.
 pub fn check_id(id: &str) -> Result<()> {
-    let valid = !id.is_empty()
-        && !id.starts_with('.')
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    if !valid {
-        bail!(CliError::InvalidValue(format!(
-            "swarm ID '{}': use letters, digits, '-', '_' and '.' (not first)",
-            id
-        )));
-    }
-    Ok(())
+    documents::check_id::<Swarm>(id)
 }
 
 impl Swarm {
     pub fn new(name: String, description: Option<String>) -> Self {
-        Swarm { name, description, units: Vec::new(), extra: serde_yaml::Mapping::new() }
+        Swarm { name, description, lighthouse: None, units: Vec::new(), extra: serde_yaml::Mapping::new() }
     }
 
     pub fn from_yaml(yaml: &str) -> Result<Self> {
@@ -202,90 +198,37 @@ impl Swarm {
     }
 }
 
-/// The folder holding the swarm files.
-pub struct Store {
-    dir: PathBuf,
-}
+/// The folder holding the swarm files, next to the cfcli config file.
+pub type Store = documents::Store<Swarm>;
 
-impl Store {
-    /// The store next to the cfcli config file.
-    pub fn open() -> Result<Self> {
-        let config = confy::get_configuration_file_path("cf-cli", None)
-            .context("could not find the cfcli config folder")?;
-        Ok(Store { dir: config.with_file_name("swarms") })
+impl Document for Swarm {
+    const FOLDER: &'static str = "swarms";
+    const NOUN: &'static str = "swarm";
+    const COMMAND: &'static str = "swarm config";
+    const SERVER_COUNT: &'static str = "units";
+
+    fn from_yaml(yaml: &str) -> Result<Self> {
+        Swarm::from_yaml(yaml)
     }
 
-    /// A store in another folder: the copies of shared swarms, and tests.
-    pub fn at(dir: PathBuf) -> Self {
-        Store { dir }
+    fn to_yaml(&self) -> Result<String> {
+        Swarm::to_yaml(self)
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    fn summary(&self) -> (String, usize) {
+        (self.name.clone(), self.units.len())
     }
 
-    fn path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{}.yaml", id))
-    }
-
-    pub fn exists(&self, id: &str) -> bool {
-        self.path(id).is_file()
-    }
-
-    /// The IDs of all stored swarms, sorted.
-    pub fn ids(&self) -> Result<Vec<String>> {
-        let entries = match std::fs::read_dir(&self.dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", self.dir.display())),
+    /// The organization of a shared lighthouse configuration.
+    fn rename_org(&mut self, old: &str, new: &str) -> bool {
+        let Some((org, config)) = self.lighthouse.as_deref().and_then(|l| l.split_once('/')) else {
+            return false;
         };
-        let mut ids: Vec<String> = entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
-            .filter_map(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
-            .filter(|id| check_id(id).is_ok())
-            .collect();
-        ids.sort();
-        Ok(ids)
-    }
-
-    /// The file exactly as stored.
-    pub fn read_raw(&self, id: &str) -> Result<String> {
-        let path = self.path(id);
-        match std::fs::read_to_string(&path) {
-            Ok(yaml) => Ok(yaml),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                bail!(CliError::NotFound(format!("swarm '{}' (see 'cfcli swarm config list')", id)))
-            }
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        if org != old {
+            return false;
         }
-    }
-
-    pub fn load(&self, id: &str) -> Result<Swarm> {
-        Swarm::from_yaml(&self.read_raw(id)?).with_context(|| format!("in {}", self.path(id).display()))
-    }
-
-    /// Write a swarm, replacing any old file in one step.
-    pub fn save(&self, id: &str, swarm: &Swarm) -> Result<()> {
-        check_id(id)?;
-        std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
-        let path = self.path(id);
-        let tmp = self.dir.join(format!(".{}.yaml.tmp", id));
-        std::fs::write(&tmp, swarm.to_yaml()?).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
-        Ok(())
-    }
-
-    pub fn delete(&self, id: &str) -> Result<()> {
-        let path = self.path(id);
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                bail!(CliError::NotFound(format!("swarm '{}'", id)))
-            }
-            Err(e) => Err(e).with_context(|| format!("deleting {}", path.display())),
-        }
+        self.lighthouse = Some(format!("{}/{}", new, config));
+        true
     }
 }
 

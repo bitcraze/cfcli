@@ -99,6 +99,22 @@ fn main() {
             "or lists them when non-interactive):_default",
             "or lists them when non-interactive):_cfcli_swarm_configs",
         );
+        // Lighthouse config IDs: `--config`, `import --id` and the positional
+        // ID of the `lh config` commands and `swarm config lighthouse`.
+        s = s.replace(":CONFIG:_default", ":CONFIG:_cfcli_lh_configs");
+        for help in [
+            "Stored lighthouse config to display",
+            "Stored lighthouse config to write",
+            "Stored lighthouse config to compare with",
+            "Stored lighthouse config to export",
+            "Lighthouse config ID (prompts for one if omitted)",
+            "The lighthouse config to move",
+            "Only this shared lighthouse config (<org>/<config>)",
+            "Lighthouse config ID; a shared swarm needs a shared one (<org>/<config>)",
+            "<org>/<config> shares it on the server",
+        ] {
+            s = s.replace(&format!("{}:_default", help), &format!("{}:_cfcli_lh_configs", help));
+        }
         // Crazyflie names: `--from-swarm` takes one, `--cf`/`--exclude` a
         // comma-separated list. `::CF` first, it also contains `:CF`.
         s = s.replace("::CF:_default", "::CF:_cfcli_swarm_units");

@@ -15,6 +15,8 @@
         'cfcli;(swarm;)?log;print$'    { $cfcliDynKind = 'log-names' }
         'cfcli;swarm;config;(select|delete|show|export)$' { $cfcliDynKind = 'swarm-configs' }
         'cfcli;swarm;config;(remove|rename)$' { $cfcliDynKind = 'swarm-units' }
+        'cfcli;swarm;config;lighthouse$' { $cfcliDynKind = 'lh-configs' }
+        'cfcli;lh;config;(display|save|write|check|export|delete|move|pull|push)$' { $cfcliDynKind = 'lh-configs' }
     }
     # Option values: `--targets x,y` (plain list) / `--bin t=f` (key=value),
     # space-separated form.
@@ -30,9 +32,10 @@
     if ($cfcliPrev -eq '--targets') { $cfcliDynKind = 'flash-targets' }
     if ($cfcliPrev -eq '--bin')     { $cfcliDynKind = 'flash-targets'; $cfcliSuffix = '=' }
     if ($cfcliPrev -eq '--swarm')   { $cfcliDynKind = 'swarm-configs' }
+    if ($cfcliPrev -eq '--config')  { $cfcliDynKind = 'lh-configs' }
     if ($cfcliPrev -in '--cf', '--exclude', '--from-swarm') { $cfcliDynKind = 'swarm-units' }
     # Values that are a new name, a file or free text.
-    if ($cfcliPrev -in '-o', '--output', '--id', '--name', '--description') { $cfcliDynKind = '' }
+    if ($cfcliPrev -in '-o', '--output', '-i', '--input', '--id', '--name', '--description') { $cfcliDynKind = '' }
 
     if ($cfcliDynKind -ne '') {
         # `cfcli __complete` handles comma-separated lists, returning fully

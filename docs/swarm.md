@@ -484,6 +484,50 @@ so a plan that would put them together is refused before anything is changed.
 Crazyflies that still have the default address need their own address first,
 with `cfcli config set address=...`.
 
+## Lighthouse
+
+A swarm can name the lighthouse configuration it flies in, a stored one (see
+[Lighthouse](/docs/lighthouse.md#stored-and-shared-configurations)). A shared
+swarm can only name a shared configuration, so everyone who uses it gets it.
+
+```text
+cfcli swarm config lighthouse lab/cage    # the selected swarm flies in lab/cage
+cfcli swarm config lighthouse             # show which one it names
+cfcli swarm config lighthouse --clear
+```
+
+`swarm lh check` compares each Crazyflie's configuration with it, and
+`swarm lh write` writes it to the Crazyflies that don't have it yet (all of
+them with `--force`), storing it in their flash. `--config` uses another
+configuration than the one the swarm names.
+
+```text
+$ cfcli swarm lh check
+Lighthouse config 'lab/cage', revision 3: base stations 0, 1, 2, 3
+CF    | Lighthouse
+------+------------------------------------------
+CF-01 | up to date
+CF-02 | BS 2 moved 4.1 cm, turned 0.62°
+CF-03 | no position for BS 0, 1, 2, 3
+Error: differs: 2 of 3 Crazyflies have another lighthouse configuration; 'cfcli swarm lh write' gives them this one
+
+$ cfcli swarm lh write
+Lighthouse config 'lab/cage', revision 3: base stations 0, 1, 2, 3
+CF-01: up to date
+CF-02: written and stored in flash
+CF-03: written and stored in flash
+```
+
+`check` exits with 60 when a Crazyflie differs, like `lh config check`, and
+`--csv` gives one row per Crazyflie (`cf,uri,status,firmware_base_stations,
+differing_base_stations`). `write` refuses a Crazyflie whose firmware supports
+fewer base stations than the configuration has, before writing anything to it.
+
+When Crazyflies are added to a swarm that names a lighthouse config, `add`
+says how to give it to them (`cfcli swarm lh write --swarm <swarm> --cf
+CF-07`). When the configuration changes, `swarm lh write` updates the
+Crazyflies that have the old one.
+
 ## Using one Crazyflie from a swarm
 
 `select --from-swarm` selects a Crazyflie from the selected swarm for all the
@@ -504,7 +548,8 @@ Swarms are files in a `swarms` folder next to the cfcli config file, on Linux
 and the selected swarm. Use `import` and `export` rather than editing the files.
 
 The copies of shared swarms are kept apart from them, in
-`~/.config/cf-cli/synced/<server>/<organization>/<swarm>.yaml`, with
+`~/.config/cf-cli/synced/<server>/swarms/<organization>/<swarm>.yaml`
+(shared lighthouse configs next to them in `.../lighthouse/...`), with
 `state.json` saying which revision each copy is and whether it has changes
 that aren't pushed, and `orgs.json` remembering your organizations' IDs. Don't
 edit those; change shared swarms with the commands.
@@ -514,6 +559,7 @@ edit those; change shared swarms with the commands.
 ```yaml
 name: Lab Crazyflies
 description: The bench
+lighthouse: lab/cage
 units:
 - uri: radio:///80/2M/E7E7E7E701
   name: CF-01
@@ -522,5 +568,6 @@ units:
   description: Test bench
 ```
 
-`description` is optional, the rest is required. Fields cfcli doesn't know are
-kept when it rewrites a file.
+`description` and `lighthouse` (the lighthouse config the swarm flies in, see
+[Lighthouse](#lighthouse)) are optional, the rest is required. Fields cfcli
+doesn't know are kept when it rewrites a file.

@@ -36,6 +36,7 @@ pub mod modules {
     pub mod debug;
     pub mod lighthouse;
     pub mod deck;
+    pub mod documents;
     pub mod platform;
     pub mod swarm;
 }
@@ -536,6 +537,9 @@ fn emit_dynamic_completions(kind: CompletionKind, partial: &str) {
             .and_then(|swarms| swarms.cached_ids())
             .unwrap_or_default(),
         CompletionKind::SwarmUnits => selected_swarm_units(),
+        CompletionKind::LhConfigs => modules::lighthouse::configs::LhConfigs::open_cached()
+            .and_then(|configs| configs.cached_ids())
+            .unwrap_or_default(),
     };
 
     let stdout = std::io::stdout();
@@ -1442,17 +1446,21 @@ async fn run() -> Result<()> {
             }
         }
         Commands::Lh { command: LighthouseCommands::Config { command } } => {
-            // Files are loaded before connecting, so a bad one fails at once.
+            use modules::lighthouse::configs::{self, LhConfigs};
+            // Files and stored configurations are loaded before connecting,
+            // so a bad one fails at once.
             match command {
-                LighthouseConfigCommands::Display(params) => match &params.input {
-                    Some(file_path) => modules::lighthouse::display_file(file_path, csv)?,
-                    None => {
+                LighthouseConfigCommands::List => configs::list(&LhConfigs::open(&config)?, csv).await?,
+                LighthouseConfigCommands::Display(params) => match (&params.id, &params.input) {
+                    (Some(id), _) => configs::show(&LhConfigs::open(&config)?, id, csv).await?,
+                    (None, Some(file_path)) => modules::lighthouse::display_file(file_path, csv)?,
+                    (None, None) => {
                         let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
                         modules::lighthouse::display(cf, csv, non_interactive).await?;
                     }
                 },
                 LighthouseConfigCommands::Write(params) => {
-                    let file = modules::lighthouse::load(params.input.as_deref())?;
+                    let (file, _) = configs::source(&config, params.id.as_deref(), params.input.as_deref()).await?;
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
                     modules::lighthouse::write(cf, &file, non_interactive).await?;
                 }
@@ -1461,10 +1469,44 @@ async fn run() -> Result<()> {
                     modules::lighthouse::read(cf, params.output.as_deref(), non_interactive).await?;
                 }
                 LighthouseConfigCommands::Check(params) => {
-                    let file = modules::lighthouse::load(params.input.as_deref())?;
-                    let source = params.input.as_deref().unwrap_or("the configuration from stdin");
+                    let (file, source) = configs::source(&config, params.id.as_deref(), params.input.as_deref()).await?;
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::lighthouse::check(cf, &file, source, csv, non_interactive).await?;
+                    modules::lighthouse::check(cf, &file, &source, csv, non_interactive).await?;
+                }
+                LighthouseConfigCommands::Save(params) => {
+                    let lh_configs = LhConfigs::open(&config)?;
+                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    configs::save(&lh_configs, cf, &params.id, params.name.as_deref(), params.force, non_interactive).await?;
+                }
+                LighthouseConfigCommands::Import(params) => {
+                    configs::import(
+                        &LhConfigs::open(&config)?,
+                        &params.file,
+                        params.id.as_deref(),
+                        params.name.as_deref(),
+                        params.force,
+                        non_interactive,
+                    )
+                    .await?
+                }
+                LighthouseConfigCommands::Export(params) => {
+                    configs::export(&LhConfigs::open(&config)?, &params.id, params.output.as_deref()).await?
+                }
+                LighthouseConfigCommands::Delete { id } => {
+                    configs::delete(&LhConfigs::open(&config)?, id.as_deref(), non_interactive).await?
+                }
+                LighthouseConfigCommands::Move { from, to } => {
+                    configs::move_config(&LhConfigs::open(&config)?, from, to, non_interactive).await?
+                }
+                LighthouseConfigCommands::Pull { id, force } => {
+                    let lh_configs = LhConfigs::open(&config)?;
+                    let (shared, only) = lh_configs.for_sync(id.as_deref())?;
+                    shared.pull(only.as_ref(), *force).await?
+                }
+                LighthouseConfigCommands::Push { id, force } => {
+                    let lh_configs = LhConfigs::open(&config)?;
+                    let (shared, only) = lh_configs.for_sync(id.as_deref())?;
+                    shared.push(only.as_ref(), *force).await?
                 }
             }
         }

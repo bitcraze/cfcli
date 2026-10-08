@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::error::CliError;
 use crate::utils::display::csv_row;
 
+pub mod configs;
+
 /// The `type` of a lighthouse configuration file.
 pub const FILE_TYPE: &str = "lighthouse_system_configuration";
 /// The file version written. cflib reads only this one.
@@ -416,7 +418,7 @@ fn calibration_delta(file: &CalibrationFileEntry, cf: &CalibrationFileEntry) -> 
     }
 }
 
-fn describe_distance(m: f64) -> String {
+pub(crate) fn describe_distance(m: f64) -> String {
     if m < 0.01 {
         format!("{:.1} mm", m * 1000.0)
     } else {
@@ -642,7 +644,7 @@ pub fn load(file_path: Option<&str>) -> Result<LighthouseConfigFile> {
         .with_context(|| format!("Failed to load {}", file_path.unwrap_or("the configuration from stdin")))
 }
 
-async fn read_with_progress(cf: &Crazyflie, non_interactive: bool) -> Result<LighthouseConfigFile> {
+pub(crate) async fn read_with_progress(cf: &Crazyflie, non_interactive: bool) -> Result<LighthouseConfigFile> {
     let count = supported_base_stations(cf).unwrap_or(MAX_BASE_STATIONS);
     let progress_bar = make_progress(2 * count as usize, "Reading", non_interactive);
     let pb = progress_bar.clone();
@@ -654,18 +656,18 @@ async fn read_with_progress(cf: &Crazyflie, non_interactive: bool) -> Result<Lig
 /// Display lighthouse configuration from the Crazyflie
 pub async fn display(cf: &Crazyflie, csv: bool, non_interactive: bool) -> Result<()> {
     let config = read_with_progress(cf, non_interactive).await?;
-    print_config(&config, None, csv);
+    print_config(&config, "Lighthouse Configuration", csv);
     Ok(())
 }
 
 /// Display lighthouse configuration from a YAML file (no connection needed)
 pub fn display_file(file_path: &str, csv: bool) -> Result<()> {
     let config = load(Some(file_path))?;
-    print_config(&config, Some(file_path), csv);
+    print_config(&config, &format!("Lighthouse Configuration File: {}", file_path), csv);
     Ok(())
 }
 
-fn print_config(config: &LighthouseConfigFile, file_path: Option<&str>, csv: bool) {
+pub(crate) fn print_config(config: &LighthouseConfigFile, title: &str, csv: bool) {
     if csv {
         csv_row(&["section", "bs_id", "key", "value"]);
         for (id, geo) in &config.geos {
@@ -677,10 +679,6 @@ fn print_config(config: &LighthouseConfigFile, file_path: Option<&str>, csv: boo
         return;
     }
 
-    let title = match file_path {
-        Some(path) => format!("Lighthouse Configuration File: {}", path),
-        None => "Lighthouse Configuration".to_string(),
-    };
     println!("{}", title);
     println!("{}", "=".repeat(title.chars().count()));
     println!();

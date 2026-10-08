@@ -41,11 +41,24 @@ the lighthouse memory.
 Usage: cfcli lh config <COMMAND>
 
 Commands:
-  display  Display lighthouse configuration in human-readable form
-  read     Read lighthouse configuration as YAML (to file or stdout)
-  write    Write lighthouse configuration from YAML (from file or stdin)
-  check    Compare the Crazyflie's lighthouse configuration with YAML (from file or stdin)
+  list     List the stored lighthouse configs: local ones and shared ones (<org>/<config>)
+  display  Display a lighthouse configuration: a stored one, a file, or the Crazyflie's
+  read     Read the Crazyflie's lighthouse configuration as YAML (to file or stdout)
+  save     Store the Crazyflie's lighthouse configuration as <CONFIG> (new, or an update)
+  write    Write a lighthouse configuration to the Crazyflie
+  check    Compare the Crazyflie's lighthouse configuration with one (as for write)
+  import   Store a lighthouse configuration file (from the Crazyflie client or read)
+  export   Write a stored lighthouse configuration to a file the Crazyflie client opens (or stdout)
+  delete   Delete a stored lighthouse configuration
+  move     Share a lighthouse config (cage -> org/cage), take it back (org/cage -> cage), or rename it
+  pull     Get the latest version of the shared lighthouse configs (needed with sync off)
+  push     Upload changes to shared lighthouse configs made with sync off or without the server
 ```
+
+`display`, `write` and `check` take a stored configuration by its ID, or a
+file with `-i`. `write` and `check` also read YAML piped in, and with none of
+these they use the configuration the selected swarm names (see
+[Swarms](/docs/swarm.md#lighthouse)).
 
 ### YAML File Format
 
@@ -100,6 +113,8 @@ Top-level fields:
   cflib
 - `geos` — map of `bs_id -> { origin, rotation }`
 - `calibs` — map of `bs_id -> { uid, sweeps[2] }`
+- `name` — optional, the name shown for a stored configuration (cflib
+  ignores it)
 
 Either map can be omitted or empty if you only want to read/write one half.
 The maps are written in base station order, so reading the same configuration
@@ -111,11 +126,12 @@ Render the current configuration in human-readable form, either from the
 Crazyflie or from a YAML file.
 
 ```text
-cfcli lh config display [-i <FILE>]
+cfcli lh config display [<CONFIG> | -i <FILE>]
 ```
 
 Options:
 
+- `<CONFIG>` — a stored configuration instead of the Crazyflie's
 - `-i, --input <FILE>` — read from a YAML file instead of the Crazyflie
 
 When `--csv` is used (the global flag), `display` emits a long-format CSV
@@ -145,6 +161,9 @@ cfcli lh config display
 
 # Pretty print a YAML file (no Crazyflie connection)
 cfcli lh config display -i my_setup.yaml
+
+# Pretty print a stored configuration
+cfcli lh config display lab/cage
 
 # Machine-readable CSV
 cfcli lh config display --csv
@@ -183,16 +202,19 @@ diff <(cfcli lh config read) my_reference.yaml
 
 ### Write
 
-Write a configuration from a YAML file (or stdin) to the Crazyflie.
+Write a configuration to the Crazyflie.
 
 ```text
-cfcli lh config write [-i <FILE>]
+cfcli lh config write [<CONFIG> | -i <FILE>]
 ```
 
 Options:
 
-- `-i, --input <FILE>` — read YAML from a file. If omitted, YAML is read from
-  stdin.
+- `<CONFIG>` — a stored configuration
+- `-i, --input <FILE>` — read YAML from a file
+
+With neither, YAML piped in is written, or else the configuration the
+selected swarm names.
 
 All base station slots the firmware supports are written. Slots present in
 the YAML are uploaded as valid, while slots omitted from the YAML are written
@@ -210,23 +232,23 @@ default firmware.
 # Write a config from a file
 cfcli lh config write -i my_setup.yaml
 
+# Write a stored (or shared) config
+cfcli lh config write lab/cage
+
 # Pipe YAML in from stdin
 cat my_setup.yaml | cfcli lh config write
 ```
 
 ### Check
 
-Compare the configuration on the Crazyflie with a YAML file (or stdin), base
-station by base station.
+Compare the configuration on the Crazyflie with another one, base station by
+base station.
 
 ```text
-cfcli lh config check [-i <FILE>]
+cfcli lh config check [<CONFIG> | -i <FILE>]
 ```
 
-Options:
-
-- `-i, --input <FILE>` — read YAML from a file. If omitted, YAML is read from
-  stdin.
+The configuration is chosen as for [write](#write).
 
 Values are compared exactly, as the Crazyflie stores them. For each base
 station, the geometry and the calibration are:
@@ -263,13 +285,59 @@ bs_id,geometry,moved_m,turned_deg,calibration,file_uid,cf_uid
 cfcli lh config check -i my_setup.yaml
 
 # Write only when it differs
-cfcli lh config check -i my_setup.yaml; [ $? -eq 60 ] && cfcli lh config write -i my_setup.yaml
+cfcli lh config check lab/cage; [ $? -eq 60 ] && cfcli lh config write lab/cage
 ```
+
+## Stored and shared configurations
+
+cfcli keeps lighthouse configurations the way it keeps swarms: local ones in a
+`lighthouse` folder next to the cfcli config, named `<config>`, and, when
+signed in (`cfcli auth login`), shared ones on the server, named
+`<org>/<config>`. A shared configuration has revisions, so when the base
+stations are moved, everyone gets the new geometry, and the server's web
+page shows what changed. With sync on (the default), commands check the
+server for the latest version; with sync off, or without the server, they use
+this computer's copy, and `pull` and `push` sync them, as for
+[swarms](/docs/swarm.md#sync).
+
+```text
+# Store what a Crazyflie has (after estimating the geometry in cfclient)
+cfcli lh config save lab/cage --name "The cage"
+
+# ... or a file saved by the Crazyflie client
+cfcli lh config import Lighthouse_Cage.yaml --id lab/cage --name "The cage"
+
+# List them
+$ cfcli lh config list
+ID       | Name     | Base stations | Stored
+---------+----------+---------------+-----------------------------
+lab/cage | The cage | 4             | arc.bitcraze.io, revision 2
+
+# Give it to a Crazyflie, or check one
+cfcli lh config write lab/cage
+cfcli lh config check lab/cage
+
+# A file the Crazyflie client opens
+cfcli lh config export lab/cage -o cage.yaml
+```
+
+`save` and `import` to an existing ID show what changes for each base station
+and ask before replacing it (`--force` replaces without asking, and is needed
+when not interactive). A configuration without any base station positions is
+refused: estimate the geometry first. `base stations` in the list counts the
+positioned ones; a Crazyflie also keeps the calibration of base stations it
+has seen elsewhere.
+
+`move` shares a local configuration (`move cage lab/cage`), takes a shared one
+back (which deletes it on the server for everyone in the organization), or
+renames one. Swarms that name it need `cfcli swarm config lighthouse` with
+the new ID.
 
 ## Copy a Configuration Between Crazyflies
 
-Read from one Crazyflie and write to another by piping `read` into `write`,
-overriding the `--uri` for each:
+Store it from one Crazyflie and write it to the others (`save`, then `write`
+or `swarm lh write`), or pipe `read` into `write`, overriding the `--uri` for
+each:
 
 ```bash
 cfcli --uri radio://0/80/2M/E7E7E7E7E7 lh config read \

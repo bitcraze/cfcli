@@ -100,11 +100,14 @@ pub fn sync_set(config: &mut Config, on: bool) {
         println!("Could not save settings: {:?}", err);
     });
     if on {
-        println!("Sync is on: swarm commands check the server first and upload changes right away");
+        println!(
+            "Sync is on: commands check the server first for shared swarms and lighthouse configs, \
+             and upload changes right away"
+        );
     } else {
         println!(
-            "Sync is off: swarm commands use this computer's copies of shared swarms; \
-             'cfcli swarm config pull' and 'push' sync them"
+            "Sync is off: commands use this computer's copies of shared swarms and lighthouse configs; \
+             'cfcli swarm config pull'/'push' and 'cfcli lh config pull'/'push' sync them"
         );
     }
 }

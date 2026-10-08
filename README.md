@@ -12,7 +12,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * Turn the platform on/off or put it to sleep/wake it up
 * Run stability tests with the Crazyflie
 * High-level commander (takeoff, land, go-to, trajectories)
-* Lighthouse positioning system configuration (read/write base station geometry and calibration)
+* Lighthouse positioning system configuration (read/write base station geometry and calibration, store and share configurations, write them to a whole swarm)
 * Loco positioning system configuration (read/write anchor positions, cfclient-compatible YAML)
 * AI-agent and scripting friendly (CSV output, classified exit codes, non-interactive mode, command timeouts)
 
@@ -111,7 +111,7 @@ Exit codes:
   30  invalid value (range, type, malformed input)
   40  --timeout expired on a bounded command
   50  a swarm command failed on some of the Crazyflies
-  60  a check found differences (lh config check)
+  60  a check found differences (lh config check, swarm lh check)
 ```
 
 To use the CLI you must first select which URI to use, this is done by scanning for available Crazyflies
@@ -260,7 +260,7 @@ Exit codes:
 | 30   | Invalid value (range, type, malformed input)                                    |
 | 40   | `--timeout` expired on a bounded command                                        |
 | 50   | A swarm command failed on some of the Crazyflies                                |
-| 60   | A check found differences (`lh config check`)                                   |
+| 60   | A check found differences (`lh config check`, `swarm lh check`)                 |
 
 Worked example — read one parameter into a shell variable:
 

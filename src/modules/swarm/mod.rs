@@ -3,7 +3,8 @@
 //!
 //! Local swarms are files in the Swarmkeeper format (see [`store`]), named
 //! `<swarm>`. When cfcli is signed in (`cfcli auth login`), shared swarms on
-//! the server sit next to them, named `<org>/<swarm>` (see [`shared`]); every
+//! the server sit next to them, named `<org>/<swarm>` (see
+//! [`crate::modules::documents`]); every
 //! command takes either. One swarm is selected and stored in the cfcli
 //! config; `--swarm` picks another one for a single command. Crazyflies are
 //! named by their short `name`, which is also what `--cf`/`--exclude` and
@@ -11,9 +12,9 @@
 
 mod bootload;
 mod commands;
+mod lighthouse;
 mod rechannel;
 mod runner;
-pub mod shared;
 pub mod store;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -30,121 +31,12 @@ use crate::{
     SwarmExportParameters, SwarmImportParameters, SwarmTargetArgs,
 };
 use runner::Runner;
-use shared::{Shared, SharedId};
-use store::{Store, Swarm, Unit};
+use crate::modules::documents::{Documents, Entry, SharedId};
+use store::{Swarm, Unit};
 
 /// Local and shared swarms behind one kind of ID: `<swarm>` is a file in
 /// the swarms folder, `<org>/<swarm>` a swarm on the server.
-pub(crate) struct Swarms {
-    pub local: Store,
-    /// None when cfcli isn't signed in.
-    pub shared: Option<Shared>,
-}
-
-impl Swarms {
-    pub fn open(config: &Config) -> Result<Self> {
-        Ok(Swarms { local: Store::open()?, shared: Shared::open(config.sync_on())? })
-    }
-
-    /// For shell completion: only [`Swarms::cached`] and
-    /// [`Swarms::cached_ids`] are used, which never ask the server.
-    pub fn open_cached() -> Result<Self> {
-        Ok(Swarms { local: Store::open()?, shared: Shared::open(false)? })
-    }
-
-    fn shared(&self, id: &SharedId) -> Result<&Shared> {
-        self.shared.as_ref().ok_or_else(|| {
-            CliError::NotFound(format!(
-                "a sign-in: '{}' is a shared swarm, sign in with 'cfcli auth login'",
-                id
-            ))
-            .into()
-        })
-    }
-
-    pub async fn load(&self, id: &str) -> Result<Swarm> {
-        match SharedId::parse(id)? {
-            None => self.local.load(id),
-            Some(shared) => self.shared(&shared)?.load(&shared).await,
-        }
-    }
-
-    /// The swarm without asking the server (a shared one's copy), for shell
-    /// completion and pickers.
-    pub fn cached(&self, id: &str) -> Result<Swarm> {
-        match SharedId::parse(id)? {
-            None => self.local.load(id),
-            Some(shared) => self.shared(&shared)?.cached(&shared),
-        }
-    }
-
-    /// Change a swarm. `change` may run more than once for a shared swarm
-    /// (see [`Shared::change`]), so it must not ask the user anything.
-    pub async fn change<T>(&self, id: &str, mut change: impl FnMut(&mut Swarm) -> Result<T>) -> Result<T> {
-        match SharedId::parse(id)? {
-            None => {
-                let mut swarm = self.local.load(id)?;
-                let before = swarm.to_yaml()?;
-                let result = change(&mut swarm)?;
-                if swarm.to_yaml()? != before {
-                    self.local.save(id, &swarm)?;
-                }
-                Ok(result)
-            }
-            Some(shared) => self.shared(&shared)?.change(&shared, change).await,
-        }
-    }
-
-    /// Create a swarm. A shared one is created on the server.
-    pub async fn create(&self, id: &str, swarm: &Swarm) -> Result<()> {
-        match SharedId::parse(id)? {
-            None => {
-                store::check_id(id)?;
-                if self.local.exists(id) {
-                    bail!(CliError::InvalidValue(format!("swarm '{}' already exists", id)));
-                }
-                self.local.save(id, swarm)
-            }
-            Some(shared_id) => {
-                let shared = self.shared(&shared_id)?;
-                if !shared.create(&shared_id, swarm).await? {
-                    bail!(CliError::InvalidValue(format!(
-                        "swarm '{}' already exists on {}",
-                        id,
-                        shared.host()
-                    )));
-                }
-                Ok(())
-            }
-        }
-    }
-
-    /// Delete a swarm. A shared one is deleted on the server, for everyone.
-    pub async fn delete(&self, id: &str) -> Result<()> {
-        match SharedId::parse(id)? {
-            None => self.local.delete(id),
-            Some(shared) => self.shared(&shared)?.delete(&shared).await,
-        }
-    }
-
-    /// Local swarms and the shared ones there are copies of, without asking
-    /// the server.
-    pub fn cached_ids(&self) -> Result<Vec<String>> {
-        let mut ids = self.local.ids()?;
-        if let Some(shared) = &self.shared {
-            ids.extend(shared.cached_ids().into_iter().map(|id| id.to_string()));
-        }
-        Ok(ids)
-    }
-
-    /// Where a swarm is kept, for the user.
-    fn place(&self, id: &str) -> String {
-        match (&self.shared, SharedId::parse(id)) {
-            (Some(shared), Ok(Some(_))) => shared.host().to_string(),
-            _ => "this computer".to_string(),
-        }
-    }
-}
+pub(crate) type Swarms = Documents<Swarm>;
 
 pub(crate) async fn run(
     config: &mut Config,
@@ -187,12 +79,16 @@ pub(crate) async fn run(
                 export(&swarms, &swarm_id(config, params.id.as_deref())?, params).await
             }
             SwarmConfigCommands::Move { from, to } => move_swarm(&swarms, config, from, to, non_interactive).await,
+            SwarmConfigCommands::Lighthouse { config: new, clear, swarm } => {
+                let id = swarm_id(config, swarm.as_deref())?;
+                lighthouse::link(&swarms, config, &id, new.as_deref(), *clear).await
+            }
             SwarmConfigCommands::Pull { id, force } => {
-                let (shared, only) = shared_for_sync(&swarms, id.as_deref())?;
+                let (shared, only) = swarms.for_sync(id.as_deref())?;
                 shared.pull(only.as_ref(), *force).await
             }
             SwarmConfigCommands::Push { id, force } => {
-                let (shared, only) = shared_for_sync(&swarms, id.as_deref())?;
+                let (shared, only) = swarms.for_sync(id.as_deref())?;
                 shared.push(only.as_ref(), *force).await
             }
         },
@@ -223,6 +119,13 @@ pub(crate) async fn run(
             let runner = runner(&swarms, config, target, link_context, toc_cache).await?;
             commands::debug(&runner, command, csv).await
         }
+        SwarmCommands::Lh { target, command } => {
+            let id = swarm_id(config, target.swarm.as_deref())?;
+            let swarm = swarms.load(&id).await?;
+            let selected = swarm.select(&id, &target.cf, &target.exclude)?;
+            let runner = Runner::new(link_context, config, toc_cache, &swarm, &selected).await?;
+            lighthouse::run(config, &runner, &id, swarm.lighthouse.as_deref(), command, csv).await
+        }
         SwarmCommands::Rechannel(params) => {
             rechannel::rechannel(&swarms, config, params, link_context, toc_cache, non_interactive).await
         }
@@ -251,25 +154,6 @@ fn swarm_id(config: &Config, given: Option<&str>) -> Result<String> {
             "selected swarm; pick one with 'cfcli swarm config select'".to_string()
         )),
     }
-}
-
-/// The server for `pull`/`push`, and the one shared swarm to sync if given.
-fn shared_for_sync<'a>(swarms: &'a Swarms, id: Option<&str>) -> Result<(&'a Shared, Option<SharedId>)> {
-    let Some(shared) = &swarms.shared else {
-        bail!(CliError::NotFound(
-            "a sign-in: shared swarms need 'cfcli auth login'".to_string()
-        ));
-    };
-    let only = match id {
-        None => None,
-        Some(id) => Some(SharedId::parse(id)?.ok_or_else(|| {
-            CliError::InvalidValue(format!(
-                "'{}' is a local swarm; only shared swarms (<org>/<swarm>) are pulled and pushed",
-                id
-            ))
-        })?),
-    };
-    Ok((shared, only))
 }
 
 fn save_config(config: &Config) {
@@ -304,57 +188,6 @@ fn crazyflies(n: usize) -> String {
     }
 }
 
-/// A swarm as `list` and the pickers show it.
-struct Entry {
-    id: String,
-    name: String,
-    count: String,
-    /// Where it is kept: "this computer" or the server.
-    place: String,
-    revision: Option<i32>,
-    pending: bool,
-}
-
-impl Entry {
-    fn stored(&self) -> String {
-        match self.revision {
-            None => self.place.clone(),
-            Some(0) => format!("{}, not uploaded yet", self.place),
-            Some(revision) if self.pending => format!("{}, revision {}, changes not pushed", self.place, revision),
-            Some(revision) => format!("{}, revision {}", self.place, revision),
-        }
-    }
-}
-
-/// The local swarms, then the shared ones.
-async fn entries(swarms: &Swarms) -> Result<Vec<Entry>> {
-    let mut entries: Vec<Entry> = swarms
-        .local
-        .ids()?
-        .into_iter()
-        .map(|id| {
-            let (name, count) = match swarms.local.load(&id) {
-                Ok(swarm) => (swarm.name, swarm.units.len().to_string()),
-                Err(e) => (format!("(can't read: {:#})", e), "?".to_string()),
-            };
-            Entry { id, name, count, place: "this computer".to_string(), revision: None, pending: false }
-        })
-        .collect();
-    if let Some(shared) = &swarms.shared {
-        for listed in shared.list().await? {
-            entries.push(Entry {
-                id: listed.id.to_string(),
-                name: listed.name,
-                count: listed.units.to_string(),
-                place: shared.host().to_string(),
-                revision: Some(listed.copy.revision),
-                pending: listed.copy.pending,
-            });
-        }
-    }
-    Ok(entries)
-}
-
 /// One row of `swarm config list`.
 #[derive(Tabled)]
 struct SwarmRow {
@@ -371,7 +204,7 @@ struct SwarmRow {
 }
 
 async fn list(swarms: &Swarms, config: &Config, csv: bool) -> Result<()> {
-    let entries = entries(swarms).await?;
+    let entries = swarms.entries().await?;
     let selected = |entry: &Entry| config.swarm.as_deref() == Some(entry.id.as_str());
 
     if csv {
@@ -427,7 +260,7 @@ async fn select(swarms: &Swarms, config: &mut Config, id: Option<&str>, non_inte
 
 /// Let the user pick a swarm, starting at the selected one.
 async fn pick_swarm(swarms: &Swarms, config: &Config, message: &str) -> Result<String> {
-    let entries = entries(swarms).await?;
+    let entries = swarms.entries().await?;
     if entries.is_empty() {
         bail!(CliError::NotFound(
             "swarms; create one with 'cfcli swarm config create <id>'".to_string()
@@ -457,7 +290,7 @@ async fn create(swarms: &Swarms, config: &mut Config, params: &SwarmCreateParame
     // of the name.
     let name = match (&params.name, SharedId::parse(&params.id)?) {
         (Some(name), _) => name.clone(),
-        (None, Some(shared)) => shared.swarm,
+        (None, Some(shared)) => shared.name,
         (None, None) => params.id.clone(),
     };
     let swarm = Swarm::new(name, params.description.clone());
@@ -557,6 +390,9 @@ async fn show(swarms: &Swarms, id: &str, csv: bool) -> Result<()> {
     }
     if SharedId::parse(id)?.is_some() {
         println!("Shared on {}", swarms.place(id));
+    }
+    if let Some(lighthouse) = &swarm.lighthouse {
+        println!("Flies in lighthouse config '{}'", lighthouse);
     }
     println!();
     if swarm.units.is_empty() {
@@ -663,9 +499,10 @@ async fn add_to(
         }
     }
 
-    let messages = swarms
+    let (messages, added, lighthouse) = swarms
         .change(id, |swarm| {
             let mut messages = Vec::new();
+            let mut added = Vec::new();
             for uri in &uris {
                 if let Some(i) = swarm.find_link(uri)? {
                     messages.push(format!("{} is already in the swarm as {}", uri, swarm.units[i].name));
@@ -680,6 +517,7 @@ async fn add_to(
                     None => swarm.next_name(),
                 };
                 messages.push(format!("Added {} {}", name, uri));
+                added.push(name.clone());
                 swarm.units.push(Unit {
                     uri: uri.clone(),
                     name,
@@ -687,12 +525,13 @@ async fn add_to(
                     extra: Default::default(),
                 });
             }
-            Ok(messages)
+            Ok((messages, added, swarm.lighthouse.clone()))
         })
         .await?;
     for message in messages {
         println!("{}", message);
     }
+    lighthouse::hint_for_new(id, lighthouse.as_deref(), &added);
     Ok(())
 }
 
