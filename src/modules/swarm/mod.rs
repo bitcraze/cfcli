@@ -695,7 +695,7 @@ async fn import(swarms: &Swarms, config: &mut Config, params: &SwarmImportParame
     }
 
     // Read and check every file before writing any of them.
-    let mut imports: Vec<(String, Swarm, &str)> = Vec::new();
+    let mut imports: Vec<(String, Swarm, &str, Option<String>)> = Vec::new();
     for file in &params.files {
         let yaml = match std::fs::read_to_string(file) {
             Ok(yaml) => yaml,
@@ -704,7 +704,7 @@ async fn import(swarms: &Swarms, config: &mut Config, params: &SwarmImportParame
             }
             Err(e) => return Err(e).with_context(|| format!("reading {}", file)),
         };
-        let swarm = Swarm::from_yaml(&yaml).with_context(|| format!("in {}", file))?;
+        let mut swarm = Swarm::from_yaml(&yaml).with_context(|| format!("in {}", file))?;
         let id = match &params.id {
             Some(id) => id.clone(),
             None => std::path::Path::new(file)
@@ -726,13 +726,14 @@ async fn import(swarms: &Swarms, config: &mut Config, params: &SwarmImportParame
                 swarms.shared(&shared)?;
             }
         }
-        if imports.iter().any(|(other, _, _)| *other == id) {
+        if imports.iter().any(|(other, _, _, _)| *other == id) {
             bail!(CliError::InvalidValue(format!("two of the files would both become swarm '{}'", id)));
         }
-        imports.push((id, swarm, file));
+        let dropped = lighthouse::drop_unnameable(&id, &mut swarm);
+        imports.push((id, swarm, file, dropped));
     }
 
-    for (id, swarm, file) in &mut imports {
+    for (id, swarm, file, dropped) in &mut imports {
         let any_radio = swarm.use_any_radio();
         match SharedId::parse(id)? {
             None => swarms.local.save(id, swarm)?,
@@ -760,8 +761,11 @@ async fn import(swarms: &Swarms, config: &mut Config, params: &SwarmImportParame
             print!(", {} URIs now use radio:/// (any Crazyradio)", any_radio);
         }
         println!();
+        if let Some(note) = dropped {
+            println!("{}", note);
+        }
     }
-    if let Some((id, swarm, _)) = imports.first() {
+    if let Some((id, swarm, _, _)) = imports.first() {
         select_if_none(swarms, config, id, swarm);
     }
     Ok(())
@@ -791,7 +795,8 @@ async fn move_swarm(swarms: &Swarms, config: &mut Config, from: &str, to: &str, 
     }
     let from_shared = SharedId::parse(from)?;
     let to_shared = SharedId::parse(to)?;
-    let swarm = swarms.load(from).await?;
+    let mut swarm = swarms.load(from).await?;
+    let dropped = lighthouse::drop_unnameable(to, &mut swarm);
     if to_shared.is_none() && swarms.local.exists(to) {
         bail!(CliError::InvalidValue(format!("swarm '{}' already exists", to)));
     }
@@ -824,6 +829,9 @@ async fn move_swarm(swarms: &Swarms, config: &mut Config, from: &str, to: &str, 
         to,
         swarms.place(to)
     );
+    if let Some(note) = dropped {
+        println!("{}", note);
+    }
     if config.swarm.as_deref() == Some(from) {
         set_selected(config, to, &swarm);
     }

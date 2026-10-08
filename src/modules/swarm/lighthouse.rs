@@ -12,6 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
+use super::store::Swarm;
 use super::Swarms;
 use crate::error::CliError;
 use crate::modules::documents::{Entry, SharedId};
@@ -358,9 +359,45 @@ pub fn hint_for_new(swarm: &str, lighthouse: Option<&str>, added: &[String]) {
     }
 }
 
+/// When a swarm becomes swarm `id` (moved or imported), drop the lighthouse
+/// configuration it names if `id` can't name it (see [`may_name`]): the
+/// server refuses a shared swarm naming another organization's. Returns what
+/// to tell the user.
+pub fn drop_unnameable(id: &str, swarm: &mut Swarm) -> Option<String> {
+    let dropped = swarm.lighthouse.take_if(|lighthouse| !may_name(id, lighthouse))?;
+    Some(format!(
+        "Swarm '{}' names no lighthouse config: it can't name '{}' (a local swarm names lighthouse configs on \
+         this computer, a shared swarm those in its organization); name one with 'cfcli swarm config lh \
+         <CONFIG> --swarm {}'",
+        id, dropped, id
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drops_what_the_new_id_cannot_name() {
+        let swarm = |lighthouse: &str| Swarm {
+            lighthouse: Some(lighthouse.to_string()),
+            ..Swarm::new("s".to_string(), None)
+        };
+        for (id, lighthouse, kept) in [
+            ("lab/s", "lab/cage", true),
+            ("other/s", "lab/cage", false),
+            ("s", "lab/cage", false),
+            ("lab/s", "cage", false),
+            ("s", "cage", true),
+        ] {
+            let mut moved = swarm(lighthouse);
+            let note = drop_unnameable(id, &mut moved);
+            assert_eq!(moved.lighthouse.is_some(), kept, "{} naming {}", id, lighthouse);
+            assert_eq!(note.is_none(), kept, "{} naming {}", id, lighthouse);
+        }
+        let mut none = Swarm::new("s".to_string(), None);
+        assert!(drop_unnameable("lab/s", &mut none).is_none());
+    }
 
     const FILE: &str = "\
 type: lighthouse_system_configuration

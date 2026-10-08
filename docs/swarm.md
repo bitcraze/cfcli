@@ -195,6 +195,12 @@ cfcli swarm config move lab bitcraze-lab/lab
 cfcli swarm config move bitcraze-lab/lab lab
 ```
 
+A swarm only names a lighthouse configuration it can name where it ends up
+(see [Lighthouse](#lighthouse)): one on this computer for a local swarm, one
+in its organization for a shared one. When a move or an import takes it
+somewhere it can't name its configuration, it names none afterwards, and
+cfcli says so.
+
 `move` also renames a swarm (`move lab lab-old`). `import` can put a file
 straight into a shared swarm with `--id bitcraze-lab/<swarm>`.
 

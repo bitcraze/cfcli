@@ -352,7 +352,9 @@ renames one. Swarms that fly in it keep the old ID: `move` lists them and the
 `cfcli swarm config lh` command that gives them the new one. A local swarm
 can only name a configuration on this computer, and a shared swarm one in its
 organization, so not every swarm can follow: taking a shared configuration
-back, for example, leaves its shared swarms without it.
+back, for example, leaves its shared swarms without it. The server refuses a
+shared swarm that names another organization's configuration, so that
+everyone who sees the swarm can see it.
 
 `delete` deletes a configuration, a shared one on the server for everyone in
 the organization. Before asking, it lists the swarms that fly in it: the
