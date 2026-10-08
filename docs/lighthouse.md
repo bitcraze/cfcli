@@ -46,7 +46,7 @@ Commands:
   read     Read the Crazyflie's lighthouse configuration as YAML (to file or stdout)
   save     Store the Crazyflie's lighthouse configuration as <CONFIG> (new, or an update)
   write    Write a lighthouse configuration to the Crazyflie
-  check    Compare the Crazyflie's lighthouse configuration with one (as for write)
+  check    Compare the Crazyflie's lighthouse configuration with one
   import   Store a lighthouse configuration file (from the Crazyflie client or read)
   export   Write a stored lighthouse configuration to a file the Crazyflie client opens (or stdout)
   delete   Delete a stored lighthouse configuration
@@ -56,10 +56,11 @@ Commands:
 ```
 
 `display`, `write` and `check` take a stored configuration by its ID, or a
-file with `-i`. `write` and `check` also read YAML piped in, and with none of
-these they use the configuration the selected swarm names (see
-[Swarms](/docs/swarm.md#lighthouse)), also when stdin is empty, as for a
-command in a script or a cron job.
+file with `-i`. `write` and `check` also read YAML piped in. With none of
+these, `write` lists the stored configurations to pick one from, and `check`
+uses the configuration the selected swarm names (see
+[Swarms](/docs/swarm.md#lighthouse)). Without a terminal, as for a command in
+a script or a cron job, `write` uses the selected swarm's too.
 
 ### YAML File Format
 
@@ -214,9 +215,20 @@ Options:
 - `<CONFIG>` — a stored configuration
 - `-i, --input <FILE>` — read YAML from a file
 
-With neither, YAML piped in is written, or else the configuration the
-selected swarm names. Stdin that isn't a terminal but has nothing in it (a
-script, a cron job) counts as nothing piped in.
+With neither, YAML piped in is written. Otherwise, in a terminal, `write`
+lists all the stored configurations (local ones and the shared ones in all
+your organizations) to pick one from, starting at the one the selected swarm
+names. Without a terminal it writes the selected swarm's configuration. Stdin
+that isn't a terminal but has nothing in it (a script, a cron job) counts as
+nothing piped in.
+
+```text
+$ cfcli lh config write
+? Lighthouse config to write:
+  cage - Local cage (4 base stations)
+> lab/cage - The cage (4 base stations)
+  other/room - Other room (4 base stations)
+```
 
 All base station slots the firmware supports are written. Slots present in
 the YAML are uploaded as valid, while slots omitted from the YAML are written
@@ -237,6 +249,9 @@ cfcli lh config write -i my_setup.yaml
 # Write a stored (or shared) config
 cfcli lh config write lab/cage
 
+# Pick one of the stored configs
+cfcli lh config write
+
 # Pipe YAML in from stdin
 cat my_setup.yaml | cfcli lh config write
 ```
@@ -250,7 +265,8 @@ base station.
 cfcli lh config check [<CONFIG> | -i <FILE>]
 ```
 
-The configuration is chosen as for [write](#write).
+The configuration is chosen as for [write](#write), except that without one
+`check` doesn't ask: it uses the configuration the selected swarm names.
 
 Values are compared exactly, as the Crazyflie stores them. For each base
 station, the geometry and the calibration are:
@@ -333,9 +349,10 @@ has seen elsewhere.
 `move` shares a local configuration (`move cage lab/cage`), takes a shared one
 back (which deletes it on the server for everyone in the organization), or
 renames one. Swarms that fly in it keep the old ID: `move` lists them and the
-`cfcli swarm config lh` command that gives them the new one. A shared
-swarm can only name a shared configuration, so taking one back leaves its
-shared swarms without it.
+`cfcli swarm config lh` command that gives them the new one. A local swarm
+can only name a configuration on this computer, and a shared swarm one in its
+organization, so not every swarm can follow: taking a shared configuration
+back, for example, leaves its shared swarms without it.
 
 `delete` deletes a configuration, a shared one on the server for everyone in
 the organization. Before asking, it lists the swarms that fly in it: the

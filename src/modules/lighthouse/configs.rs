@@ -15,7 +15,7 @@ use tabled::Tabled;
 
 use super::{compare, describe_distance, CalibrationDelta, LighthouseConfigFile, Part};
 use crate::error::CliError;
-use crate::modules::documents::{Document, Documents, SharedId};
+use crate::modules::documents::{Document, Documents, Entry, SharedId};
 use crate::modules::swarm::Swarms;
 use crate::utils::display::{csv_row, print_table, table};
 use crate::Config;
@@ -80,9 +80,15 @@ pub(crate) fn describe(configs: &LhConfigs, id: &str) -> String {
 // ---- Which configuration a command uses ----
 
 /// The configuration for `write` and `check`, and how to name it: a stored
-/// one (`id`), a file (`input`), what is piped in, or else the one the
+/// one (`id`), a file (`input`), what is piped in, or else one the user
+/// picks (when `pick`, starting at the selected swarm's) or the one the
 /// selected swarm names (also when stdin is empty, as in a script).
-pub async fn source(config: &Config, id: Option<&str>, input: Option<&str>) -> Result<(LighthouseConfigFile, String)> {
+pub async fn source(
+    config: &Config,
+    id: Option<&str>,
+    input: Option<&str>,
+    pick: bool,
+) -> Result<(LighthouseConfigFile, String)> {
     if let Some(id) = id {
         let configs = LhConfigs::open(config)?;
         return Ok((configs.load(id).await?, describe(&configs, id)));
@@ -93,11 +99,22 @@ pub async fn source(config: &Config, id: Option<&str>, input: Option<&str>) -> R
     if let Some(file) = super::load_piped()? {
         return Ok((file, "the configuration from stdin".to_string()));
     }
-    let linked = match &config.swarm {
-        Some(swarm) => Swarms::open(config)?.load(swarm).await?.lighthouse,
-        None => None,
-    };
-    match linked {
+    if pick {
+        let configs = LhConfigs::open(config)?;
+        let entries = configs.entries().await?;
+        if entries.is_empty() {
+            bail!(CliError::NotFound(
+                "lighthouse configs; store one with 'cfcli lh config save <config>' or \
+                 'cfcli lh config import <file>', or give a file with -i"
+                    .to_string()
+            ));
+        }
+        // A swarm that can't be loaded just leaves the cursor at the top.
+        let current = selected_swarm_config(config).await.ok().flatten();
+        let id = pick_entry(&entries, "Lighthouse config to write:", current.as_deref())?;
+        return Ok((configs.load(&id).await?, describe(&configs, &id)));
+    }
+    match selected_swarm_config(config).await? {
         Some(id) => {
             let configs = LhConfigs::open(config)?;
             let file = configs.load(&id).await?;
@@ -110,6 +127,14 @@ pub async fn source(config: &Config, id: Option<&str>, input: Option<&str>) -> R
              (the selected swarm names none)"
                 .to_string()
         )),
+    }
+}
+
+/// The lighthouse configuration the selected swarm names.
+async fn selected_swarm_config(config: &Config) -> Result<Option<String>> {
+    match &config.swarm {
+        Some(swarm) => Ok(Swarms::open(config)?.load(swarm).await?.lighthouse),
+        None => Ok(None),
     }
 }
 
@@ -185,6 +210,11 @@ async fn pick(configs: &LhConfigs, message: &str) -> Result<String> {
             "lighthouse configs; store one with 'cfcli lh config save <id>'".to_string()
         ));
     }
+    pick_entry(&entries, message, None)
+}
+
+/// Let the user pick one of `entries`, starting at `current`.
+pub(crate) fn pick_entry(entries: &[Entry], message: &str, current: Option<&str>) -> Result<String> {
     let labels: Vec<String> = entries
         .iter()
         .map(|e| match e.name.is_empty() {
@@ -192,7 +222,9 @@ async fn pick(configs: &LhConfigs, message: &str) -> Result<String> {
             false => format!("{} - {} ({} base stations)", e.id, e.name, e.count),
         })
         .collect();
+    let start = current.and_then(|current| entries.iter().position(|e| e.id == current)).unwrap_or(0);
     let picked = Select::new(message, labels)
+        .with_starting_cursor(start)
         .raw_prompt()
         .map_err(|_| anyhow!("No lighthouse config selected"))?;
     Ok(entries[picked.index].id.clone())
@@ -360,6 +392,17 @@ pub async fn export(configs: &LhConfigs, id: &str, output: Option<&str>) -> Resu
 
 // ---- Deleting and moving ----
 
+/// Whether swarm `swarm` may name lighthouse config `config`: a local swarm
+/// one on this computer, a shared swarm one in its organization, which
+/// everyone who uses the swarm can read.
+pub(crate) fn may_name(swarm: &str, config: &str) -> bool {
+    match (SharedId::parse(swarm), SharedId::parse(config)) {
+        (Ok(None), Ok(None)) => true,
+        (Ok(Some(swarm)), Ok(Some(config))) => swarm.org == config.org,
+        _ => false,
+    }
+}
+
 /// The swarms that fly in lighthouse config `id`: the local swarms, and the
 /// shared swarms the server lists (only a shared config can be named by
 /// them), or this computer's copies of them when it can't be reached.
@@ -496,11 +539,7 @@ pub async fn move_config(configs: &LhConfigs, from: &str, to: &str, non_interact
         configs.place(to)
     );
     if !naming.is_empty() {
-        // A shared swarm can only name a shared configuration.
-        let to_shared = SharedId::parse(to)?.is_some();
-        let (can, cannot): (Vec<String>, Vec<String>) = naming
-            .into_iter()
-            .partition(|swarm| to_shared || !matches!(SharedId::parse(swarm), Ok(Some(_))));
+        let (can, cannot): (Vec<String>, Vec<String>) = naming.into_iter().partition(|swarm| may_name(swarm, to));
         if !can.is_empty() {
             let (names, them) = verb_and_pronoun(&can);
             println!(
@@ -516,7 +555,8 @@ pub async fn move_config(configs: &LhConfigs, from: &str, to: &str, non_interact
         if !cannot.is_empty() {
             let (names, _) = verb_and_pronoun(&cannot);
             println!(
-                "{} still {} '{}': a shared swarm can't name '{}' on this computer",
+                "{} still {} '{}', and can't name '{}': a local swarm names lighthouse configs on this \
+                 computer, a shared swarm those in its organization",
                 quoted(&cannot),
                 names,
                 from,
@@ -547,6 +587,15 @@ calibs:
     - {phase: 0.0, tilt: -0.051, curve: 0.275, gibmag: -0.005, gibphase: 2.281, ogeemag: -0.184, ogeephase: 1.847}
     - {phase: -0.004, tilt: 0.047, curve: 0.367, gibmag: -0.005, gibphase: 2.548, ogeemag: -0.124, ogeephase: 2.051}
 ";
+
+    #[test]
+    fn swarms_name_configs_of_their_own_kind() {
+        assert!(may_name("bench", "cage"));
+        assert!(may_name("lab/flight", "lab/cage"));
+        assert!(!may_name("bench", "lab/cage"));
+        assert!(!may_name("lab/flight", "cage"));
+        assert!(!may_name("lab/flight", "other/room"));
+    }
 
     #[test]
     fn name_and_summary() {

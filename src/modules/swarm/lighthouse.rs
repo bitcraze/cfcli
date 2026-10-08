@@ -14,8 +14,8 @@ use tabled::Tabled;
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
 use super::Swarms;
 use crate::error::CliError;
-use crate::modules::documents::SharedId;
-use crate::modules::lighthouse::configs::{describe, LhConfigs};
+use crate::modules::documents::{Entry, SharedId};
+use crate::modules::lighthouse::configs::{describe, may_name, pick_entry, LhConfigs};
 use crate::modules::lighthouse::{
     check_supported, compare, describe_distance, is_same, read_config, supported_base_stations, write_config,
     BaseStationDiff, CalibrationDelta, LighthouseConfigFile, Part,
@@ -23,26 +23,55 @@ use crate::modules::lighthouse::{
 use crate::utils::display::{csv_row, print_table, table};
 use crate::{Config, SwarmLhCommands};
 
-/// `swarm config lh [CONFIG] [--clear]`
-pub async fn link(swarms: &Swarms, config: &Config, id: &str, new: Option<&str>, clear: bool) -> Result<()> {
-    if !clear && new.is_none() {
-        let swarm = swarms.load(id).await?;
-        match swarm.lighthouse {
-            Some(lighthouse) => println!("Swarm '{}' flies in lighthouse config '{}'", id, lighthouse),
-            None => println!(
-                "Swarm '{}' names no lighthouse config; set one with 'cfcli swarm config lh <CONFIG>'",
-                id
-            ),
+/// `swarm config lh [CONFIG] [--clear]`. Without a configuration, the user
+/// picks one, or, when not interactive, it shows the one the swarm names.
+pub async fn link(
+    swarms: &Swarms,
+    config: &Config,
+    id: &str,
+    new: Option<&str>,
+    clear: bool,
+    non_interactive: bool,
+) -> Result<()> {
+    let picked;
+    let new = match new {
+        Some(new) => Some(new),
+        None if clear => None,
+        None => {
+            let current = swarms.load(id).await?.lighthouse;
+            if non_interactive {
+                match current {
+                    Some(lighthouse) => println!("Swarm '{}' flies in lighthouse config '{}'", id, lighthouse),
+                    None => println!(
+                        "Swarm '{}' names no lighthouse config; set one with 'cfcli swarm config lh <CONFIG>'",
+                        id
+                    ),
+                }
+                return Ok(());
+            }
+            picked = pick_for(config, id, current.as_deref()).await?;
+            Some(picked.as_str())
         }
-        return Ok(());
-    }
+    };
     if let Some(new) = new {
-        if SharedId::parse(id)?.is_some() && SharedId::parse(new)?.is_none() {
-            bail!(CliError::InvalidValue(format!(
-                "'{}' is shared, so it can only name a shared lighthouse config (<org>/<config>), \
-                 not '{}' on this computer; share it with 'cfcli lh config move'",
-                id, new
-            )));
+        if !may_name(id, new) {
+            bail!(CliError::InvalidValue(match (SharedId::parse(id)?, SharedId::parse(new)?) {
+                (None, _) => format!(
+                    "'{}' is a swarm on this computer, so it can only name a lighthouse config on this \
+                     computer, not '{}'; share the swarm with 'cfcli swarm config move {} <org>/{}' to fly in \
+                     a shared one",
+                    id, new, id, id
+                ),
+                (Some(swarm), None) => format!(
+                    "'{}' is shared in {}, so it can only name a lighthouse config in {} ({}/<config>), not \
+                     '{}' on this computer; share it with 'cfcli lh config move {} {}/{}'",
+                    id, swarm.org, swarm.org, swarm.org, new, new, swarm.org, new
+                ),
+                (Some(swarm), Some(_)) => format!(
+                    "'{}' is shared in {}, so it can only name a lighthouse config in {} ({}/<config>), not '{}'",
+                    id, swarm.org, swarm.org, swarm.org, new
+                ),
+            }));
         }
         // It must exist (and a shared one gets a copy here).
         LhConfigs::open(config)?.load(new).await?;
@@ -59,6 +88,35 @@ pub async fn link(swarms: &Swarms, config: &Config, id: &str, new: Option<&str>,
         None => println!("Swarm '{}' names no lighthouse config now", id),
     }
     Ok(())
+}
+
+/// Let the user pick the configuration swarm `id` flies in: one on this
+/// computer for a local swarm, one in its organization for a shared one.
+async fn pick_for(config: &Config, id: &str, current: Option<&str>) -> Result<String> {
+    let org = SharedId::parse(id)?.map(|shared| shared.org);
+    let entries: Vec<Entry> = LhConfigs::open(config)?
+        .entries()
+        .await?
+        .into_iter()
+        .filter(|entry| may_name(id, &entry.id))
+        .collect();
+    if entries.is_empty() {
+        bail!(CliError::NotFound(match &org {
+            None => "lighthouse configs on this computer; store one with 'cfcli lh config save <config>' or \
+                     'cfcli lh config import <file>'"
+                .to_string(),
+            Some(org) => format!(
+                "lighthouse configs in {}; store one with 'cfcli lh config save {}/<config>', or share one with \
+                 'cfcli lh config move <config> {}/<config>'",
+                org, org, org
+            ),
+        }));
+    }
+    let message = match current {
+        Some(current) => format!("Lighthouse config for swarm '{}' (now '{}'):", id, current),
+        None => format!("Lighthouse config for swarm '{}':", id),
+    };
+    pick_entry(&entries, &message, current)
 }
 
 /// `swarm lh check|write`

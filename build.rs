@@ -110,7 +110,7 @@ fn main() {
             "Lighthouse config ID (prompts for one if omitted)",
             "The lighthouse config to move",
             "Only this shared lighthouse config (<org>/<config>)",
-            "Lighthouse config ID; a shared swarm needs a shared one (<org>/<config>)",
+            "Lighthouse config ID, picked from a list if omitted (a local swarm names one on this computer, a shared swarm one in its organization)",
             "<org>/<config> shares it on the server",
         ] {
             s = s.replace(&format!("{}:_default", help), &format!("{}:_cfcli_lh_configs", help));

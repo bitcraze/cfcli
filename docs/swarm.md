@@ -488,14 +488,20 @@ with `cfcli config set address=...`.
 ## Lighthouse
 
 A swarm can name the lighthouse configuration it flies in, a stored one (see
-[Lighthouse](/docs/lighthouse.md#stored-and-shared-configurations)). A shared
-swarm can only name a shared configuration, so everyone who uses it gets it.
+[Lighthouse](/docs/lighthouse.md#stored-and-shared-configurations)). A local
+swarm names a configuration on this computer, and a shared swarm one in its
+organization, so everyone who uses the swarm can get it.
 
 ```text
 cfcli swarm config lh lab/cage    # the selected swarm flies in lab/cage
-cfcli swarm config lh             # show which one it names
+cfcli swarm config lh             # pick one from a list
 cfcli swarm config lh --clear
 ```
+
+Without a configuration, `swarm config lh` lists the ones to pick from,
+starting at the one the swarm names: the configurations on this computer for
+a local swarm, and those in its organization for a shared one. When not
+interactive, it shows the one the swarm names, as `swarm config show` does.
 
 `swarm lh check` compares each Crazyflie's configuration with it, and
 `swarm lh write` writes it to the Crazyflies that don't have it yet (all of
@@ -569,7 +575,7 @@ edit those; change shared swarms with the commands.
 ```yaml
 name: Lab Crazyflies
 description: The bench
-lighthouse: lab/cage
+lighthouse: cage
 units:
 - uri: radio:///80/2M/E7E7E7E701
   name: CF-01

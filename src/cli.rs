@@ -409,10 +409,15 @@ enum LighthouseConfigCommands {
     /// Write a lighthouse configuration to the Crazyflie
     ///
     /// The configuration is a stored one (<CONFIG>), a file (-i), YAML piped
-    /// in, or else the one the selected swarm names.
+    /// in, or else one picked from a list (in a terminal) or the one the
+    /// selected swarm names.
     #[clap(verbatim_doc_comment)]
     Write(LighthouseWriteParameters),
-    /// Compare the Crazyflie's lighthouse configuration with one (as for write)
+    /// Compare the Crazyflie's lighthouse configuration with one
+    ///
+    /// The configuration is a stored one (<CONFIG>), a file (-i), YAML piped
+    /// in, or else the one the selected swarm names.
+    #[clap(verbatim_doc_comment)]
     Check(LighthouseCheckParameters),
     /// Store a lighthouse configuration file (from the Crazyflie client or read)
     Import(LighthouseImportParameters),
@@ -858,9 +863,9 @@ enum SwarmConfigCommands {
         #[clap(value_name = "NEW_ID")]
         to: String,
     },
-    /// Show or set the lighthouse config the swarm flies in (see 'cfcli lh config')
+    /// Set the lighthouse config the swarm flies in, or show it when not interactive (see 'cfcli lh config')
     Lh {
-        /// Lighthouse config ID; a shared swarm needs a shared one (<org>/<config>)
+        /// Lighthouse config ID, picked from a list if omitted (a local swarm names one on this computer, a shared swarm one in its organization)
         #[clap(value_name = "CONFIG")]
         config: Option<String>,
         /// The swarm flies in no particular lighthouse config

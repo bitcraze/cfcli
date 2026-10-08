@@ -1460,7 +1460,8 @@ async fn run() -> Result<()> {
                     }
                 },
                 LighthouseConfigCommands::Write(params) => {
-                    let (file, _) = configs::source(&config, params.id.as_deref(), params.input.as_deref()).await?;
+                    let (file, _) =
+                        configs::source(&config, params.id.as_deref(), params.input.as_deref(), !non_interactive).await?;
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
                     modules::lighthouse::write(cf, &file, non_interactive).await?;
                 }
@@ -1469,7 +1470,8 @@ async fn run() -> Result<()> {
                     modules::lighthouse::read(cf, params.output.as_deref(), non_interactive).await?;
                 }
                 LighthouseConfigCommands::Check(params) => {
-                    let (file, source) = configs::source(&config, params.id.as_deref(), params.input.as_deref()).await?;
+                    let (file, source) =
+                        configs::source(&config, params.id.as_deref(), params.input.as_deref(), false).await?;
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
                     modules::lighthouse::check(cf, &file, &source, csv, non_interactive).await?;
                 }
