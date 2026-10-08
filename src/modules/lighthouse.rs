@@ -64,8 +64,10 @@ fn default_file_type() -> String {
     "lighthouse_system_configuration".to_string()
 }
 
+/// cflib only reads version '1'. Earlier cfcli versions wrote '2' for the
+/// same format, those files are still read.
 fn default_version() -> String {
-    "2".to_string()
+    "1".to_string()
 }
 
 impl Default for LighthouseConfigFile {
@@ -617,4 +619,23 @@ pub fn display_file(file_path: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_version_cflib_reads() {
+        // cflib compares the version with the string '1'
+        let yaml = serde_yaml::to_string(&LighthouseConfigFile::default()).unwrap();
+        assert!(yaml.contains("version: '1'"), "{}", yaml);
+    }
+
+    #[test]
+    fn reads_version_2_from_earlier_cfcli() {
+        let yaml = "type: lighthouse_system_configuration\nversion: '2'\nsystemType: 2\n";
+        let config: LighthouseConfigFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.version, "2");
+    }
 }
