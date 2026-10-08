@@ -157,7 +157,7 @@ pub struct Config {
     /// ID of the selected swarm (see `cfcli swarm config select`)
     #[serde(default)]
     swarm: Option<String>,
-    /// Whether swarm commands sync shared swarms with the server (see
+    /// Whether commands sync shared swarms and lighthouse configs with the server (see
     /// `cfcli settings sync`); None is the default, on.
     #[serde(default)]
     sync: Option<bool>,

@@ -353,7 +353,7 @@ enum Commands {
         command: SwarmCommands,
     },
 
-    /// Your account for sharing swarms: sign in, sign out
+    /// Your account for sharing swarms and lighthouse configs: sign in, sign out
     Auth {
         #[clap(subcommand)]
         command: AuthCommands,
@@ -996,7 +996,7 @@ enum SettingsCommands {
         #[clap(subcommand)]
         command: SettingsAddressCommands,
     },
-    /// Whether swarm commands sync shared swarms with the server
+    /// Whether commands sync shared swarms and lighthouse configs with the server
     Sync {
         #[clap(subcommand)]
         command: SettingsSyncCommands,

@@ -616,6 +616,23 @@ impl<D: Document> Shared<D> {
         Ok(Some(listed))
     }
 
+    /// A list the server keeps about `id`, `GET /api/v1/<kind>/<org>/<id>/<what>`
+    /// (the swarms that name a lighthouse configuration). None when the
+    /// server can't be reached; empty when it doesn't have `id`.
+    pub async fn related(&self, id: &SharedId, what: &str) -> Result<Option<Vec<serde_json::Map<String, serde_json::Value>>>> {
+        let url = auth::endpoint(
+            &self.credentials.server,
+            &format!("/api/v1/{}/{}/{}/{}", D::FOLDER, id.org, id.name, what),
+        )?;
+        let Some(response) = self.send_quietly(self.client.get(url), true).await? else {
+            return Ok(None);
+        };
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(Some(Vec::new()));
+        }
+        auth::answer(&self.credentials.server, response).await.map(Some)
+    }
+
     /// After the server answered 404 for `id`: fail saying what it is called
     /// now, if the user changed the ID of its organization. Gets the list,
     /// which moves the copies.
@@ -854,10 +871,12 @@ impl<D: Document> Shared<D> {
         match server {
             Some(server) => {
                 for item in server {
-                    let copy = copies.get(&item.id.to_string()).copied().unwrap_or(CopyState {
-                        revision: item.revision,
-                        pending: false,
-                    });
+                    // The server's revision, which the next command gets,
+                    // unless the copy has changes to upload.
+                    let copy = match copies.get(&item.id.to_string()) {
+                        Some(copy) if copy.pending => *copy,
+                        _ => CopyState { revision: item.revision, pending: false },
+                    };
                     listed.push(Listed { id: item.id, name: item.name, count: item.count, copy });
                 }
                 // Copies of documents gone from the server go too, unless

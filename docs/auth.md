@@ -1,7 +1,8 @@
 # Signing in
 
-The `auth` command signs cfcli in to the server that shares swarms between
-cfcli, Swarmkeeper and the people you fly with. Signing in is optional:
+The `auth` command signs cfcli in to the server that shares swarms and
+lighthouse configurations between cfcli, Swarmkeeper and the people you fly
+with. Signing in is optional:
 everything else in cfcli works without it.
 
 ```text
@@ -44,8 +45,8 @@ cfcli auth status
 ```
 
 Prints the server, your name, the key's name and the organizations your swarms
-are shared in. When cfcli isn't signed in, or the key no longer works, it says
-so and exits with code 20.
+and lighthouse configurations are shared in. When cfcli isn't signed in, or
+the key no longer works, it says so and exits with code 20.
 
 ## Sign out
 
@@ -58,7 +59,8 @@ Revokes cfcli's key on the server and forgets it.
 ## The key
 
 cfcli signs in with an API key of its own, named "cfcli on &lt;computer&gt;". It
-reads and uploads swarms as you in the organizations you are a member of. It
+reads and uploads swarms and lighthouse configurations as you in the
+organizations you are a member of. It
 is listed on the server's API keys page, where you can revoke it; that signs
 cfcli out too.
 

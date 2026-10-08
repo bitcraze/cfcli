@@ -8,14 +8,14 @@
 //! which makes `swarm lh write` the way to give new Crazyflies the swarm's
 //! configuration, and to update all of them when it changes.
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
 use super::Swarms;
 use crate::error::CliError;
 use crate::modules::documents::SharedId;
-use crate::modules::lighthouse::configs::LhConfigs;
+use crate::modules::lighthouse::configs::{describe, LhConfigs};
 use crate::modules::lighthouse::{
     check_supported, compare, describe_distance, is_same, read_config, supported_base_stations, write_config,
     BaseStationDiff, CalibrationDelta, LighthouseConfigFile, Part,
@@ -83,14 +83,9 @@ pub async fn run(
     let configs = LhConfigs::open(config)?;
     let wanted = configs.load(id).await?;
     if !csv {
-        let revision = SharedId::parse(id)?
-            .and_then(|shared| configs.shared(&shared).ok()?.copy_state(&shared).ok()?)
-            .map(|copy| format!(", revision {}", copy.revision))
-            .unwrap_or_default();
         println!(
-            "Lighthouse config '{}'{}: base stations {}",
-            id,
-            revision,
+            "Lighthouse config {}: base stations {}",
+            describe(&configs, id),
             ids(&wanted.geos.keys().copied().collect::<Vec<_>>())
         );
     }
@@ -218,9 +213,10 @@ async fn check(runner: &Runner<'_>, wanted: &LighthouseConfigFile, csv: bool) ->
     outcome.finish()?;
     if differing > 0 {
         bail!(CliError::Differs(format!(
-            "{} of {} have another lighthouse configuration; 'cfcli swarm lh write' gives them this one",
+            "{} of {} {} another lighthouse configuration; 'cfcli swarm lh write' gives them this one",
             differing,
-            super::crazyflies(done.len())
+            super::crazyflies(done.len()),
+            if differing == 1 { "has" } else { "have" }
         )));
     }
     Ok(())
@@ -235,9 +231,9 @@ async fn write(runner: &Runner<'_>, wanted: &LighthouseConfigFile, force: bool) 
                 return Ok(false);
             }
             write_config(cf, wanted, |_, _| {}).await?;
-            let back = read_config(cf, |_, _| {}).await?;
-            if !is_same(&compare(wanted, &back)) {
-                bail!("the Crazyflie has another configuration after writing it");
+            let diffs = compare(wanted, &read_config(cf, |_, _| {}).await?);
+            if !is_same(&diffs) {
+                return Err(not_kept(wanted, diffs));
             }
             Ok(true)
         })
@@ -256,6 +252,40 @@ async fn write(runner: &Runner<'_>, wanted: &LighthouseConfigFile, force: bool) 
     outcome.finish()
 }
 
+/// Why a Crazyflie doesn't have the configuration when it is read back
+/// right after writing. Usually the Crazyflie has taken the calibration of
+/// a base station it sees whose UID isn't the configuration's (see
+/// [`CalibrationDelta::Replaced`]).
+fn not_kept(wanted: &LighthouseConfigFile, diffs: Vec<BaseStationDiff>) -> anyhow::Error {
+    let replaced: Vec<String> = diffs
+        .iter()
+        .filter_map(|d| match d.calibration {
+            Part::Differs(CalibrationDelta::Replaced { file_uid, cf_uid }) => Some(format!(
+                "BS {} sees 0x{:08X}, the config has 0x{:08X}",
+                d.id, cf_uid, file_uid
+            )),
+            _ => None,
+        })
+        .collect();
+    let only_replaced = diffs.iter().all(|d| {
+        matches!(d.geometry, Part::Same | Part::Absent)
+            && matches!(
+                d.calibration,
+                Part::Same | Part::Absent | Part::Differs(CalibrationDelta::Replaced { .. })
+            )
+    });
+    if !replaced.is_empty() && only_replaced {
+        return anyhow!(
+            "written, but then the Crazyflie took the calibration of the base stations it sees, which aren't the \
+             config's ({}). If a base station was replaced, its geometry may need a new estimate; then store \
+             the configuration again with 'cfcli lh config save'",
+            replaced.join("; ")
+        );
+    }
+    let found = Found { diffs, supported: None };
+    anyhow!("the Crazyflie has another configuration after writing it: {}", found.summary(wanted))
+}
+
 /// A hint after Crazyflies were added to a swarm that names a lighthouse
 /// configuration: how to give it to them.
 pub fn hint_for_new(swarm: &str, lighthouse: Option<&str>, added: &[String]) {
@@ -267,5 +297,44 @@ pub fn hint_for_new(swarm: &str, lighthouse: Option<&str>, added: &[String]) {
             swarm,
             added.join(",")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE: &str = "\
+type: lighthouse_system_configuration
+version: '1'
+systemType: 2
+geos:
+  0:
+    origin: [0.0, 0.0, 2.0]
+    rotation: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+calibs:
+  0:
+    uid: 2360210604
+    sweeps:
+    - {phase: 0.0, tilt: -0.051, curve: 0.275, gibmag: -0.005, gibphase: 2.281, ogeemag: -0.184, ogeephase: 1.847}
+    - {phase: -0.004, tilt: 0.047, curve: 0.367, gibmag: -0.005, gibphase: 2.548, ogeemag: -0.124, ogeephase: 2.051}
+";
+
+    #[test]
+    fn says_why_a_write_did_not_stay() {
+        let wanted = LighthouseConfigFile::from_yaml(FILE).unwrap();
+
+        // The Crazyflie took the calibration of the base station it sees.
+        let mut seen = wanted.clone();
+        seen.calibs.get_mut(&0).unwrap().uid = 0x12345678;
+        let message = not_kept(&wanted, compare(&wanted, &seen)).to_string();
+        assert!(message.contains("BS 0 sees 0x12345678, the config has 0x8CADF4AC"), "{}", message);
+
+        // Anything else: what differs.
+        let mut moved = seen.clone();
+        moved.geos.get_mut(&0).unwrap().origin[0] = 0.05;
+        let message = not_kept(&wanted, compare(&wanted, &moved)).to_string();
+        assert!(message.starts_with("the Crazyflie has another configuration"), "{}", message);
+        assert!(message.contains("BS 0 moved 5.0 cm"), "{}", message);
     }
 }

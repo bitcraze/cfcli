@@ -285,6 +285,7 @@ These commands work like the normal ones, on every Crazyflie in the swarm:
 | `cfcli swarm deck list` | The decks on each Crazyflie |
 | `cfcli swarm debug assert` | The assert info of each Crazyflie |
 | `cfcli swarm bootload info \| flash` | Bootloaders and firmware, see [Flashing](#flashing) |
+| `cfcli swarm lh check \| write` | The lighthouse configuration of each Crazyflie, see [Lighthouse](#lighthouse) |
 
 `--cf` and `--exclude` (comma-separated names) pick some of the Crazyflies,
 and `--swarm <id>` runs on another swarm than the selected one:
@@ -503,7 +504,7 @@ configuration than the one the swarm names.
 
 ```text
 $ cfcli swarm lh check
-Lighthouse config 'lab/cage', revision 3: base stations 0, 1, 2, 3
+Lighthouse config 'lab/cage' (revision 3): base stations 0, 1, 2, 3
 CF    | Lighthouse
 ------+------------------------------------------
 CF-01 | up to date
@@ -512,7 +513,7 @@ CF-03 | no position for BS 0, 1, 2, 3
 Error: differs: 2 of 3 Crazyflies have another lighthouse configuration; 'cfcli swarm lh write' gives them this one
 
 $ cfcli swarm lh write
-Lighthouse config 'lab/cage', revision 3: base stations 0, 1, 2, 3
+Lighthouse config 'lab/cage' (revision 3): base stations 0, 1, 2, 3
 CF-01: up to date
 CF-02: written and stored in flash
 CF-03: written and stored in flash
@@ -522,6 +523,15 @@ CF-03: written and stored in flash
 `--csv` gives one row per Crazyflie (`cf,uri,status,firmware_base_stations,
 differing_base_stations`). `write` refuses a Crazyflie whose firmware supports
 fewer base stations than the configuration has, before writing anything to it.
+
+`write` reads each configuration back after writing it. A Crazyflie that sees
+a base station whose UID isn't the configuration's takes that base station's
+calibration, so the configuration doesn't stay; `write` then fails for that
+Crazyflie and says which base stations:
+
+```text
+CF-02: written, but then the Crazyflie took the calibration of the base stations it sees, which aren't the config's (BS 1 sees 0x2E08C9A4, the config has 0x8CADF4AC). If a base station was replaced, its geometry may need a new estimate; then store the configuration again with 'cfcli lh config save'
+```
 
 When Crazyflies are added to a swarm that names a lighthouse config, `add`
 says how to give it to them (`cfcli swarm lh write --swarm <swarm> --cf

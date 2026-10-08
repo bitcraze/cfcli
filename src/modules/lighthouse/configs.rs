@@ -62,16 +62,17 @@ fn base_stations(n: usize) -> String {
     }
 }
 
-/// A stored configuration for the user: `'lab/cage' (revision 3)`.
-fn describe(configs: &LhConfigs, id: &str) -> String {
-    let revision = SharedId::parse(id)
+/// A stored configuration for the user: `'lab/cage' (revision 3)`, and
+/// whether this computer's copy has changes the server doesn't have.
+pub(crate) fn describe(configs: &LhConfigs, id: &str) -> String {
+    let copy = SharedId::parse(id)
         .ok()
         .flatten()
-        .and_then(|shared| configs.shared(&shared).ok()?.copy_state(&shared).ok()?)
-        .map(|copy| copy.revision)
-        .filter(|revision| *revision > 0);
-    match revision {
-        Some(revision) => format!("'{}' (revision {})", id, revision),
+        .and_then(|shared| configs.shared(&shared).ok()?.copy_state(&shared).ok()?);
+    match copy {
+        Some(copy) if copy.revision == 0 => format!("'{}' (not uploaded yet)", id),
+        Some(copy) if copy.pending => format!("'{}' (revision {}, changes not pushed)", id, copy.revision),
+        Some(copy) => format!("'{}' (revision {})", id, copy.revision),
         None => format!("'{}'", id),
     }
 }
@@ -80,16 +81,17 @@ fn describe(configs: &LhConfigs, id: &str) -> String {
 
 /// The configuration for `write` and `check`, and how to name it: a stored
 /// one (`id`), a file (`input`), what is piped in, or else the one the
-/// selected swarm names.
+/// selected swarm names (also when stdin is empty, as in a script).
 pub async fn source(config: &Config, id: Option<&str>, input: Option<&str>) -> Result<(LighthouseConfigFile, String)> {
-    use std::io::IsTerminal;
     if let Some(id) = id {
         let configs = LhConfigs::open(config)?;
         return Ok((configs.load(id).await?, describe(&configs, id)));
     }
-    if input.is_some() || !std::io::stdin().is_terminal() {
-        let file = super::load(input)?;
-        return Ok((file, input.unwrap_or("the configuration from stdin").to_string()));
+    if let Some(path) = input {
+        return Ok((super::load(path)?, path.to_string()));
+    }
+    if let Some(file) = super::load_piped()? {
+        return Ok((file, "the configuration from stdin".to_string()));
     }
     let linked = match &config.swarm {
         Some(swarm) => Swarms::open(config)?.load(swarm).await?.lighthouse,
@@ -328,7 +330,7 @@ pub async fn import(
             .unwrap_or_default(),
     };
     check_new_id(configs, &id).with_context(|| format!("importing {} (pick another ID with --id)", path))?;
-    let mut file = super::load(Some(path))?;
+    let mut file = super::load(path)?;
     if let Some(name) = name {
         file.set_name(name);
     }
@@ -358,6 +360,56 @@ pub async fn export(configs: &LhConfigs, id: &str, output: Option<&str>) -> Resu
 
 // ---- Deleting and moving ----
 
+/// The swarms that fly in lighthouse config `id`: the local swarms, and the
+/// shared swarms the server lists (only a shared config can be named by
+/// them), or this computer's copies of them when it can't be reached.
+async fn swarms_naming(configs: &LhConfigs, id: &str) -> Vec<String> {
+    let names = |swarm: &crate::modules::swarm::store::Swarm| swarm.lighthouse.as_deref() == Some(id);
+    let Ok(swarms) = Swarms::open_cached() else {
+        return Vec::new();
+    };
+    let mut naming: Vec<String> = swarms
+        .local
+        .ids()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|swarm| swarms.local.load(swarm).is_ok_and(|s| names(&s)))
+        .collect();
+    let Ok(Some(shared)) = SharedId::parse(id) else {
+        return naming;
+    };
+    let listed = match configs.shared(&shared) {
+        Ok(server) => server.related(&shared, "swarms").await.ok().flatten(),
+        Err(_) => None,
+    };
+    match listed {
+        Some(listed) => naming.extend(
+            listed
+                .iter()
+                .filter_map(|swarm| swarm.get("id").and_then(|id| id.as_str()).map(str::to_string)),
+        ),
+        None => {
+            if let Some(copies) = &swarms.shared {
+                for swarm in copies.cached_ids() {
+                    if copies.cached(&swarm).is_ok_and(|s| names(&s)) {
+                        naming.push(swarm.to_string());
+                    }
+                }
+            }
+        }
+    }
+    naming
+}
+
+fn quoted(ids: &[String]) -> String {
+    ids.iter().map(|id| format!("'{}'", id)).collect::<Vec<_>>().join(", ")
+}
+
+/// "names" and "it" for one swarm, "name" and "them" for more.
+fn verb_and_pronoun(ids: &[String]) -> (&'static str, &'static str) {
+    if ids.len() == 1 { ("names", "it") } else { ("name", "them") }
+}
+
 pub async fn delete(configs: &LhConfigs, id: Option<&str>, non_interactive: bool) -> Result<()> {
     let id = match id {
         Some(id) => id.to_string(),
@@ -366,6 +418,10 @@ pub async fn delete(configs: &LhConfigs, id: Option<&str>, non_interactive: bool
             pick(configs, "Select the lighthouse config to delete:").await?
         }
     };
+    let naming = swarms_naming(configs, &id).await;
+    if !naming.is_empty() {
+        println!("Swarms that fly in lighthouse config '{}': {}", id, quoted(&naming));
+    }
     // Deleting can't be undone, so ask whenever there is someone to ask.
     if !non_interactive {
         let question = match SharedId::parse(&id)? {
@@ -384,6 +440,16 @@ pub async fn delete(configs: &LhConfigs, id: Option<&str>, non_interactive: bool
     }
     configs.delete(&id).await?;
     println!("Deleted lighthouse config '{}'", id);
+    if !naming.is_empty() {
+        let (names, them) = verb_and_pronoun(&naming);
+        println!(
+            "{} still {} it: give {} another with 'cfcli swarm config lighthouse <CONFIG> --swarm <SWARM>', \
+             or none with '--clear'",
+            quoted(&naming),
+            names,
+            them
+        );
+    }
     Ok(())
 }
 
@@ -398,8 +464,12 @@ pub async fn move_config(configs: &LhConfigs, from: &str, to: &str, non_interact
     if SharedId::parse(to)?.is_none() && configs.local.exists(to) {
         bail!(CliError::InvalidValue(format!("lighthouse config '{}' already exists", to)));
     }
+    let naming = swarms_naming(configs, from).await;
     // Moving a shared configuration away deletes it for everyone: ask.
     if let Some(shared) = SharedId::parse(from)? {
+        if !naming.is_empty() {
+            println!("Swarms that fly in lighthouse config '{}': {}", from, quoted(&naming));
+        }
         if !non_interactive {
             let question = format!(
                 "Move '{}' to '{}'? It is deleted on {} for everyone in {}.",
@@ -425,7 +495,35 @@ pub async fn move_config(configs: &LhConfigs, from: &str, to: &str, non_interact
         to,
         configs.place(to)
     );
-    println!("Swarms that name '{}' need 'cfcli swarm config lighthouse {}'", from, to);
+    if !naming.is_empty() {
+        // A shared swarm can only name a shared configuration.
+        let to_shared = SharedId::parse(to)?.is_some();
+        let (can, cannot): (Vec<String>, Vec<String>) = naming
+            .into_iter()
+            .partition(|swarm| to_shared || !matches!(SharedId::parse(swarm), Ok(Some(_))));
+        if !can.is_empty() {
+            let (names, them) = verb_and_pronoun(&can);
+            println!(
+                "{} still {} '{}': 'cfcli swarm config lighthouse {} --swarm <SWARM>' gives {} '{}'",
+                quoted(&can),
+                names,
+                from,
+                to,
+                them,
+                to
+            );
+        }
+        if !cannot.is_empty() {
+            let (names, _) = verb_and_pronoun(&cannot);
+            println!(
+                "{} still {} '{}': a shared swarm can't name '{}' on this computer",
+                quoted(&cannot),
+                names,
+                from,
+                to
+            );
+        }
+    }
     Ok(())
 }
 

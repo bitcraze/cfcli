@@ -58,7 +58,8 @@ Commands:
 `display`, `write` and `check` take a stored configuration by its ID, or a
 file with `-i`. `write` and `check` also read YAML piped in, and with none of
 these they use the configuration the selected swarm names (see
-[Swarms](/docs/swarm.md#lighthouse)).
+[Swarms](/docs/swarm.md#lighthouse)), also when stdin is empty, as for a
+command in a script or a cron job.
 
 ### YAML File Format
 
@@ -214,7 +215,8 @@ Options:
 - `-i, --input <FILE>` — read YAML from a file
 
 With neither, YAML piped in is written, or else the configuration the
-selected swarm names.
+selected swarm names. Stdin that isn't a terminal but has nothing in it (a
+script, a cron job) counts as nothing piped in.
 
 All base station slots the firmware supports are written. Slots present in
 the YAML are uploaded as valid, while slots omitted from the YAML are written
@@ -330,8 +332,25 @@ has seen elsewhere.
 
 `move` shares a local configuration (`move cage lab/cage`), takes a shared one
 back (which deletes it on the server for everyone in the organization), or
-renames one. Swarms that name it need `cfcli swarm config lighthouse` with
-the new ID.
+renames one. Swarms that fly in it keep the old ID: `move` lists them and the
+`cfcli swarm config lighthouse` command that gives them the new one. A shared
+swarm can only name a shared configuration, so taking one back leaves its
+shared swarms without it.
+
+`delete` deletes a configuration, a shared one on the server for everyone in
+the organization. Before asking, it lists the swarms that fly in it: the
+local ones and, for a shared configuration, the organization's shared swarms
+(the server's list, or this computer's copies when the server can't be
+reached). They keep naming it, so give them another one, or none with
+`cfcli swarm config lighthouse --clear`.
+
+```text
+$ cfcli lh config delete lab/cage
+Swarms that fly in lighthouse config 'lab/cage': 'lab/flight-test'
+? Delete lighthouse config 'lab/cage' on arc.bitcraze.io, for everyone in lab? Yes
+Deleted lighthouse config 'lab/cage'
+'lab/flight-test' still names it: give it another with 'cfcli swarm config lighthouse <CONFIG> --swarm <SWARM>', or none with '--clear'
+```
 
 ## Copy a Configuration Between Crazyflies
 

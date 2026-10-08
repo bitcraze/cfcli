@@ -87,7 +87,7 @@ Commands:
   lh           Lighthouse positioning system configuration
   deck         Decks attached to the Crazyflie
   swarm        Swarms of Crazyflies: store them and run commands on them
-  auth         Your account for sharing swarms: sign in, sign out
+  auth         Your account for sharing swarms and lighthouse configs: sign in, sign out
   completions  Generate a shell completion script (printed to stdout)
   help         Print this message or the help of the given subcommand(s)
 
@@ -245,7 +245,7 @@ prompt) a few flags make the output predictable:
   `platform info`, `swarm config list`/`show`, `swarm scan`,
   `swarm platform info`, `swarm param get`, `swarm log print`,
   `swarm deck list`, `swarm debug assert`, `swarm bootload info`,
-  `lh config display`, `lh config check`). Other
+  `swarm lh check`, `lh config list`/`display`/`check`). Other
   commands ignore the flag.
 
 Exit codes:

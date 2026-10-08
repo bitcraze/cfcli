@@ -626,22 +626,30 @@ pub async fn write_config(
 
 // ---- Commands ----
 
-/// Read a configuration file, or stdin when no path is given.
-pub fn load(file_path: Option<&str>) -> Result<LighthouseConfigFile> {
-    let yaml = match file_path {
-        Some(path) => std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read lighthouse config file: {}", path))?,
-        None => {
-            use std::io::Read;
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .context("Failed to read lighthouse config from stdin")?;
-            buf
-        }
-    };
+/// Read a configuration file.
+pub fn load(path: &str) -> Result<LighthouseConfigFile> {
+    let yaml = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read lighthouse config file: {}", path))?;
+    LighthouseConfigFile::from_yaml(&yaml).with_context(|| format!("Failed to load {}", path))
+}
+
+/// The configuration piped in, or None when nothing is: stdin is a
+/// terminal, or empty, as for a command run from a script or cron.
+pub fn load_piped() -> Result<Option<LighthouseConfigFile>> {
+    use std::io::{IsTerminal, Read};
+    if std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let mut yaml = String::new();
+    std::io::stdin()
+        .read_to_string(&mut yaml)
+        .context("Failed to read lighthouse config from stdin")?;
+    if yaml.trim().is_empty() {
+        return Ok(None);
+    }
     LighthouseConfigFile::from_yaml(&yaml)
-        .with_context(|| format!("Failed to load {}", file_path.unwrap_or("the configuration from stdin")))
+        .context("Failed to load the configuration from stdin")
+        .map(Some)
 }
 
 pub(crate) async fn read_with_progress(cf: &Crazyflie, non_interactive: bool) -> Result<LighthouseConfigFile> {
@@ -662,7 +670,7 @@ pub async fn display(cf: &Crazyflie, csv: bool, non_interactive: bool) -> Result
 
 /// Display lighthouse configuration from a YAML file (no connection needed)
 pub fn display_file(file_path: &str, csv: bool) -> Result<()> {
-    let config = load(Some(file_path))?;
+    let config = load(file_path)?;
     print_config(&config, &format!("Lighthouse Configuration File: {}", file_path), csv);
     Ok(())
 }
