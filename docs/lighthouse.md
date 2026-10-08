@@ -46,7 +46,7 @@ shared with cfclient.
 
 ```yaml
 type: lighthouse_system_configuration
-version: '2'
+version: '1'
 systemType: 2
 geos:
   0:
@@ -84,7 +84,8 @@ calibs:
 Top-level fields:
 
 - `type` — file type marker, always `lighthouse_system_configuration`
-- `version` — file format version, currently `'2'`
+- `version` — file format version, `'1'`, the only version cflib reads. Files
+  written as `'2'` by earlier cfcli versions are read too
 - `systemType` — `1` for V1 base stations, `2` for V2
 - `geos` — map of `bs_id -> { origin, rotation }`
 - `calibs` — map of `bs_id -> { uid, sweeps[2] }`
