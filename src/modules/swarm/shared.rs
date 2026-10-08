@@ -18,6 +18,12 @@
 //! When the server can't be reached, commands use the copies and keep their
 //! changes for the next push, so working with the Crazyflies never waits for
 //! the internet.
+//!
+//! The `<org>` in an ID is the user's own ID for the organization, which they
+//! can change on the server. `synced/<server>/orgs.json` remembers the ID of
+//! each organization (the server lists their UUIDs, which never change), so
+//! when one changes, the copies and the selected swarm move to the new ID,
+//! and the old ID says what the new one is.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -32,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use super::store::{self, Store, Swarm};
 use crate::error::CliError;
 use crate::modules::auth::{self, Credentials};
+use crate::Config;
 
 /// A shared swarm's ID, `<org>/<swarm>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,10 +99,25 @@ pub struct Listed {
 #[derive(Deserialize)]
 struct ServerSwarm {
     org: String,
+    /// Never changes, unlike the user's ID for the organization (`org`).
+    /// Servers before per-user IDs don't send it.
+    #[serde(default)]
+    org_uuid: Option<String>,
     swarm: String,
     name: String,
     units: usize,
     revision: i32,
+}
+
+/// `orgs.json`: the user's IDs for their organizations.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct OrgIds {
+    /// The ID of each organization, by UUID, as the server last listed it.
+    #[serde(default)]
+    ids: BTreeMap<String, String>,
+    /// Old IDs and what they became, for telling the user.
+    #[serde(default)]
+    renamed: BTreeMap<String, String>,
 }
 
 /// What an upload asks the server to check first.
@@ -216,6 +238,9 @@ impl Shared {
     /// like, which must never wait for the network.
     pub fn cached(&self, id: &SharedId) -> Result<Swarm> {
         if !self.has_copy(id) {
+            if let Some(now) = self.renamed(id)? {
+                bail!(renamed_error(id, &now));
+            }
             bail!(CliError::NotFound(format!("a copy of swarm '{}' on this computer", id)));
         }
         self.copies(&id.org).load(&id.swarm)
@@ -226,6 +251,108 @@ impl Shared {
         self.state()
             .map(|state| state.swarms.keys().filter_map(|id| SharedId::parse(id).ok().flatten()).collect())
             .unwrap_or_default()
+    }
+
+    // ---- Organization IDs ----
+
+    fn org_ids(&self) -> Result<OrgIds> {
+        let path = self.dir.join("orgs.json");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text).with_context(|| format!("reading {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(OrgIds::default()),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+
+    fn save_org_ids(&self, orgs: &OrgIds) -> Result<()> {
+        std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
+        let path = self.dir.join("orgs.json");
+        std::fs::write(&path, serde_json::to_string_pretty(orgs)?).with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// What `id` is called now, if the user changed the ID of its
+    /// organization. Also selects it instead, if `id` was selected.
+    fn renamed(&self, id: &SharedId) -> Result<Option<SharedId>> {
+        let Some(org) = self.org_ids()?.renamed.get(&id.org).cloned() else {
+            return Ok(None);
+        };
+        let now = SharedId { org, swarm: id.swarm.clone() };
+        select_renamed(&[(id.org.clone(), now.org.clone())]);
+        Ok(Some(now))
+    }
+
+    /// Follow the organizations whose ID the user changed since the last
+    /// list: their copies move to the new ID, and so does the selected swarm.
+    fn follow_renames(&self, server: &[ServerSwarm]) -> Result<()> {
+        let mut orgs = self.org_ids()?;
+        let before = serde_json::to_string(&orgs)?;
+        let mut renames: Vec<(String, String)> = Vec::new();
+        for s in server {
+            let Some(uuid) = &s.org_uuid else { continue };
+            if let Some(old) = orgs.ids.insert(uuid.clone(), s.org.clone()) {
+                if old != s.org && !renames.contains(&(old.clone(), s.org.clone())) {
+                    renames.push((old, s.org.clone()));
+                }
+            }
+        }
+        for (old, new) in &renames {
+            for to in orgs.renamed.values_mut().filter(|to| *to == old) {
+                *to = new.clone();
+            }
+            orgs.renamed.insert(old.clone(), new.clone());
+        }
+        // An ID in use is no longer an old one.
+        for s in server {
+            orgs.renamed.remove(&s.org);
+        }
+        if serde_json::to_string(&orgs)? != before {
+            self.save_org_ids(&orgs)?;
+        }
+        if renames.is_empty() {
+            return Ok(());
+        }
+
+        // Take all the moving copies out first, so that two organizations
+        // can swap IDs.
+        let mut state = self.state()?;
+        let mut moving = Vec::new();
+        for (old, new) in &renames {
+            let ids: Vec<SharedId> = state
+                .swarms
+                .keys()
+                .filter_map(|key| SharedId::parse(key).ok().flatten())
+                .filter(|id| id.org == *old)
+                .collect();
+            for id in ids {
+                let copy = state.swarms.remove(&id.to_string()).unwrap_or_default();
+                let copies = self.copies(old);
+                let swarm = match copies.exists(&id.swarm) {
+                    true => {
+                        let swarm = copies.load(&id.swarm)?;
+                        copies.delete(&id.swarm)?;
+                        Some(swarm)
+                    }
+                    false => None,
+                };
+                moving.push((SharedId { org: new.clone(), swarm: id.swarm }, copy, swarm));
+            }
+        }
+        for (id, copy, swarm) in moving {
+            if let Some(swarm) = swarm {
+                self.copies(&id.org).save(&id.swarm, &swarm)?;
+            }
+            state.swarms.insert(id.to_string(), copy);
+        }
+        self.save_state(&state)?;
+        for (old, _) in &renames {
+            // Only goes when empty.
+            let _ = std::fs::remove_dir(self.dir.join(old));
+        }
+        select_renamed(&renames);
+        for (old, new) in &renames {
+            println!("Your organization '{}' on {} is now called '{}': its swarms are '{}/<swarm>'", old, self.host(), new, new);
+        }
+        Ok(())
     }
 
     // ---- Talking to the server ----
@@ -282,9 +409,22 @@ impl Shared {
     /// The swarms on the server, in all the user's organizations.
     async fn server_list(&self) -> Result<Option<Vec<ServerSwarm>>> {
         let url = auth::endpoint(&self.credentials.server, "/api/v1/swarms")?;
-        match self.send(self.client.get(url)).await? {
-            Some(response) => Ok(Some(auth::answer(&self.credentials.server, response).await?)),
-            None => Ok(None),
+        let Some(response) = self.send(self.client.get(url)).await? else {
+            return Ok(None);
+        };
+        let server: Vec<ServerSwarm> = auth::answer(&self.credentials.server, response).await?;
+        self.follow_renames(&server)?;
+        Ok(Some(server))
+    }
+
+    /// After the server answered 404 for `id`: fail saying what it is called
+    /// now, if the user changed the ID of its organization. Gets the list,
+    /// which moves the copies.
+    async fn fail_if_renamed(&self, id: &SharedId) -> Result<()> {
+        self.server_list().await?;
+        match self.renamed(id)? {
+            Some(now) => bail!(renamed_error(id, &now)),
+            None => Ok(()),
         }
     }
 
@@ -302,6 +442,7 @@ impl Shared {
         match response.status() {
             StatusCode::NOT_MODIFIED => Ok(true),
             StatusCode::NOT_FOUND => {
+                self.fail_if_renamed(id).await?;
                 // Deleted on the server, or no longer visible to the user.
                 if copy.pending {
                     bail!(CliError::NotFound(format!(
@@ -342,6 +483,9 @@ impl Shared {
         };
         if response.status() == StatusCode::PRECONDITION_FAILED {
             return Ok(Upload::Conflict);
+        }
+        if response.status() == StatusCode::NOT_FOUND {
+            self.fail_if_renamed(id).await?;
         }
         #[derive(Deserialize)]
         struct Uploaded {
@@ -477,6 +621,7 @@ impl Shared {
         match response.status() {
             status if status.is_success() => self.forget(id),
             StatusCode::NOT_FOUND => {
+                self.fail_if_renamed(id).await?;
                 self.forget(id)?;
                 bail!(CliError::NotFound(format!("swarm '{}' on {}", id, self.host())))
             }
@@ -495,8 +640,9 @@ impl Shared {
     /// else from the copies. Swarms created here and not uploaded are
     /// included either way.
     pub async fn list(&self) -> Result<Vec<Listed>> {
-        let state = self.state()?;
         let server = if self.sync { self.server_list().await? } else { None };
+        // After the list, which moves the copies of renamed organizations.
+        let state = self.state()?;
         let mut listed = Vec::new();
         match server {
             Some(server) => {
@@ -550,6 +696,9 @@ impl Shared {
         };
         let on_server: Vec<SharedId> = server.into_iter().map(|s| SharedId { org: s.org, swarm: s.swarm }).collect();
         if let Some(only) = only {
+            if let Some(now) = self.renamed(only)? {
+                bail!(renamed_error(only, &now));
+            }
             if !on_server.contains(only) {
                 bail!(CliError::NotFound(format!("swarm '{}' on {}", only, self.host())));
             }
@@ -592,6 +741,13 @@ impl Shared {
     /// Upload the changes made while sync was off or the server was out of
     /// reach. `force` overwrites what others uploaded in between.
     pub async fn push(&self, only: Option<&SharedId>, force: bool) -> Result<()> {
+        // Copies of organizations with a new ID move to it first.
+        self.server_list().await?;
+        if let Some(only) = only {
+            if let Some(now) = self.renamed(only)? {
+                bail!(renamed_error(only, &now));
+            }
+        }
         let pending: Vec<SharedId> = self
             .state()?
             .swarms
@@ -626,6 +782,31 @@ impl Shared {
             bail!(CliError::InvalidValue(format!("not pushed: {}", failed.join(", "))));
         }
         Ok(())
+    }
+}
+
+fn renamed_error(id: &SharedId, now: &SharedId) -> CliError {
+    CliError::NotFound(format!(
+        "swarm '{}' (your organization '{}' is now called '{}'; use '{}')",
+        id, id.org, now.org, now
+    ))
+}
+
+/// Select the swarm under its organization's new ID, if one of `renames`
+/// (old, new) changed the selected swarm's.
+fn select_renamed(renames: &[(String, String)]) {
+    let Ok(mut config) = confy::load::<Config>("cf-cli", None) else {
+        return;
+    };
+    let Some(selected) = config.swarm.as_deref().and_then(|id| SharedId::parse(id).ok().flatten()) else {
+        return;
+    };
+    if let Some((_, new)) = renames.iter().find(|(old, _)| *old == selected.org) {
+        let now = SharedId { org: new.clone(), swarm: selected.swarm };
+        config.swarm = Some(now.to_string());
+        if confy::store("cf-cli", None, config).is_ok() {
+            println!("The selected swarm is '{}' now", now);
+        }
     }
 }
 
