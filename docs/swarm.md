@@ -175,6 +175,9 @@ cfcli swarm config add radio:///80/2M/E7E7E7E701 --name CF-01 --swarm bitcraze-l
 cfcli swarm config delete bitcraze-lab/demo
 ```
 
+Without `--name`, a shared swarm is named after its ID without the
+organization (`demo` for `bitcraze-lab/demo`).
+
 Share a local swarm by moving it to the server, and move it back to stop
 sharing it. Moving it back deletes it on the server, so cfcli asks first. The
 selected swarm follows the move:

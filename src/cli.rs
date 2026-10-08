@@ -743,7 +743,7 @@ struct SwarmCreateParameters {
     /// Swarm ID, also its file name (letters, digits, '-', '_' and '.').
     /// <org>/<swarm> creates a shared swarm on the server.
     id: String,
-    /// Name shown for the swarm (defaults to the ID)
+    /// Name shown for the swarm (defaults to the ID, without the <org>/)
     #[clap(long)]
     name: Option<String>,
     /// Description of the swarm

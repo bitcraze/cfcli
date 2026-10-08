@@ -450,7 +450,14 @@ async fn pick_swarm(swarms: &Swarms, config: &Config, message: &str) -> Result<S
 }
 
 async fn create(swarms: &Swarms, config: &mut Config, params: &SwarmCreateParameters) -> Result<()> {
-    let swarm = Swarm::new(params.name.clone().unwrap_or_else(|| params.id.clone()), params.description.clone());
+    // The organization only says where a shared swarm is, so it isn't part
+    // of the name.
+    let name = match (&params.name, SharedId::parse(&params.id)?) {
+        (Some(name), _) => name.clone(),
+        (None, Some(shared)) => shared.swarm,
+        (None, None) => params.id.clone(),
+    };
+    let swarm = Swarm::new(name, params.description.clone());
     swarms.create(&params.id, &swarm).await?;
     println!("Created swarm '{}' on {}", params.id, swarms.place(&params.id));
     if params.select {
