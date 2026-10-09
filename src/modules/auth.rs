@@ -199,7 +199,7 @@ fn print_orgs(server: &str, orgs: &[OrgInfo]) {
         );
         return;
     }
-    println!("Swarms are shared in:");
+    println!("Swarms and lighthouse configs are shared in:");
     for org in orgs {
         println!("  {} ({}, {})", org.name, org.slug, org.role);
     }

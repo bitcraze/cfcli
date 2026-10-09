@@ -11,7 +11,7 @@ Commands:
   show     Show all current settings
   timeout  Manage the connection timeout
   address  Manage scan addresses
-  sync     Whether swarm commands sync shared swarms with the server
+  sync     Whether commands sync shared swarms and lighthouse configs with the server
   help     Print this message or the help of the given subcommand(s)
 ```
 
@@ -23,7 +23,7 @@ Display all current settings at once:
 cfcli settings show
 ```
 
-This prints the connection timeout, the configured scan addresses, the path to the preserved console history file (used by the global `-p`/`--preserve-console` flag — see [Console](console.md)), the selected swarm and the folder the swarms are stored in (see [Swarms](swarm.md)).
+This prints the connection timeout, the configured scan addresses, the path to the preserved console history file (used by the global `-p`/`--preserve-console` flag — see [Console](console.md)), the selected swarm, whether sync is on, and the folders swarms and lighthouse configurations are stored in (see [Swarms](swarm.md) and [Lighthouse](lighthouse.md#stored-and-shared-configurations)).
 
 ## Connection timeout
 
@@ -92,12 +92,13 @@ If all addresses are removed, the list is automatically reset to the default
 cfcli settings address clear
 ```
 
-## Syncing shared swarms
+## Syncing shared swarms and lighthouse configs
 
-Whether swarm commands check the server before using a [shared swarm](swarm.md#sharing-swarms)
+Whether commands check the server before using a [shared swarm](swarm.md#sharing-swarms)
+or [lighthouse configuration](lighthouse.md#stored-and-shared-configurations)
 and upload changes right away (on, the default), or use this computer's copies
-so they run faster (off). With sync off, `cfcli swarm config pull` and `push`
-sync the copies.
+so they run faster (off). With sync off, `cfcli swarm config pull`/`push` and
+`cfcli lh config pull`/`push` sync the copies.
 
 ```bash
 cfcli settings sync show

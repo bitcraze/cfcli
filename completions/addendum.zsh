@@ -27,6 +27,7 @@ _cfcli_config_set()    { _cfcli__dyn config-keys '=' }
 _cfcli_log_names()     { _cfcli__dyn log-names '' }
 _cfcli_flash_targets() { _cfcli__dyn flash-targets }
 _cfcli_swarm_configs() { _cfcli__dyn swarm-configs }
+_cfcli_lh_configs()    { _cfcli__dyn lh-configs }
 _cfcli_swarm_units()   { _cfcli__dyn swarm-units }
 _cfcli_swarm_unit_list() { _cfcli__dyn swarm-units '' }
 # `--bin` is a comma-separated list of `target=file`. In the current segment
