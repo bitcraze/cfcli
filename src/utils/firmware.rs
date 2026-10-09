@@ -60,6 +60,12 @@ struct Manifest {
   files: HashMap<String, FileInfo>,
 }
 
+/// Manifest `type` of the combined nRF51 bootloader and softdevice binary.
+pub const NRF51_SOFTDEVICE_TYPE: &str = "bootloader+softdevice";
+
+/// Version of a binary given with --bin, which has no manifest to name one.
+const BIN_VERSION: &str = "custom";
+
 #[derive(Debug, Clone)]
 pub enum FlashStartOverride {
     Address(u32),
@@ -74,6 +80,12 @@ pub struct Firmware {
     pub version: String,
     pub file_type: String,
     pub start_override: Option<FlashStartOverride>,
+    /// Softdevice this binary needs to already be on the device, from the
+    /// manifest's `requires` (e.g. `sd-s130` for the nRF51 firmware).
+    pub requires: Vec<String>,
+    /// Softdevice this binary brings with it, from the manifest's `provides`
+    /// (set on the `bootloader+softdevice` bundle).
+    pub provides: Vec<String>,
 }
 
 impl std::fmt::Debug for Firmware {
@@ -142,6 +154,8 @@ impl FirmwareArchive {
                   version: file_info.release.to_string(),
                   file_type: file_info.file_type.to_string(),
                   start_override: None,
+                  requires: file_info.requires.clone().unwrap_or_default(),
+                  provides: file_info.provides.clone().unwrap_or_default(),
               });
             }
           }
@@ -212,12 +226,53 @@ impl FirmwareUpgrade {
     //     self.bins.get(target)
     // }
 
+    /// Firmware for the MCUs, excluding the nRF51 bootloader+softdevice
+    /// bundle — that one is flashed separately by [`nrf51_softdevice`],
+    /// to a different place in flash and only when it's actually needed.
     pub fn get_firmware_for_bootloader(&self) -> Vec<Firmware> {
         self.bins
             .values()
             .filter(|fw| fw.target == "stm32" || fw.target == "nrf51")
+            .filter(|fw| fw.file_type != NRF51_SOFTDEVICE_TYPE)
             .cloned()
             .collect()
+    }
+
+    /// The nRF51 bootloader+softdevice bundle from the archive, if it has one.
+    pub fn nrf51_softdevice(&self) -> Option<Firmware> {
+        self.bins
+            .values()
+            .find(|fw| fw.target == "nrf51" && fw.file_type == NRF51_SOFTDEVICE_TYPE)
+            .cloned()
+    }
+
+    /// The nRF51 bootloader+softdevice bundle if it is a file given with
+    /// --bin, rather than a released one from a release or zip.
+    pub fn nrf51_softdevice_from_bin(&self) -> Option<Firmware> {
+        self.nrf51_softdevice().filter(|fw| fw.version == BIN_VERSION)
+    }
+
+    /// The softdevice the nRF51 firmware in this archive needs, from its
+    /// `requires`. Errors if the archive asks for two different ones, which
+    /// would mean we can't satisfy both.
+    pub fn required_nrf51_softdevice(&self) -> Result<Option<String>, anyhow::Error> {
+        let mut required: Option<String> = None;
+
+        for fw in self.bins.values().filter(|fw| fw.target == "nrf51") {
+            for requirement in &fw.requires {
+                match &required {
+                    None => required = Some(requirement.clone()),
+                    Some(existing) if existing != requirement => bail!(
+                        "Cannot flash nRF51, conflicting softdevice requirements: {} and {}",
+                        existing,
+                        requirement
+                    ),
+                    Some(_) => {}
+                }
+            }
+        }
+
+        Ok(required)
     }
 
     pub fn get_firmware_for_deckctrl(&self) -> Vec<Firmware> {
@@ -301,9 +356,13 @@ impl FirmwareUpgrade {
                     data,
                     file_name: path.clone(),
                     target,
-                    version: "custom".to_string(),
+                    version: BIN_VERSION.to_string(),
                     file_type,
                     start_override,
+                    // A raw --bin has no manifest, so nothing is declared. A
+                    // bundle supplied this way is taken at face value.
+                    requires: Vec::new(),
+                    provides: Vec::new(),
                 });
             }
         }
@@ -352,4 +411,52 @@ pub async fn print_releases() -> Result<(), anyhow::Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+impl FirmwareUpgrade {
+    /// An upgrade of these binaries, keyed by target and type as `new` does.
+    pub(crate) fn from_binaries(binaries: Vec<Firmware>) -> Self {
+        let bins = binaries
+            .into_iter()
+            .map(|fw| (format!("{}-{}", fw.target, fw.file_type), fw))
+            .collect();
+        FirmwareUpgrade { bins }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// A binary for `target`-`file_type`, as --bin gives one, or from a
+    /// release when `version` is set.
+    pub(crate) fn binary(target: &str, file_type: &str, version: Option<&str>) -> Firmware {
+        Firmware {
+            data: vec![0xFF; 4],
+            file_name: format!("{}-{}.bin", target, file_type),
+            target: target.to_string(),
+            version: version.unwrap_or(BIN_VERSION).to_string(),
+            file_type: file_type.to_string(),
+            start_override: None,
+            requires: Vec::new(),
+            provides: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn nrf51_bootloader_from_bin_is_found() {
+        let upgrade = FirmwareUpgrade::from_binaries(vec![binary("nrf51", NRF51_SOFTDEVICE_TYPE, None)]);
+        assert!(upgrade.nrf51_softdevice_from_bin().is_some());
+    }
+
+    #[test]
+    fn released_nrf51_bootloader_is_not_from_bin() {
+        let upgrade = FirmwareUpgrade::from_binaries(vec![
+            binary("nrf51", NRF51_SOFTDEVICE_TYPE, Some("2026.08")),
+            binary("nrf51", "fw", None),
+        ]);
+        assert!(upgrade.nrf51_softdevice().is_some());
+        assert!(upgrade.nrf51_softdevice_from_bin().is_none());
+    }
 }
