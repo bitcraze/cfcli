@@ -121,14 +121,15 @@ impl FirmwareArchive {
 
         for i in 0..archive.len() {
           let mut file = archive.by_index(i)?;
-          if file.is_file() && file.name() != "manifest.json" {
+          let name = file.name()?.into_owned();
+          if file.is_file() && name != "manifest.json" {
             let mut buffer = Vec::new();
             std::io::Read::read_to_end(&mut file, &mut buffer)?;
             
-            let file_info = manifest.files.get(file.name()).ok_or_else(|| {
+            let file_info = manifest.files.get(&name).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("File {} not found in manifest", file.name()),
+                    format!("File {} not found in manifest", name),
                 )
             })?;
 
@@ -137,7 +138,7 @@ impl FirmwareArchive {
 
               extracted_bins.insert(target_and_type, Firmware {
                   data: buffer.clone(),
-                  file_name: file.name().to_string(),
+                  file_name: name.clone(),
                   target: target.to_string(),
                   version: file_info.release.to_string(),
                   file_type: file_info.file_type.to_string(),
