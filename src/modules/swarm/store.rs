@@ -15,7 +15,9 @@
 //!
 //! Fields cfcli doesn't know are kept when a file is rewritten, so nothing
 //! Swarmkeeper adds later is lost. A swarm may name the lighthouse
-//! configuration it flies in (`lighthouse: lab/cage`).
+//! configuration it flies in (`lighthouse: lab/cage`), and the base name and
+//! base address new Crazyflies are numbered from (`base_name: CF-`,
+//! `base_address: ABAD1DEA`, see [`super::numbering`]).
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -34,6 +36,13 @@ pub struct Swarm {
     /// shared `<org>/<id>` (see `cfcli lh config`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lighthouse: Option<String>,
+    /// What `add --base-name` names new Crazyflies with, before their number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_name: Option<String>,
+    /// The leading hex digits `add --base-address` gives new Crazyflies,
+    /// before their number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_address: Option<String>,
     // Always written, even when empty: Swarmkeeper requires the field.
     #[serde(default)]
     pub units: Vec<Unit>,
@@ -71,6 +80,11 @@ fn link_key(uri: &str) -> Result<LinkKey> {
     })
 }
 
+/// Whether two URIs reach the same Crazyflie (see [`LinkKey`]).
+pub fn same_link(a: &str, b: &str) -> bool {
+    matches!((link_key(a), link_key(b)), (Ok(a), Ok(b)) if a == b)
+}
+
 /// Check a URI that is about to go into a swarm.
 pub fn check_uri(uri: &str) -> Result<()> {
     if RadioUri::parse(uri)?.is_none() && !uri.starts_with("usb://") {
@@ -100,7 +114,15 @@ pub fn check_id(id: &str) -> Result<()> {
 
 impl Swarm {
     pub fn new(name: String, description: Option<String>) -> Self {
-        Swarm { name, description, lighthouse: None, units: Vec::new(), extra: serde_yaml::Mapping::new() }
+        Swarm {
+            name,
+            description,
+            lighthouse: None,
+            base_name: None,
+            base_address: None,
+            units: Vec::new(),
+            extra: serde_yaml::Mapping::new(),
+        }
     }
 
     pub fn from_yaml(yaml: &str) -> Result<Self> {
@@ -160,14 +182,6 @@ impl Swarm {
     pub fn find_link(&self, uri: &str) -> Result<Option<usize>> {
         let key = link_key(uri)?;
         Ok(self.units.iter().position(|u| link_key(&u.uri).ok().as_ref() == Some(&key)))
-    }
-
-    /// The first `CF-NN` name nobody uses.
-    pub fn next_name(&self) -> String {
-        (1..)
-            .map(|n| format!("CF-{:02}", n))
-            .find(|name| !self.units.iter().any(|u| u.name.eq_ignore_ascii_case(name)))
-            .expect("there is always a free name")
     }
 
     /// The Crazyflies a command acts on, as indices in file order: all of
@@ -333,13 +347,6 @@ units:
         assert_eq!(swarm.find("usb://0"), Some(1));
         assert_eq!(swarm.find("CF-03"), None);
         assert_eq!(swarm.find("radio://0/81/2M/E7E7E7E701"), None);
-    }
-
-    #[test]
-    fn next_name_fills_the_first_gap() {
-        assert_eq!(swarm(&[]).next_name(), "CF-01");
-        let swarm = swarm(&[("radio:///80/2M/01", "CF-01"), ("radio:///80/2M/03", "cf-02"), ("radio:///80/2M/04", "CF-04")]);
-        assert_eq!(swarm.next_name(), "CF-03");
     }
 
     #[test]

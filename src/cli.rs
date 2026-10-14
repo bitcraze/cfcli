@@ -834,6 +834,28 @@ enum SwarmConfigCommands {
         #[clap(long, value_name = "SWARM")]
         swarm: Option<String>,
     },
+    /// Set swarm settings (stored in the swarm, not on the Crazyflies)
+    Set {
+        /// Comma separated list of key value pairs:
+        ///   base-name   : what new Crazyflies are named before their number (e.g. CF-)
+        ///   base-address: leading hex digits of the address new Crazyflies get (e.g. ABAD1DEA)
+        /// Used by 'swarm config add --base-name' and '--base-address'.
+        /// Example: base-name=CF-,base-address=ABAD1DEA
+        #[clap(value_name = "KEY=VALUE", required = true, verbatim_doc_comment)]
+        settings: Vec<String>,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
+    },
+    /// Clear swarm settings
+    Clear {
+        /// Settings to clear
+        #[clap(value_name = "KEY", required = true, value_parser = ["base-name", "base-address"])]
+        keys: Vec<String>,
+        /// Swarm to change instead of the selected one
+        #[clap(long, value_name = "SWARM")]
+        swarm: Option<String>,
+    },
     /// Add Crazyflies to the swarm
     Add(SwarmAddParameters),
     /// Remove Crazyflies from the swarm
@@ -950,6 +972,23 @@ struct SwarmAddParameters {
     /// config. Only one Crazyflie may be connected over USB.
     #[clap(long, conflicts_with = "uris")]
     from_usb: bool,
+    /// Name the Crazyflies <BASE><number>, with the first free number, zero
+    /// padded as wide as the number in the address (CF-01). Without a value,
+    /// the swarm's base name (see 'swarm config set').
+    #[clap(long, value_name = "BASE", conflicts_with = "name")]
+    base_name: Option<Option<String>>,
+    /// Reprogram the Crazyflies to the address <BASE><number>, with the
+    /// first free number in decimal digits (ABAD1DEA01). Without a value, the
+    /// swarm's base address (see 'swarm config set'). Needs a Crazyradio.
+    #[clap(long, value_name = "BASE", conflicts_with_all = ["set_address", "scan"])]
+    base_address: Option<Option<String>>,
+    /// Reprogram the Crazyflie to this address (only when adding a single
+    /// one). Needs a Crazyradio.
+    #[clap(long, value_name = "ADDRESS", conflicts_with = "scan")]
+    set_address: Option<String>,
+    /// Reprogram the Crazyflies to this channel (0-125). Needs a Crazyradio.
+    #[clap(long, value_name = "CHANNEL", conflicts_with = "scan", value_parser = clap::value_parser!(u8).range(0..=125))]
+    set_channel: Option<u8>,
 }
 
 #[derive(Debug, Args)]

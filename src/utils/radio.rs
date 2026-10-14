@@ -96,6 +96,16 @@ impl RadioUri {
         format!("radio://{}/{}/{}", radio, channel, after_channel)
     }
 
+    /// The same URI on another channel and address (10 hex digits), with
+    /// the radio as it was written.
+    pub fn with_link(&self, channel: u8, address: &str) -> String {
+        let (_, after_channel) = self.rest.split_once('/').expect("a parsed URI has a channel");
+        let (datarate, after_datarate) = after_channel.split_once('/').expect("a parsed URI has a datarate");
+        let options = after_datarate.find('?').map(|i| &after_datarate[i..]).unwrap_or_default();
+        let radio = self.radio.map(|r| r.to_string()).unwrap_or_default();
+        format!("radio://{}/{}/{}/{}{}", radio, channel, datarate, address, options)
+    }
+
     /// The same URI on the given Crazyradio.
     pub fn with_radio(&self, radio: usize) -> String {
         format!("radio://{}/{}", radio, self.rest)
@@ -338,6 +348,14 @@ mod tests {
         assert_eq!(uri.with_channel(76), "radio:///76/2M/E7E7E7E701?safelink=0");
         let uri = RadioUri::parse("radio://1/80/250K/E7").unwrap().unwrap();
         assert_eq!(uri.with_channel(4), "radio://1/4/250K/E7");
+    }
+
+    #[test]
+    fn with_link_keeps_the_radio_the_datarate_and_the_options() {
+        let uri = RadioUri::parse("radio:///80/2M/E7E7E7E7E7?safelink=0").unwrap().unwrap();
+        assert_eq!(uri.with_link(90, "ABAD1DEA01"), "radio:///90/2M/ABAD1DEA01?safelink=0");
+        let uri = RadioUri::parse("radio://1/80/250K/E7").unwrap().unwrap();
+        assert_eq!(uri.with_link(80, "ABAD1DEA02"), "radio://1/80/250K/ABAD1DEA02");
     }
 
     #[test]

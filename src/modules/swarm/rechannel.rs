@@ -13,7 +13,6 @@
 //! URI updated.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::crazyflie_link::LinkContext;
@@ -33,10 +32,6 @@ use crate::{Config, ConfigTocCache, SwarmRechannelParameters};
 const FIRST_CHANNEL: u8 = 80;
 /// Channels less than 2 apart interfere at 2 Mbit/s.
 const CHANNEL_STEP: u8 = 2;
-/// How long a rebooted Crazyflie gets to show up on its new channel.
-const BOOT_TIMEOUT: Duration = Duration::from_secs(8);
-/// Pause between looking for a rebooting Crazyflie.
-const BOOT_POLL: Duration = Duration::from_millis(300);
 
 /// The channels `--count` uses: 80, 78, 76, ...
 pub fn channels_for_count(count: u8) -> Vec<u8> {
@@ -235,7 +230,7 @@ pub(super) async fn rechannel(
     if !rebooted.is_empty() {
         let finder = runner_for(link_context, config, &toc_cache, &moved, &moves, &rebooted).await?;
         let looked = finder
-            .each("Looking on the new channels", async |t| Ok(wait_for(t, link_context).await))
+            .each("Looking on the new channels", async |t| Ok(t.wait_for(link_context).await))
             .await;
         for (k, result) in looked.into_iter().enumerate() {
             found[rebooted[k]] = result.unwrap_or(false);
@@ -354,18 +349,6 @@ async fn answering(runner: &Runner<'_>, label: &str, link_context: &LinkContext)
         .into_iter()
         .map(|answers| answers.unwrap_or(false))
         .collect()
-}
-
-/// Wait for a rebooted Crazyflie to answer.
-async fn wait_for(target: &Target, link_context: &LinkContext) -> bool {
-    let deadline = tokio::time::Instant::now() + BOOT_TIMEOUT;
-    while tokio::time::Instant::now() < deadline {
-        if target.answers(link_context).await {
-            return true;
-        }
-        tokio::time::sleep(BOOT_POLL).await;
-    }
-    false
 }
 
 /// Reject duplicate channels, warn about channels that interfere.
