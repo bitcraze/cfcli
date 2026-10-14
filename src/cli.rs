@@ -189,6 +189,33 @@ fn parse_memory_ref(s: &str) -> Result<MemoryRef, String> {
     Ok(MemoryRef::Type(parse_memory_type(type_str)?, instance))
 }
 
+/// Keep memory-reference parsing while advertising type names for completion.
+#[derive(Clone)]
+struct MemoryRefValueParser;
+
+impl clap::builder::TypedValueParser for MemoryRefValueParser {
+    type Value = MemoryRef;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        clap::builder::TypedValueParser::parse_ref(&parse_memory_ref, cmd, arg, value)
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(
+            MemoryTypeArg::value_variants()
+                .iter()
+                .filter_map(|value| value.to_possible_value()),
+        ))
+    }
+}
+
 // "Exit codes:" mirrors clap's default header style (bold + underline).
 // anstream strips the ANSI escapes when stdout isn't a terminal.
 const HELP_EPILOG: &str = "\x1b[1m\x1b[4mExit codes:\x1b[0m
@@ -1509,7 +1536,7 @@ struct HlGotoParameters {
 struct SelectMemoryParameters {
     /// Memory to operate on: numeric ID, type name (e.g. DeckCtrlDFU),
     /// or type with instance index (e.g. DeckCtrlDFU:0). Omit to select interactively.
-    #[clap(value_parser = parse_memory_ref)]
+    #[clap(value_parser = MemoryRefValueParser)]
     mem: Option<MemoryRef>,
 }
 
@@ -1517,7 +1544,7 @@ struct SelectMemoryParameters {
 struct ReadMemoryParameters {
     /// Memory to read from: numeric ID, type name (e.g. DeckCtrlDFU),
     /// or type with instance index (e.g. DeckCtrlDFU:0)
-    #[clap(value_parser = parse_memory_ref)]
+    #[clap(value_parser = MemoryRefValueParser)]
     mem: MemoryRef,
     /// Offset in bytes to start reading from
     #[clap(long, short = 's', default_value = "0", value_parser = maybe_hex::<usize>)]
@@ -1540,7 +1567,7 @@ struct ReadMemoryParameters {
 struct WriteMemoryParameters {
     /// Memory to write to: numeric ID, type name (e.g. DeckCtrlDFU),
     /// or type with instance index (e.g. DeckCtrlDFU:0)
-    #[clap(value_parser = parse_memory_ref)]
+    #[clap(value_parser = MemoryRefValueParser)]
     mem: MemoryRef,
     /// Offset in bytes to start writing at
     #[clap(long, short = 's', value_parser = maybe_hex::<usize>)]
@@ -1563,7 +1590,7 @@ struct WriteMemoryParameters {
 struct VerifyMemoryParameters {
     /// Memory to verify: numeric ID, type name (e.g. DeckCtrlDFU),
     /// or type with instance index (e.g. DeckCtrlDFU:0)
-    #[clap(value_parser = parse_memory_ref)]
+    #[clap(value_parser = MemoryRefValueParser)]
     mem: MemoryRef,
     /// Offset in bytes to start verifying at
     #[clap(long, short = 's', value_parser = maybe_hex::<usize>)]
@@ -1607,4 +1634,61 @@ struct VariablesAndPeriod {
     /// Print one sample as a table and stop
     #[clap(long)]
     once: bool,
+}
+
+#[cfg(test)]
+mod memory_completion_tests {
+    use super::*;
+
+    #[test]
+    fn memory_commands_keep_supported_reference_forms() {
+        for command in ["display", "read", "write", "verify", "erase"] {
+            for reference in ["5", "0x05", "DeckCtrlDFU", "deckctrldfu", "DeckCtrlDFU:0"] {
+                let mut args = vec!["cfcli", "mem", command, reference];
+                if matches!(command, "write" | "verify") {
+                    args.extend(["--offset", "0", "--data", "1"]);
+                }
+                let result = CliArgs::try_parse_from(args);
+                assert!(result.is_ok(), "{command} {reference}: {result:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn memory_commands_still_reject_invalid_references() {
+        for reference in ["256", "0x100", "DeckCtrlDFU:-1", "UnknownMemory"] {
+            assert!(
+                CliArgs::try_parse_from(["cfcli", "mem", "read", reference]).is_err(),
+                "{reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_type_completion_is_generated_for_each_command_and_shell() {
+        let command = CliArgs::command();
+        let memory = command.find_subcommand("mem").unwrap();
+        for name in ["display", "read", "write", "verify", "erase"] {
+            let subcommand = memory.find_subcommand(name).unwrap();
+            let argument = subcommand
+                .get_arguments()
+                .find(|argument| argument.get_id().as_str() == "mem")
+                .unwrap();
+            let values = argument.get_possible_values();
+            assert!(values.iter().any(|value| value.get_name() == "EEPROMConfig"), "{name}");
+            assert!(values.iter().any(|value| value.get_name() == "DeckCtrlDFU"), "{name}");
+            assert!(values.iter().all(|value| !value.get_name().contains(':')), "{name}");
+        }
+
+        for (shell, script) in [
+            ("Bash", include_str!("../completions/cfcli.bash")),
+            ("Zsh", include_str!("../completions/_cfcli")),
+            ("Fish", include_str!("../completions/cfcli.fish")),
+            ("PowerShell", include_str!("../completions/_cfcli.ps1")),
+        ] {
+            assert!(script.contains("EEPROMConfig"), "{shell}");
+            assert!(script.contains("DeckCtrlDFU"), "{shell}");
+            assert!(!script.contains("@CFCLI_MEMORY_TYPES@"), "{shell}");
+        }
+    }
 }

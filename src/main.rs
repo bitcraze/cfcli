@@ -486,8 +486,19 @@ fn selected_swarm_units() -> Vec<String> {
 
 /// Print a shell completion script for `shell` to stdout.
 fn emit_completion_script(shell: clap_complete::Shell) {
-    let mut cmd = CliArgs::command();
-    clap_complete::generate(shell, &mut cmd, "cfcli", &mut std::io::stdout());
+    // Include the same shell-specific additions as the installed scripts.
+    let script = match shell {
+        clap_complete::Shell::Bash => include_str!("../completions/cfcli.bash"),
+        clap_complete::Shell::Zsh => include_str!("../completions/_cfcli"),
+        clap_complete::Shell::Fish => include_str!("../completions/cfcli.fish"),
+        clap_complete::Shell::PowerShell => include_str!("../completions/_cfcli.ps1"),
+        _ => {
+            let mut cmd = CliArgs::command();
+            clap_complete::generate(shell, &mut cmd, "cfcli", &mut std::io::stdout());
+            return;
+        }
+    };
+    print!("{}", script);
 }
 
 /// Print dynamic completion candidates (one per line) for the `__complete`

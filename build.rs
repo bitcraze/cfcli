@@ -26,6 +26,16 @@ mod cli {
     pub fn command() -> clap::Command {
         CliArgs::command()
     }
+
+    pub fn memory_type_names() -> String {
+        MemoryTypeArg::value_variants()
+            .iter()
+            .filter_map(|value| value.to_possible_value())
+            .filter(|value| !value.is_hide_set())
+            .map(|value| value.get_name().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 fn append_file(target: &Path, addendum: &Path) {
@@ -43,6 +53,7 @@ fn main() {
     println!("cargo:rerun-if-changed=completions/addendum.bash");
     println!("cargo:rerun-if-changed=completions/addendum.zsh");
     println!("cargo:rerun-if-changed=completions/addendum.ps1");
+    println!("cargo:rerun-if-changed=completions/addendum.fish");
 
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = manifest.join("completions");
@@ -55,6 +66,14 @@ fn main() {
     for shell in [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell] {
         generate_to(shell, &mut cmd, bin, &out_dir).expect("generate completion");
     }
+
+    // Fish's generator does not handle positional values; add memory names.
+    let fish_path = out_dir.join("cfcli.fish");
+    let mut fish = fs::read_to_string(&fish_path).expect("read fish completion");
+    let extra = fs::read_to_string(out_dir.join("addendum.fish"))
+        .expect("read fish memory completion");
+    fish.push_str(&extra.replace("@CFCLI_MEMORY_TYPES@", &cli::memory_type_names()));
+    fs::write(&fish_path, fish).expect("write fish completion");
 
     // --- bash: wrap the generated function to add dynamic candidates.
     append_file(&out_dir.join("cfcli.bash"), &out_dir.join("addendum.bash"));
@@ -149,6 +168,7 @@ fn main() {
         fs::read_to_string(&ps_path),
         fs::read_to_string(out_dir.join("addendum.ps1")),
     ) {
+        let inject = inject.replace("@CFCLI_MEMORY_TYPES@", &cli::memory_type_names());
         let anchor = "    $completions.Where{";
         if let Some(pos) = s.find(anchor) {
             let mut out = String::with_capacity(s.len() + inject.len());
