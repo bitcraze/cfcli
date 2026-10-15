@@ -149,9 +149,9 @@ impl<'a> Runner<'a> {
     }
 
     /// Run `op` for the targets with these indices. Each Crazyradio handles
-    /// [`PER_RADIO`] of them at a time, all Crazyradios at once. The results
+    /// `per_radio` of them at a time, all Crazyradios at once. The results
     /// come in the order they finish.
-    async fn run<R>(&self, indices: Vec<usize>, op: impl AsyncFn(usize) -> R) -> Vec<(usize, R)> {
+    async fn run<R>(&self, indices: Vec<usize>, per_radio: usize, op: impl AsyncFn(usize) -> R) -> Vec<(usize, R)> {
         let mut by_radio: BTreeMap<Option<usize>, Vec<usize>> = BTreeMap::new();
         for i in indices {
             by_radio.entry(self.targets[i].radio).or_default().push(i);
@@ -160,7 +160,7 @@ impl<'a> Runner<'a> {
         let runs = by_radio.into_values().map(|members| async move {
             stream::iter(members)
                 .map(|i| async move { (i, op(i).await) })
-                .buffer_unordered(PER_RADIO)
+                .buffer_unordered(per_radio)
                 .collect::<Vec<_>>()
                 .await
         });
@@ -170,9 +170,21 @@ impl<'a> Runner<'a> {
     /// Run `op` on every target and return the results in target order.
     /// `label` is shown next to the progress bar.
     pub async fn each<T>(&self, label: &str, op: impl AsyncFn(&Target) -> Result<T>) -> Vec<Result<T>> {
+        self.each_at_most(label, PER_RADIO, op).await
+    }
+
+    /// [`Runner::each`] with at most `per_radio` targets at a time on each
+    /// Crazyradio, for an `op` that keeps a Crazyradio busier than a link
+    /// to the firmware does.
+    pub async fn each_at_most<T>(
+        &self,
+        label: &str,
+        per_radio: usize,
+        op: impl AsyncFn(&Target) -> Result<T>,
+    ) -> Vec<Result<T>> {
         let bar = progress(label, self.targets.len());
         let mut results = self
-            .run((0..self.targets.len()).collect(), async |i| {
+            .run((0..self.targets.len()).collect(), per_radio, async |i| {
                 let result = op(&self.targets[i]).await;
                 bar.inc(1);
                 result
@@ -228,7 +240,7 @@ impl<'a> Runner<'a> {
         while !pending.is_empty() {
             // Every pending Crazyflie whose TOCs are all in the cache.
             let probes = self
-                .run(pending, async |i| {
+                .run(pending, PER_RADIO, async |i| {
                     let probe = ProbeCache::new(self.toc_cache.clone());
                     let cf = match self.connect_with(&self.targets[i], probe.clone()).await {
                         Ok(cf) => cf,
@@ -263,7 +275,7 @@ impl<'a> Runner<'a> {
                     }
                 }
             }
-            for (i, result) in self.run(downloaders, async |i| connect_then(&self.targets[i]).await).await {
+            for (i, result) in self.run(downloaders, PER_RADIO, async |i| connect_then(&self.targets[i]).await).await {
                 results[i] = Some(result);
                 bar.inc(1);
             }
