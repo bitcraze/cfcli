@@ -32,7 +32,7 @@ use tokio::time::sleep;
 use super::bootload::{BOOTLOADER_PER_RADIO, BROADCAST_PROTOCOL};
 use super::runner::{progress, Runner};
 use crate::modules::bootloader::{self, DeckOutput};
-use crate::utils::display::{finish_progress, get_progressbar};
+use crate::utils::display::{finish_progress, get_count_progressbar, get_progressbar};
 use crate::utils::firmware::{Firmware, FirmwareUpgrade};
 use crate::ConfigTocCache;
 
@@ -378,11 +378,12 @@ pub async fn flash(runner: &Runner<'_>, jobs: &[Job<'_>], toc_cache: ConfigTocCa
         println!("Flashing decks: {}", names.join(", "));
     }
     let indices: Vec<usize> = decks.iter().map(|job| job.index).collect();
+    let bars = indicatif::MultiProgress::new();
     let flashed = runner
         .run(indices, DECKS_PER_RADIO, async |i| {
             let job = decks.iter().find(|job| job.index == i).expect("a job for every index");
             let target = &runner.targets[i];
-            let output = DeckOutput::Prefixed(&target.name);
+            let output = DeckOutput::Swarm { name: &target.name, bars: &bars };
             bootloader::flash_decks(link_context, &target.link_uri, toc_cache.clone(), job.upgrade, output).await
         })
         .await;
@@ -519,7 +520,9 @@ async fn broadcast_group<'j, 'u>(
         finish_progress(&bar, format!("{} firmware sent to {}", image.chip.name(), count(armed.len(), "Crazyflie")));
     }
 
-    let bar = progress("Verifying", armed.len());
+    let bar = get_count_progressbar(armed.len(), "verify", "CFs");
+    let total = armed.len();
+    let mut fixed_pages = 0;
     for mut session in armed {
         let verified = async {
             let mut fixed = 0;
@@ -532,6 +535,7 @@ async fn broadcast_group<'j, 'u>(
         .await;
         match verified {
             Ok(fixed) => {
+                fixed_pages += fixed;
                 let done = if fixed == 0 {
                     "flashed (broadcast)".to_string()
                 } else {
@@ -543,7 +547,12 @@ async fn broadcast_group<'j, 'u>(
         }
         bar.inc(1);
     }
-    bar.finish_and_clear();
+    let checked = format!("{} checked", count(total, "Crazyflie"));
+    if fixed_pages == 0 {
+        finish_progress(&bar, checked);
+    } else {
+        finish_progress(&bar, format!("{}, {} flashed again", checked, count(fixed_pages, "page")));
+    }
     rest
 }
 

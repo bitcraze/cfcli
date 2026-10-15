@@ -533,37 +533,35 @@ async fn open_deck_ctrl_dfu_raw(cf: &Crazyflie) -> Result<RawMemory> {
     }
 }
 
-/// Where deck flashing reports to: the terminal with progress bars, as for
-/// one Crazyflie, or one line per step with the Crazyflie's name in front and
-/// no bars, for several Crazyflies flashed at the same time.
+/// Where deck flashing reports to: the terminal, as for one Crazyflie, or
+/// shared progress bars for several Crazyflies flashed at the same time. Each
+/// of those gets its bars labelled with its name and its lines printed above
+/// the bars with its name in front.
 #[derive(Clone, Copy)]
 pub enum DeckOutput<'a> {
     Terminal,
-    Prefixed(&'a str),
+    Swarm { name: &'a str, bars: &'a indicatif::MultiProgress },
 }
 
 impl DeckOutput<'_> {
     fn line(&self, message: &str) {
         match self {
             DeckOutput::Terminal => println!("{}", message),
-            DeckOutput::Prefixed(name) => println!("{}: {}", name, message),
+            DeckOutput::Swarm { name, bars } => bars.suspend(|| println!("{}: {}", name, message)),
         }
     }
 
     fn progress_bar(&self, length: usize, label: &str) -> indicatif::ProgressBar {
         match self {
             DeckOutput::Terminal => get_progressbar(length, Some(label)),
-            DeckOutput::Prefixed(_) => indicatif::ProgressBar::hidden(),
+            DeckOutput::Swarm { name, bars } => bars.add(get_progressbar(length, Some(&format!("{} {}", name, label)))),
         }
     }
 
     fn finish(&self, bar: &indicatif::ProgressBar, message: String) {
         match self {
             DeckOutput::Terminal => finish_progress(bar, message),
-            DeckOutput::Prefixed(_) => {
-                bar.finish();
-                self.line(&message);
-            }
+            DeckOutput::Swarm { name, .. } => finish_progress(bar, format!("{}: {}", name, message)),
         }
     }
 }
