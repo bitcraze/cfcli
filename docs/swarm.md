@@ -461,9 +461,8 @@ Crazyflie downloads its own.
 
 ### Flashing
 
-`swarm bootload flash` flashes every Crazyflie, one after another, the same
-way `cfcli bootload flash` flashes one. It takes the same `--release`,
-`--zip`, `--bin` and `--targets`:
+`swarm bootload flash` flashes the swarm. It takes the same `--release`,
+`--zip`, `--bin` and `--targets` as `cfcli bootload flash`:
 
 ```bash
 cfcli swarm bootload flash --release 2026.08
@@ -474,10 +473,44 @@ The release, the files and the targets are checked before any Crazyflie is
 touched, and the firmware for every platform in the swarm is prepared before
 anything is flashed: a `--zip` built for another platform stops the command
 instead of failing halfway. A Crazyflie that fails while flashing doesn't
-stop the others, and a summary at the end shows how each one went. A unicast
-flash keeps the radio busy, so flashing several Crazyflies at once wouldn't
-be faster; plan for about 20 seconds per Crazyflie for the STM32 and nRF51
-firmware, more with decks.
+stop the others, and a summary at the end shows how each one went.
+
+The STM32 and nRF51 firmware are sent by broadcast where the bootloaders
+take it (see `swarm bootload info` below): all the Crazyflies of a platform
+receive each image at the same time, so 3 or 50 of them take about the same
+time, around 45 seconds for both images. Each Crazyflie is then checked page
+by page, and the pages that didn't make it are flashed again to that
+Crazyflie alone. The other Crazyflies are flashed one after another; plan for
+about 20 seconds each. Deck firmware is flashed last, one Crazyflie per
+Crazyradio at a time, with the Crazyflies spread over the Crazyradios as for
+the other swarm commands (see [How it runs](#how-it-runs)).
+
+```text
+$ cfcli swarm bootload flash --release 2026.08 --targets stm32-fw,nrf51-fw --cf CF-02,CF-03,CF-04
+Downloading release: firmware-cf21bl-2026.08.zip
+
+Broadcast to 3 Crazyflies (Crazyflie 2.1 Brushless): CF-02, CF-03, CF-04
+STM32 firmware sent to 3 Crazyflies
+nRF51 firmware sent to 3 Crazyflies
+
+CF    | Platform                | Result
+------+-------------------------+---------------------
+CF-02 | Crazyflie 2.1 Brushless | flashed (broadcast)
+CF-03 | Crazyflie 2.1 Brushless | flashed (broadcast)
+CF-04 | Crazyflie 2.1 Brushless | flashed (broadcast)
+Took 0:45
+```
+
+A Crazyflie that needed pages flashed again shows it, for instance
+`flashed (broadcast, 2 pages flashed again)`. A broadcast is only used for 2
+or more Crazyflies: for one it is slower than flashing it on its own.
+`--unicast` flashes every Crazyflie one after another, the same way
+`cfcli bootload flash` flashes one (the 3 above took 1:06 that way).
+
+In the bootloader every Crazyflie listens on channel 0, so the flashing
+itself runs on one Crazyradio, whatever the channels of the swarm. Only
+restarting the Crazyflies into their bootloaders is spread over the
+Crazyradios.
 
 #### Swarms with several platforms
 
@@ -511,7 +544,8 @@ CF-02 | 0x10             | 0x10             | no
 ```
 
 `Broadcast` tells whether both bootloaders are new enough to receive one
-image for many Crazyflies at the same time (protocol 0x11).
+image for many Crazyflies at the same time (protocol 0x11), which
+`swarm bootload flash` then uses.
 
 ## Spreading a swarm over channels
 

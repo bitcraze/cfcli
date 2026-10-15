@@ -787,6 +787,10 @@ struct SwarmFlashParameters {
     /// Valid values: cf21, cf21bl, bolt11, flapper, tag
     #[clap(long, verbatim_doc_comment)]
     platform: Option<String>,
+    /// Flash the Crazyflies one after another, also those whose bootloaders
+    /// take broadcast
+    #[clap(long)]
+    unicast: bool,
 }
 
 #[derive(Debug, Subcommand)]

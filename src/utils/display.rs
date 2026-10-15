@@ -81,6 +81,24 @@ pub fn get_progressbar(length: usize, label: Option<&str>) -> indicatif::Progres
       progress_bar
 }
 
+/// A progress bar like [`get_progressbar`], counting things instead of
+/// bytes: `{label} [elapsed] [bar] done/total {unit}`.
+pub fn get_count_progressbar(length: usize, label: &str, unit: &str) -> indicatif::ProgressBar {
+    let term_width = terminal_size::terminal_size().map(|(w, _)| w.0 as usize).unwrap_or(80);
+    let bar_width = term_width.saturating_sub(50 + label.len());
+    let progress_bar = indicatif::ProgressBar::new(length as u64);
+    progress_bar.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template(&format!("{} [{{elapsed_precise}}] [{{bar:{}.cyan/blue}}] {{pos}}/{{len}} {}", label, bar_width, unit))
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    if !std::io::stderr().is_terminal() {
+        progress_bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
+    progress_bar
+}
+
 pub fn hex_dump(data: Vec<u8>, offset: usize) {
 
     let term_width = if let Some((Width(w), Height(_h))) = terminal_size() {

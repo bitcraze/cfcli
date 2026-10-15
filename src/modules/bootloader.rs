@@ -311,16 +311,31 @@ async fn read_info(link: &Connection) -> Result<(BootloaderInfo, BootloaderInfo)
     Ok((stm32, nrf51))
 }
 
+/// Restart a Crazyflie that runs its firmware into its bootloader, and return
+/// the address the bootloader listens on (on channel 0), for cfloader.
+pub async fn enter_bootloader_for_cfloader(context: &LinkContext, uri: &str) -> Result<[u8; 5]> {
+    let separator = if uri.contains('?') { "&" } else { "?" };
+    let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
+    let new_address = reset_and_get_bootloader_address(&link).await;
+    link.close().await;
+    new_address?.try_into().map_err(|_| anyhow!("Address must be exactly 5 bytes"))
+}
+
+/// The URI of a bootloader at `address`, reached with Crazyradio `radio`.
+pub fn bootloader_uri(radio: usize, address: &[u8; 5]) -> String {
+    format!("radio://{}/0/2M/{}?safelink=0&ackfilter=0", radio, hex::encode_upper(address))
+}
+
+/// Make sure a Crazyflie that was sent from its bootloader into its
+/// firmware has left the bootloader at `bootloader_uri`, and restart it again
+/// if not. Returns whether the bootloader is gone.
+pub async fn left_bootloader(context: &LinkContext, bootloader_uri: &str) -> bool {
+    !bootloader_answers(context, bootloader_uri).await || restart_into_firmware(context, bootloader_uri).await
+}
+
 async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) -> Result<Bllink> {
     let address: Option<[u8; 5]> = match cold {
-        false => {
-              let separator = if uri.contains('?') { "&" } else { "?" };
-              let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
-              let new_address = reset_and_get_bootloader_address(&link).await?;
-              link.close().await;
-              let arr: [u8; 5] = new_address.try_into().map_err(|_| anyhow!("Address must be exactly 5 bytes"))?;
-              Some(arr)
-        }
+        false => Some(enter_bootloader_for_cfloader(context, uri).await?),
         true => {
             None
         }
@@ -329,6 +344,16 @@ async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) ->
     let bllink = Bllink::new(address.as_ref()).await?;
 
     Ok(bllink)
+}
+
+/// Where an STM32 or nRF51 image is flashed: the address or page given with
+/// --bin, or else the start of the firmware area.
+pub(crate) fn start_address(firmware: &Firmware, info: &cfloader::packets::InfoPacket) -> u32 {
+    match &firmware.start_override {
+        Some(FlashStartOverride::Address(addr)) => *addr,
+        Some(FlashStartOverride::Page(page)) => *page as u32 * info.page_size() as u32,
+        None => info.flash_start() as u32 * info.page_size() as u32,
+    }
 }
 
 async fn send_command(link: &Connection, cmd: BootloaderCommand, data: Option<&[u8]>) -> Result<()> {
@@ -508,11 +533,45 @@ async fn open_deck_ctrl_dfu_raw(cf: &Crazyflie) -> Result<RawMemory> {
     }
 }
 
+/// Where deck flashing reports to: the terminal, as for one Crazyflie, or
+/// shared progress bars for several Crazyflies flashed at the same time. Each
+/// of those gets its bars labelled with its name and its lines printed above
+/// the bars with its name in front.
+#[derive(Clone, Copy)]
+pub enum DeckOutput<'a> {
+    Terminal,
+    Swarm { name: &'a str, bars: &'a indicatif::MultiProgress },
+}
+
+impl DeckOutput<'_> {
+    fn line(&self, message: &str) {
+        match self {
+            DeckOutput::Terminal => println!("{}", message),
+            DeckOutput::Swarm { name, bars } => bars.suspend(|| println!("{}: {}", name, message)),
+        }
+    }
+
+    fn progress_bar(&self, length: usize, label: &str) -> indicatif::ProgressBar {
+        match self {
+            DeckOutput::Terminal => get_progressbar(length, Some(label)),
+            DeckOutput::Swarm { name, bars } => bars.add(get_progressbar(length, Some(&format!("{} {}", name, label)))),
+        }
+    }
+
+    fn finish(&self, bar: &indicatif::ProgressBar, message: String) {
+        match self {
+            DeckOutput::Terminal => finish_progress(bar, message),
+            DeckOutput::Swarm { name, .. } => finish_progress(bar, format!("{}: {}", name, message)),
+        }
+    }
+}
+
 async fn flash_deck_ctrl(
     link_context: &LinkContext,
     uri: &str,
     toc_cache: ConfigTocCache,
     firmwares: &[Firmware],
+    output: DeckOutput<'_>,
 ) -> Result<()> {
     if firmwares.is_empty() {
         return Ok(());
@@ -577,13 +636,13 @@ async fn flash_deck_ctrl(
         };
 
         let label = format!("deckctrl-{}", fw.file_type);
-        let progress_bar = get_progressbar(fw.data.len(), Some(&label));
+        let progress_bar = output.progress_bar(fw.data.len(), &label);
         let pb = progress_bar.clone();
         let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
             pb.set_position(bytes_written as u64);
         };
         raw.write_with_progress(address, &fw.data, progress_callback).await?;
-        finish_progress(&progress_bar, format!("DeckCtrl {} flashed successfully!", fw.file_type));
+        output.finish(&progress_bar, format!("DeckCtrl {} flashed successfully!", fw.file_type));
     }
 
     raw.write(DECK_CTRL_DFU_CMD_OFFSET, &[DECK_CTRL_DFU_CMD_ENTER_FIRMWARE]).await?;
@@ -617,15 +676,10 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
       let bllink = restart_and_get_bllink(link_context, uri, cold).await?;
       let mut cfloader = cfloader::CFLoader::new(bllink).await?;
 
-      upgrade_nrf51_softdevice(&mut cfloader, &firmware_upgrade).await?;
+      upgrade_nrf51_softdevice(&mut cfloader, &firmware_upgrade, "nrf51-sd").await?;
       for firmware in firmware_for_bootloader {
         if firmware.target == "stm32" && firmware.file_type == "fw" {
-          let stm32_info = cfloader.stm32_info();
-          let start_address = match &firmware.start_override {
-            Some(FlashStartOverride::Address(addr)) => *addr,
-            Some(FlashStartOverride::Page(page)) => *page as u32 * stm32_info.page_size() as u32,
-            None => stm32_info.flash_start() as u32 * stm32_info.page_size() as u32,
-          };
+          let start_address = start_address(&firmware, cfloader.stm32_info());
           let progress_bar = get_progressbar(firmware.data.len(), Some(firmware.target.as_str()));
           let pb = progress_bar.clone();
           let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
@@ -635,12 +689,7 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
           finish_progress(&progress_bar, "STM32F405 flashed successfully!");
         }
         if firmware.target == "nrf51" && firmware.file_type == "fw" {
-          let nrf51_info = cfloader.nrf51_info();
-          let start_address = match &firmware.start_override {
-            Some(FlashStartOverride::Address(addr)) => *addr,
-            Some(FlashStartOverride::Page(page)) => *page as u32 * nrf51_info.page_size() as u32,
-            None => nrf51_info.flash_start() as u32 * nrf51_info.page_size() as u32,
-          };
+          let start_address = start_address(&firmware, cfloader.nrf51_info());
           let progress_bar = get_progressbar(firmware.data.len(), Some(firmware.target.as_str()));
           let pb = progress_bar.clone();
           let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
@@ -660,8 +709,23 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
     }
   }
 
+  flash_decks(link_context, uri, toc_cache, &firmware_upgrade, DeckOutput::Terminal).await
+}
+
+/// Flash the DeckCtrl and deck firmware of an upgrade, to a Crazyflie that
+/// runs its firmware.
+pub async fn flash_decks(
+    link_context: &LinkContext,
+    uri: &str,
+    toc_cache: ConfigTocCache,
+    firmware_upgrade: &FirmwareUpgrade,
+    output: DeckOutput<'_>,
+) -> Result<()> {
+  let firmware_for_deckctrl = firmware_upgrade.get_firmware_for_deckctrl();
+  let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
+
   if !firmware_for_deckctrl.is_empty() {
-    flash_deck_ctrl(link_context, uri, toc_cache.clone(), &firmware_for_deckctrl).await?;
+    flash_deck_ctrl(link_context, uri, toc_cache.clone(), &firmware_for_deckctrl, output).await?;
   }
 
   if !firmware_for_decks.is_empty() {
@@ -719,7 +783,7 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
             !section.can_reset_to_bootloader() && !section.upgrade_required().await?;
 
           if up_to_date {
-            println!("Deck {} firmware up to date, skipping", section.name());
+            output.line(&format!("Deck {} firmware up to date, skipping", section.name()));
           } else {
             if !bootloader_active {
               section.reset_to_bootloader().await?;
@@ -740,13 +804,13 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
               }
             }
 
-            let progress_bar = get_progressbar(firmware.data.len(), Some(section.name()));
+            let progress_bar = output.progress_bar(firmware.data.len(), section.name());
             let pb = progress_bar.clone();
             let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
               pb.set_position(bytes_written as u64);
             };
             section.flash_firmware_with_progress(&firmware.data, progress_callback).await?;
-            finish_progress(&progress_bar, "Deck firmware flashed successfully!");
+            output.finish(&progress_bar, format!("Deck {} firmware flashed successfully!", section.name()));
             flashed = true;
           }
         }
@@ -761,7 +825,7 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
         reboot(&link_context, uri).await?;
 
         if flash_count_left > 0 {
-            println!("Restarting Crazyflie...");
+            output.line("Restarting Crazyflie...");
             sleep(Duration::from_millis(delay)).await;
         }
       }
@@ -937,9 +1001,12 @@ fn decide_softdevice_action(
 /// Returns a loader connected to whichever bootloader is running afterwards:
 /// the same one if nothing was flashed, or the newly flashed one, which has
 /// to be reconnected to.
-async fn upgrade_nrf51_softdevice(
+///
+/// `label` goes in front of the progress bar.
+pub(crate) async fn upgrade_nrf51_softdevice(
     cfloader: &mut cfloader::CFLoader,
     firmware_upgrade: &FirmwareUpgrade,
+    label: &str,
 ) -> Result<()> {
     let bundle = firmware_upgrade.nrf51_softdevice();
     let provided_sd = bundle.as_ref().and_then(|fw| fw.provides.first().cloned());
@@ -1013,7 +1080,7 @@ async fn upgrade_nrf51_softdevice(
 
     // The bundle lives at the very end of flash.
     let start_page = flash_pages - bundle_pages;
-    let progress_bar = get_progressbar(bundle.data.len(), Some("nrf51-sd"));
+    let progress_bar = get_progressbar(bundle.data.len(), Some(label));
     let pb = progress_bar.clone();
     let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
         pb.set_position(bytes_written as u64);
