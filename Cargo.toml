@@ -60,7 +60,7 @@ anyhow = "1.0"
 # TODO: Return to a crates.io version before merging this PR.
 crazyflie-lib = {
     git = "https://github.com/bitcraze/crazyflie-lib-rs",
-    rev = "20e817914c4a70f1835bf2ad450f821781145dc7",
+    rev = "2a5ca44524e496563bf482dcee5611f3b4b22e31",
     default-features = false,
 }
 rusb = "0.9"
@@ -98,7 +98,7 @@ open = "5"
 # TODO: Return to a crates.io version before merging this PR.
 crazyflie-lib = {
     git = "https://github.com/bitcraze/crazyflie-lib-rs",
-    rev = "20e817914c4a70f1835bf2ad450f821781145dc7",
+    rev = "2a5ca44524e496563bf482dcee5611f3b4b22e31",
     default-features = false,
     features = ["packet_capture"],
 }
