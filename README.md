@@ -14,7 +14,8 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * High-level commander (takeoff, land, go-to, trajectories)
 * Lighthouse positioning system configuration (read/write base station geometry and calibration, store and share configurations, write them to a whole swarm)
 * Loco positioning system configuration (read/write anchor positions, cfclient-compatible YAML)
-* Swarms: keep named lists of Crazyflies (Swarmkeeper format, shareable through a server), run commands on all of them, and flash a whole swarm at once by broadcast
+* Swarms: keep named lists of Crazyflies (Swarmkeeper format), run commands on all of them, and flash a whole swarm at once by broadcast
+* Share swarms and lighthouse configurations with others through a server, kept in sync automatically (sign in with `auth login`)
 * AI-agent and scripting friendly (CSV output, classified exit codes, non-interactive mode, command timeouts)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
