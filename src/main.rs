@@ -19,6 +19,7 @@ use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
 
 pub mod error;
+mod lifecycle;
 
 pub mod modules {
     pub mod auth;
@@ -263,8 +264,56 @@ fn is_streaming_command(cmd: &Commands) -> bool {
         Commands::Swarm { command: SwarmCommands::Log { command: SwarmLogCommands::Print(params), .. } } => {
             !params.once
         }
-        Commands::Console { .. } | Commands::Cr { command: CrCommands::Sniff(_) } => true,
+        Commands::Console { clear, list_sources, .. } => !clear && !list_sources,
+        Commands::Cr { command: CrCommands::Sniff(_) } => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sourced_console_is_a_streaming_command() {
+        let args = CliArgs::try_parse_from(["cfcli", "console", "--source", "deck:bcCam"]).unwrap();
+
+        assert!(is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn listing_console_sources_is_a_bounded_command() {
+        let args = CliArgs::try_parse_from(["cfcli", "console", "--list-sources"]).unwrap();
+
+        assert!(!is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn console_source_conflicts_with_source_listing() {
+        let result = CliArgs::try_parse_from([
+            "cfcli",
+            "console",
+            "--source",
+            "deck:bcCam",
+            "--list-sources",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn source_listing_conflicts_with_console_formatting() {
+        let result = CliArgs::try_parse_from(["cfcli", "console", "--list-sources", "--no-format"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sourced_console_conflicts_with_clearing_legacy_history() {
+        let result =
+            CliArgs::try_parse_from(["cfcli", "console", "--source", "deck:bcCam", "--clear"]);
+
+        assert!(result.is_err());
     }
 }
 
@@ -596,10 +645,17 @@ async fn run() -> Result<()> {
     };
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
+    let mut enabled_console_source = None;
     let preserve_console = args.preserve_console;
     let timeout_ms = args.timeout;
     let non_interactive = args.non_interactive || !std::io::stdin().is_terminal();
     let csv = args.csv;
+
+    let interruption = if matches!(&args.command, Commands::Console { source: Some(_), .. }) {
+        Some(lifecycle::interruption()?)
+    } else {
+        None
+    };
 
     let body = async {
     match &args.command {
@@ -711,7 +767,7 @@ async fn run() -> Result<()> {
             });
 
         }
-        Commands::Console { no_format, clear } => {
+        Commands::Console { no_format, clear, source, list_sources } => {
             if *clear {
                 let path = console_preserve_path();
                 if path.exists() {
@@ -723,21 +779,34 @@ async fn run() -> Result<()> {
                 return Ok(());
             }
 
-            let saved = read_and_clear_console_file()?;
-            if !saved.is_empty() {
-                if *no_format {
-                    print!("{}", saved);
-                } else {
-                    for line in saved.lines() {
-                        print!("{}", modules::console::format_console_line(line));
-                        println!();
+            if source.is_none() && !list_sources {
+                let saved = read_and_clear_console_file()?;
+                if !saved.is_empty() {
+                    if *no_format {
+                        print!("{}", saved);
+                    } else {
+                        for line in saved.lines() {
+                            print!("{}", modules::console::format_console_line(line));
+                            println!();
+                        }
                     }
                 }
             }
 
             let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-            modules::console::print(cf, *no_format).await?;
+            if *list_sources {
+                modules::console::list_sources(cf, csv).await?;
+            } else if let Some(source) = source {
+                modules::console::print_source(
+                    cf,
+                    source,
+                    *no_format,
+                    &mut enabled_console_source,
+                ).await?;
+            } else {
+                modules::console::print(cf, *no_format).await?;
+            }
             // Cleanup at end of run() handles disconnect.
         }
         Commands::Log { command } => {
@@ -1617,26 +1686,31 @@ async fn run() -> Result<()> {
     Ok(())
     };
 
-    let result: Result<()> = if let Some(ms) = timeout_ms {
-        let deadline = std::time::Duration::from_millis(ms);
-        match tokio::time::timeout(deadline, body).await {
-            Ok(r) => r,
-            Err(_) => {
-                if is_streaming_command(&args.command) {
-                    Ok(())
-                } else {
-                    Err(CliError::Timeout(format!("command did not complete within {} ms", ms)).into())
-                }
+    let result = lifecycle::run_command(
+        body,
+        timeout_ms,
+        is_streaming_command(&args.command),
+        async {
+            match interruption {
+                Some(signal) => signal.await,
+                None => std::future::pending().await,
             }
-        }
-    } else {
-        body.await
-    };
+        },
+    ).await;
 
-    // Save console and disconnect any remaining connection
-    if let Some(ref cf) = connected_cf {
-        save_and_disconnect(cf, preserve_console).await;
-    }
+    lifecycle::cleanup(
+        async {
+            if let (Some(cf), Some(selector)) = (connected_cf.as_ref(), enabled_console_source) {
+                cf.console.disable(selector).await?;
+            }
+            Ok(())
+        },
+        async {
+            if let Some(ref cf) = connected_cf {
+                save_and_disconnect(cf, preserve_console).await;
+            }
+        },
+    ).await;
 
     result
 }
