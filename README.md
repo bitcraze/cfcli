@@ -14,6 +14,7 @@ during development to quickly access various subsystems in the Crazyflie and sup
 * High-level commander (takeoff, land, go-to, trajectories)
 * Lighthouse positioning system configuration (read/write base station geometry and calibration, store and share configurations, write them to a whole swarm)
 * Loco positioning system configuration (read/write anchor positions, cfclient-compatible YAML)
+* Swarms: keep named lists of Crazyflies (Swarmkeeper format, shareable through a server), run commands on all of them, and flash a whole swarm at once by broadcast
 * AI-agent and scripting friendly (CSV output, classified exit codes, non-interactive mode, command timeouts)
 
 It's not intended to be used for creating more advanced scripts or functionality, it's better to
@@ -183,6 +184,13 @@ them selected by its name:
 cfcli swarm config import ~/Documents/Swarmkeeper/swarms/lab.yaml
 cfcli swarm scan
 cfcli select --from-swarm CF-03
+```
+
+The whole swarm can be flashed at once: Crazyflies whose bootloaders support it receive the firmware
+by broadcast, all at the same time.
+
+```text
+cfcli swarm bootload flash --release 2025.12
 ```
 
 For a more indepth view on how to use the different commands, have a look at the documentation:
