@@ -11,6 +11,7 @@
 //! `select --from-swarm` take.
 
 mod bootload;
+mod broadcast;
 mod commands;
 mod lighthouse;
 mod numbering;

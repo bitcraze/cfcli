@@ -182,9 +182,21 @@ impl<'a> Runner<'a> {
         per_radio: usize,
         op: impl AsyncFn(&Target) -> Result<T>,
     ) -> Vec<Result<T>> {
-        let bar = progress(label, self.targets.len());
+        let all: Vec<usize> = (0..self.targets.len()).collect();
+        self.each_of(&all, label, per_radio, op).await
+    }
+
+    /// [`Runner::each_at_most`] on the targets with these indices only.
+    pub async fn each_of<T>(
+        &self,
+        indices: &[usize],
+        label: &str,
+        per_radio: usize,
+        op: impl AsyncFn(&Target) -> Result<T>,
+    ) -> Vec<Result<T>> {
+        let bar = progress(label, indices.len());
         let mut results = self
-            .run((0..self.targets.len()).collect(), per_radio, async |i| {
+            .run(indices.to_vec(), per_radio, async |i| {
                 let result = op(&self.targets[i]).await;
                 bar.inc(1);
                 result
@@ -370,7 +382,7 @@ impl TocCache for ProbeCache {
 }
 
 /// A progress bar on stderr, hidden when stderr isn't a terminal.
-fn progress(label: &str, total: usize) -> indicatif::ProgressBar {
+pub(super) fn progress(label: &str, total: usize) -> indicatif::ProgressBar {
     let bar = indicatif::ProgressBar::new(total as u64);
     bar.set_style(
         indicatif::ProgressStyle::default_bar()

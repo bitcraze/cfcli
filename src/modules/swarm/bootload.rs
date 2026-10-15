@@ -1,14 +1,19 @@
 //! `cfcli swarm bootload`: the bootloaders of a swarm, and flashing it.
 //!
-//! `flash` flashes the Crazyflies one after another over unicast, the same
+//! `flash` sends the STM32 and nRF51 firmware by broadcast to the Crazyflies
+//! whose bootloaders take it, so that they all receive each image at the
+//! same time, and flashes the others one after another (see [`broadcast`]).
+//! With `--unicast` it flashes every Crazyflie one after another, the same
 //! way `cfcli bootload flash` flashes one. A unicast flash keeps the radio
 //! busy, so flashing several at once wouldn't be faster. `info` shows which
-//! Crazyflies have bootloaders that could also take broadcast flashing,
-//! where every Crazyflie receives each image at the same time.
+//! Crazyflies have bootloaders that take broadcast.
+
+use std::time::Instant;
 
 use anyhow::{bail, Result};
 use tabled::Tabled;
 
+use super::broadcast::{self, Job};
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::bootloader;
@@ -21,10 +26,10 @@ use crate::{ConfigTocCache, SwarmBootloadCommands, SwarmFlashParameters};
 /// link to a bootloader polls without letting up, and a Crazyflie that is
 /// restarting leaves the Crazyradio retrying, so more of them at once slow
 /// each other down until reading times out.
-const BOOTLOADER_PER_RADIO: usize = 2;
+pub(super) const BOOTLOADER_PER_RADIO: usize = 2;
 /// The first bootloader protocol version with broadcast flashing, on both
 /// the nRF51 and the STM32.
-const BROADCAST_PROTOCOL: u8 = 0x11;
+pub(super) const BROADCAST_PROTOCOL: u8 = 0x11;
 
 pub async fn bootload(
     runner: &Runner<'_>,
@@ -174,35 +179,49 @@ async fn flash(
         }
     }
 
-    // One Crazyflie after another.
-    let link_context = runner.link_context();
+    // What each Crazyflie gets.
+    let started = Instant::now();
     let total = runner.targets.len();
-    let mut results: Vec<Result<String>> = Vec::with_capacity(total);
-    let mut shown_platforms = Vec::with_capacity(total);
-    for (i, (target, platform)) in runner.targets.iter().zip(platforms).enumerate() {
+    let mut results: Vec<Option<Result<String>>> = std::iter::repeat_with(|| None).take(total).collect();
+    let mut shown_platforms = vec![String::new(); total];
+    let mut jobs = Vec::new();
+    for (i, platform) in platforms.into_iter().enumerate() {
         let platform = match platform {
             Ok(platform) => platform,
             Err(e) => {
-                shown_platforms.push(String::new());
-                results.push(Err(e));
+                results[i] = Some(Err(e));
                 continue;
             }
         };
-        shown_platforms.push(platform.clone());
-        let Some((_, upgrade)) = upgrades.iter().find(|(p, _)| *p == platform) else {
+        shown_platforms[i] = platform.clone();
+        match upgrades.iter().find(|(p, _)| *p == platform) {
             // Left out by --platform.
-            results.push(Ok("skipped".to_string()));
-            continue;
-        };
-        if upgrade.get_target_and_types().is_empty() {
-            results.push(Ok(format!("nothing to flash for {}", platform)));
-            continue;
+            None => results[i] = Some(Ok("skipped".to_string())),
+            Some((_, upgrade)) if upgrade.get_target_and_types().is_empty() => {
+                results[i] = Some(Ok(format!("nothing to flash for {}", platform)));
+            }
+            Some((_, upgrade)) => jobs.push(Job { index: i, platform, upgrade }),
         }
-        println!();
-        println!("{} ({} of {}, {}): {}", target.name, i + 1, total, platform, target.uri);
-        let flashed = bootloader::flash(link_context, &target.link_uri, toc_cache.clone(), upgrade.clone(), false).await;
-        results.push(flashed.map(|()| "flashed".to_string()));
     }
+
+    if params.unicast {
+        // One Crazyflie after another.
+        let link_context = runner.link_context();
+        for job in &jobs {
+            let target = &runner.targets[job.index];
+            println!();
+            println!("{} ({} of {}, {}): {}", target.name, job.index + 1, total, job.platform, target.uri);
+            let flashed =
+                bootloader::flash(link_context, &target.link_uri, toc_cache.clone(), job.upgrade.clone(), false).await;
+            results[job.index] = Some(flashed.map(|()| "flashed".to_string()));
+        }
+    } else {
+        for (i, result) in broadcast::flash(runner, &jobs, toc_cache).await {
+            results[i] = Some(result);
+        }
+    }
+    let results: Vec<Result<String>> =
+        results.into_iter().map(|result| result.expect("every Crazyflie has a result")).collect();
 
     let rows: Vec<FlashRow> = runner
         .targets
@@ -220,6 +239,8 @@ async fn flash(
         .collect();
     println!();
     print_table(&table(&rows));
+    let elapsed = started.elapsed().as_secs();
+    println!("Took {}:{:02}", elapsed / 60, elapsed % 60);
     let (_, outcome) = split(results);
     outcome.finish()
 }
