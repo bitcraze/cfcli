@@ -447,13 +447,14 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "cfloader"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04c1d79352992d3d69fe3984201d0d4c6fa5f67a72b18362e674e9370a595be5"
+checksum = "95ef0c6c2c917e7ef29f343aee4aad6ba8bccb1c967ac5972a6935697c1d5347"
 dependencies = [
  "anyhow",
  "clap",
- "crazyradio 0.3.1",
+ "crazyradio",
+ "crc32fast",
  "tokio",
 ]
 
@@ -726,7 +727,7 @@ checksum = "51c777bf6ea26a601a31642c2cab2500e099772e59b57b98a70fdfe1ea5e159e"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
- "crazyradio 0.7.0",
+ "crazyradio",
  "flume",
  "futures",
  "futures-channel",
@@ -738,17 +739,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
-]
-
-[[package]]
-name = "crazyradio"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3318b23210b857fa31910bd878014f5f6d1fe1e5b75d42520b4696f031817ed"
-dependencies = [
- "flume",
- "rusb",
- "thiserror",
 ]
 
 [[package]]
