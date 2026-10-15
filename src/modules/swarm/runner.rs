@@ -151,7 +151,7 @@ impl<'a> Runner<'a> {
     /// Run `op` for the targets with these indices. Each Crazyradio handles
     /// `per_radio` of them at a time, all Crazyradios at once. The results
     /// come in the order they finish.
-    async fn run<R>(&self, indices: Vec<usize>, per_radio: usize, op: impl AsyncFn(usize) -> R) -> Vec<(usize, R)> {
+    pub(super) async fn run<R>(&self, indices: Vec<usize>, per_radio: usize, op: impl AsyncFn(usize) -> R) -> Vec<(usize, R)> {
         let mut by_radio: BTreeMap<Option<usize>, Vec<usize>> = BTreeMap::new();
         for i in indices {
             by_radio.entry(self.targets[i].radio).or_default().push(i);

@@ -7,7 +7,8 @@
 //! at the same time. Each one is then checked by CRC, and the pages that
 //! didn't make it are flashed again over unicast. The other Crazyflies are
 //! flashed one at a time from their bootloader. Deck firmware is flashed last,
-//! one Crazyflie at a time, the same way `cfcli bootload flash` does it.
+//! the same way `cfcli bootload flash` does it, one Crazyflie per Crazyradio
+//! at a time, all Crazyradios at once.
 //!
 //! A broadcast waits for the slowest possible flash erase after every chunk,
 //! so for a single Crazyflie it takes longer than unicast. A platform with
@@ -30,7 +31,7 @@ use tokio::time::sleep;
 
 use super::bootload::{BOOTLOADER_PER_RADIO, BROADCAST_PROTOCOL};
 use super::runner::{progress, Runner};
-use crate::modules::bootloader;
+use crate::modules::bootloader::{self, DeckOutput};
 use crate::utils::display::{finish_progress, get_progressbar};
 use crate::utils::firmware::{Firmware, FirmwareUpgrade};
 use crate::ConfigTocCache;
@@ -40,6 +41,10 @@ const MIN_BROADCAST: usize = 2;
 
 /// Rounds of CRC check and re-flash of the pages that differ.
 const FIX_ATTEMPTS: usize = 3;
+
+/// Crazyflies whose decks are flashed at the same time on each Crazyradio.
+/// Writing deck firmware keeps a Crazyradio busy, like unicast flashing.
+const DECKS_PER_RADIO: usize = 1;
 
 /// How long the Crazyflies get to start their firmware before their decks
 /// are flashed. The nRF51 delays the start by 5 s when an AI-deck is attached.
@@ -367,18 +372,28 @@ pub async fn flash(runner: &Runner<'_>, jobs: &[Job<'_>], toc_cache: ConfigTocCa
         println!("Waiting for the Crazyflies to restart...");
         sleep(RESTART_DELAY).await;
     }
-    for job in decks {
-        let target = &runner.targets[job.index];
+    if !decks.is_empty() {
+        let names: Vec<&str> = decks.iter().map(|job| runner.targets[job.index].name.as_str()).collect();
         println!();
-        println!("{} (decks, {}): {}", target.name, job.platform, target.uri);
-        let flashed = bootloader::flash_decks(link_context, &target.link_uri, toc_cache.clone(), job.upgrade).await;
-        match outcomes.results.iter_mut().find(|(index, _)| *index == job.index) {
+        println!("Flashing decks: {}", names.join(", "));
+    }
+    let indices: Vec<usize> = decks.iter().map(|job| job.index).collect();
+    let flashed = runner
+        .run(indices, DECKS_PER_RADIO, async |i| {
+            let job = decks.iter().find(|job| job.index == i).expect("a job for every index");
+            let target = &runner.targets[i];
+            let output = DeckOutput::Prefixed(&target.name);
+            bootloader::flash_decks(link_context, &target.link_uri, toc_cache.clone(), job.upgrade, output).await
+        })
+        .await;
+    for (i, flashed) in flashed {
+        match outcomes.results.iter_mut().find(|(index, _)| *index == i) {
             Some((_, result)) => {
                 if let Err(e) = flashed {
                     *result = Err(e.context("the STM32 and nRF51 firmware were flashed, the decks failed"));
                 }
             }
-            None => outcomes.results.push((job.index, flashed.map(|()| "flashed".to_string()))),
+            None => outcomes.results.push((i, flashed.map(|()| "flashed".to_string()))),
         }
     }
 

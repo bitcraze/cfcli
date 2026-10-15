@@ -533,11 +533,47 @@ async fn open_deck_ctrl_dfu_raw(cf: &Crazyflie) -> Result<RawMemory> {
     }
 }
 
+/// Where deck flashing reports to: the terminal with progress bars, as for
+/// one Crazyflie, or one line per step with the Crazyflie's name in front and
+/// no bars, for several Crazyflies flashed at the same time.
+#[derive(Clone, Copy)]
+pub enum DeckOutput<'a> {
+    Terminal,
+    Prefixed(&'a str),
+}
+
+impl DeckOutput<'_> {
+    fn line(&self, message: &str) {
+        match self {
+            DeckOutput::Terminal => println!("{}", message),
+            DeckOutput::Prefixed(name) => println!("{}: {}", name, message),
+        }
+    }
+
+    fn progress_bar(&self, length: usize, label: &str) -> indicatif::ProgressBar {
+        match self {
+            DeckOutput::Terminal => get_progressbar(length, Some(label)),
+            DeckOutput::Prefixed(_) => indicatif::ProgressBar::hidden(),
+        }
+    }
+
+    fn finish(&self, bar: &indicatif::ProgressBar, message: String) {
+        match self {
+            DeckOutput::Terminal => finish_progress(bar, message),
+            DeckOutput::Prefixed(_) => {
+                bar.finish();
+                self.line(&message);
+            }
+        }
+    }
+}
+
 async fn flash_deck_ctrl(
     link_context: &LinkContext,
     uri: &str,
     toc_cache: ConfigTocCache,
     firmwares: &[Firmware],
+    output: DeckOutput<'_>,
 ) -> Result<()> {
     if firmwares.is_empty() {
         return Ok(());
@@ -602,13 +638,13 @@ async fn flash_deck_ctrl(
         };
 
         let label = format!("deckctrl-{}", fw.file_type);
-        let progress_bar = get_progressbar(fw.data.len(), Some(&label));
+        let progress_bar = output.progress_bar(fw.data.len(), &label);
         let pb = progress_bar.clone();
         let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
             pb.set_position(bytes_written as u64);
         };
         raw.write_with_progress(address, &fw.data, progress_callback).await?;
-        finish_progress(&progress_bar, format!("DeckCtrl {} flashed successfully!", fw.file_type));
+        output.finish(&progress_bar, format!("DeckCtrl {} flashed successfully!", fw.file_type));
     }
 
     raw.write(DECK_CTRL_DFU_CMD_OFFSET, &[DECK_CTRL_DFU_CMD_ENTER_FIRMWARE]).await?;
@@ -675,7 +711,7 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
     }
   }
 
-  flash_decks(link_context, uri, toc_cache, &firmware_upgrade).await
+  flash_decks(link_context, uri, toc_cache, &firmware_upgrade, DeckOutput::Terminal).await
 }
 
 /// Flash the DeckCtrl and deck firmware of an upgrade, to a Crazyflie that
@@ -685,12 +721,13 @@ pub async fn flash_decks(
     uri: &str,
     toc_cache: ConfigTocCache,
     firmware_upgrade: &FirmwareUpgrade,
+    output: DeckOutput<'_>,
 ) -> Result<()> {
   let firmware_for_deckctrl = firmware_upgrade.get_firmware_for_deckctrl();
   let firmware_for_decks = firmware_upgrade.get_firmware_for_decks();
 
   if !firmware_for_deckctrl.is_empty() {
-    flash_deck_ctrl(link_context, uri, toc_cache.clone(), &firmware_for_deckctrl).await?;
+    flash_deck_ctrl(link_context, uri, toc_cache.clone(), &firmware_for_deckctrl, output).await?;
   }
 
   if !firmware_for_decks.is_empty() {
@@ -748,7 +785,7 @@ pub async fn flash_decks(
             !section.can_reset_to_bootloader() && !section.upgrade_required().await?;
 
           if up_to_date {
-            println!("Deck {} firmware up to date, skipping", section.name());
+            output.line(&format!("Deck {} firmware up to date, skipping", section.name()));
           } else {
             if !bootloader_active {
               section.reset_to_bootloader().await?;
@@ -769,13 +806,13 @@ pub async fn flash_decks(
               }
             }
 
-            let progress_bar = get_progressbar(firmware.data.len(), Some(section.name()));
+            let progress_bar = output.progress_bar(firmware.data.len(), section.name());
             let pb = progress_bar.clone();
             let progress_callback = move |bytes_written: usize, _total_bytes: usize| {
               pb.set_position(bytes_written as u64);
             };
             section.flash_firmware_with_progress(&firmware.data, progress_callback).await?;
-            finish_progress(&progress_bar, "Deck firmware flashed successfully!");
+            output.finish(&progress_bar, format!("Deck {} firmware flashed successfully!", section.name()));
             flashed = true;
           }
         }
@@ -790,7 +827,7 @@ pub async fn flash_decks(
         reboot(&link_context, uri).await?;
 
         if flash_count_left > 0 {
-            println!("Restarting Crazyflie...");
+            output.line("Restarting Crazyflie...");
             sleep(Duration::from_millis(delay)).await;
         }
       }

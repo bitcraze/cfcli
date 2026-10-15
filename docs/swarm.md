@@ -481,7 +481,9 @@ receive each image at the same time, so 3 or 50 of them take about the same
 time, around 45 seconds for both images. Each Crazyflie is then checked page
 by page, and the pages that didn't make it are flashed again to that
 Crazyflie alone. The other Crazyflies are flashed one after another; plan for
-about 20 seconds each. Deck firmware is flashed last, one Crazyflie at a time.
+about 20 seconds each. Deck firmware is flashed last, one Crazyflie per
+Crazyradio at a time, with the Crazyflies spread over the Crazyradios as for
+the other swarm commands (see [How it runs](#how-it-runs)).
 
 ```text
 $ cfcli swarm bootload flash --release 2026.08 --targets stm32-fw,nrf51-fw --cf CF-02,CF-03,CF-04
