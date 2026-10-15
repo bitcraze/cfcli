@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use crazyflie_lib::Crazyflie;
 use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryDevice, MemoryType, OwMemory, RawMemory};
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, Duration};
 use crazyflie_lib::crazyflie_link::{Connection, LinkContext, Packet};
 use byteorder::{LittleEndian, ByteOrder};
 
@@ -14,6 +14,7 @@ use crate::modules::memory::{
 };
 use crate::utils::firmware::{Firmware, FirmwareUpgrade, FlashStartOverride};
 use crate::utils::display::*;
+use crate::utils::radio::RadioUri;
 
 const DECK_CTRL_DFU_FLASH_OFFSET: usize = 0x10000;
 const DECK_CTRL_DFU_CFG_DEFAULT_OFFSET: usize = 0x17800;
@@ -43,6 +44,15 @@ const TARGET_NRF51: u8 = 0xFE;
 const STM32_DFU_VID: u16 = 0x0483;
 const STM32_DFU_PID: u16 = 0xDF11;
 const STM32_DFU_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+// How long a bootloader gets to answer GET_INFO, and how often it is asked
+const GET_INFO_TIMEOUT: Duration = Duration::from_secs(2);
+const GET_INFO_RESEND: Duration = Duration::from_millis(100);
+
+// Attempts at restarting a Crazyflie from its bootloader into its firmware,
+// and the packets sent to see whether the bootloader is gone after each
+const RESTART_ATTEMPTS: usize = 3;
+const BOOTLOADER_PROBES: usize = 3;
 
 #[derive(Debug)]
 struct BootloaderInfo {
@@ -96,74 +106,99 @@ async fn scan_for_bootloader() -> Result<String> {
     }
 }
 
-async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo> {
-    for _ in 0..5 {
-        let packet: Packet = vec![0xFF, target, 0x10].into();
-
-        link.send_packet(packet).await?;
-        let packet = timeout(Duration::from_millis(100), link.recv_packet())
-            .await?
-            .unwrap();
-        let data = packet.get_data();
-
-        // [target, GET_INFO, page size (2), buffer pages (2), flash pages (2),
-        // start page (2), CPU ID (12), protocol version]. Bootloaders from
-        // before the protocol version stop after the CPU ID.
-        if packet.get_header() == 0xFF && data.len() >= 22 && data[0..2] == [target, 0x10] {
-            return Ok(BootloaderInfo {
-                id: data[0],
-                protocol_version: data.get(22).copied().unwrap_or(0),
-                page_size: LittleEndian::read_u16(&data[2..4]),
-                buffer_pages: LittleEndian::read_u16(&data[4..6]),
-                flash_pages: LittleEndian::read_u16(&data[6..8]),
-                start_page: LittleEndian::read_u16(&data[8..10]),
-                cpuid: data[10..22].to_vec(),
-            });
-        }
-    }
-
-    Err(anyhow!("Failed to get info"))
-}
-
-/// Ask the nRF51 firmware for the address its bootloader will use (RESET_INIT)
+/// Send `request` until a packet comes back that `answer` makes something
+/// of, and return that, or `None` when nothing did within `within`.
 ///
-/// The request or its answer can be lost, so RESET_INIT is sent again every
-/// 200 ms until it is answered, for up to 2 s. While waiting, the link keeps
-/// delivering other packets: with safelink off, every ACK without a payload
-/// arrives as a 0xFF packet, about one per millisecond. So the deadline and
-/// the resend are checked on every packet, never after a quiet period, which
-/// would never come.
-async fn request_bootloader_address(link: &Connection) -> Result<Vec<u8>> {
-    let reset_init: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+/// The request or its answer can be lost, so the request is sent again every
+/// `resend` until it is answered. While waiting, the link keeps delivering
+/// other packets: with safelink off, every ACK without a payload arrives as
+/// a 0xFF packet, about one per millisecond. So the deadline and the resend
+/// are checked on every packet, never after a quiet period, which would
+/// never come.
+async fn request<T>(
+    link: &Connection,
+    request: Packet,
+    resend: Duration,
+    within: Duration,
+    answer: impl Fn(&Packet) -> Option<T>,
+) -> Result<Option<T>> {
+    let deadline = tokio::time::Instant::now() + within;
     let mut last_sent: Option<tokio::time::Instant> = None;
 
     loop {
         let now = tokio::time::Instant::now();
         if now >= deadline {
-            bail!("Disconnected: the nRF51 did not answer RESET_INIT within 2 s");
+            return Ok(None);
         }
-        if last_sent.map_or(true, |sent| now - sent >= Duration::from_millis(200)) {
-            link.send_packet(reset_init.clone()).await?;
+        if last_sent.is_none_or(|sent| now - sent >= resend) {
+            link.send_packet(request.clone()).await?;
             last_sent = Some(now);
         }
 
-        let wait_until = (last_sent.unwrap() + Duration::from_millis(200)).min(deadline);
+        let wait_until = (last_sent.unwrap() + resend).min(deadline);
         let Ok(packet) = tokio::time::timeout_at(wait_until, link.recv_packet()).await else {
             continue;
         };
-        let packet = packet?;
-        let data = packet.get_data();
-        if data.len() > 5 && data[0..2] == [TARGET_NRF51, 0xFF] {
-            // 0xB1 followed by the four address bytes, sent little endian
-            let mut new_address = vec![0xb1];
-            new_address.extend(data[2..6].iter().rev());
-            return Ok(new_address);
+        if let Some(answer) = answer(&packet?) {
+            return Ok(Some(answer));
         }
     }
 }
 
-async fn reset_to_bootloader(link: &Connection) -> Result<String> {
+/// Ask a bootloader for its info (GET_INFO), again every 100 ms for up to
+/// 2 s.
+async fn get_info(link: &Connection, target: u8) -> Result<BootloaderInfo> {
+    let get_info: Packet = vec![0xFF, target, 0x10].into();
+    let info = request(link, get_info, GET_INFO_RESEND, GET_INFO_TIMEOUT, |packet| {
+        let data = packet.get_data();
+
+        // [target, GET_INFO, page size (2), buffer pages (2), flash pages (2),
+        // start page (2), CPU ID (12), protocol version]. Bootloaders from
+        // before the protocol version stop after the CPU ID.
+        (packet.get_header() == 0xFF && data.len() >= 22 && data[0..2] == [target, 0x10]).then(|| BootloaderInfo {
+            id: data[0],
+            protocol_version: data.get(22).copied().unwrap_or(0),
+            page_size: LittleEndian::read_u16(&data[2..4]),
+            buffer_pages: LittleEndian::read_u16(&data[4..6]),
+            flash_pages: LittleEndian::read_u16(&data[6..8]),
+            start_page: LittleEndian::read_u16(&data[8..10]),
+            cpuid: data[10..22].to_vec(),
+        })
+    })
+    .await?;
+
+    let name = if target == TARGET_STM32 { "STM32" } else { "nRF51" };
+    info.ok_or_else(|| {
+        anyhow!(CliError::Timeout(format!(
+            "the {} bootloader did not answer GET_INFO within {} s",
+            name,
+            GET_INFO_TIMEOUT.as_secs()
+        )))
+    })
+}
+
+/// Ask the nRF51 firmware for the address its bootloader will use
+/// (RESET_INIT), again every 200 ms for up to 2 s.
+async fn request_bootloader_address(link: &Connection) -> Result<Vec<u8>> {
+    let reset_init: Packet = vec![0xFF, TARGET_NRF51, 0xFF].into();
+    let address = request(link, reset_init, Duration::from_millis(200), Duration::from_secs(2), |packet| {
+        let data = packet.get_data();
+        (data.len() > 5 && data[0..2] == [TARGET_NRF51, 0xFF]).then(|| {
+            // 0xB1 followed by the four address bytes, sent little endian
+            let mut new_address = vec![0xb1];
+            new_address.extend(data[2..6].iter().rev());
+            new_address
+        })
+    })
+    .await?;
+
+    address.ok_or_else(|| anyhow!("Disconnected: the nRF51 did not answer RESET_INIT within 2 s"))
+}
+
+/// Restart the nRF51 into its bootloader and return the URI to reach the
+/// bootloader at. A Crazyflie restarted this way only answers there, on
+/// channel 0, until it is restarted again.
+async fn reset_to_bootloader(link: &Connection, radio: usize) -> Result<String> {
     let new_address = request_bootloader_address(link).await?;
 
     for _ in 0..10 {
@@ -173,7 +208,8 @@ async fn reset_to_bootloader(link: &Connection) -> Result<String> {
     sleep(Duration::from_millis(500)).await;
 
     Ok(format!(
-        "radio://0/0/2M/{}?safelink=0&ackfilter=0",
+        "radio://{}/0/2M/{}?safelink=0&ackfilter=0",
+        radio,
         hex::encode(new_address).to_uppercase()
     ))
 }
@@ -195,20 +231,84 @@ async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>> 
     Ok(new_address)
 }
 
-async fn start_bootloader(context: &LinkContext, cold: bool, uri: &str) -> Result<Connection> {
-    let uri: String = if cold {
-        scan_for_bootloader().await
-    } else {
-        let separator = if uri.contains('?') { "&" } else { "?" };
-        let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
-        let uri = reset_to_bootloader(&link).await;
-        link.close().await;
-        sleep(Duration::from_millis(500)).await;
-        uri
-    }?;
+/// Restart a Crazyflie that runs its firmware into its bootloader, and
+/// return the URI to reach the bootloader at. The bootloader is reached
+/// with the same Crazyradio as the firmware, the first one for usb://.
+async fn enter_bootloader(context: &LinkContext, uri: &str) -> Result<String> {
+    let radio = RadioUri::parse(uri).ok().flatten().and_then(|r| r.radio).unwrap_or(0);
+    let separator = if uri.contains('?') { "&" } else { "?" };
+    let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
+    let bootloader_uri = reset_to_bootloader(&link, radio).await;
+    link.close().await;
+    sleep(Duration::from_millis(500)).await;
+    bootloader_uri
+}
 
-    let link = context.open_link(&uri).await?;
-    Ok(link)
+/// Whether a bootloader answers at `bootloader_uri`. A scan that fails
+/// counts as answering: it doesn't show that the bootloader is gone.
+async fn bootloader_answers(context: &LinkContext, bootloader_uri: &str) -> bool {
+    for _ in 0..BOOTLOADER_PROBES {
+        match context.scan_selected(vec![bootloader_uri]).await {
+            Ok(found) if found.is_empty() => continue,
+            _ => return true,
+        }
+    }
+    false
+}
+
+/// Restart a Crazyflie from its bootloader back into its firmware. Returns
+/// whether the bootloader is gone.
+async fn restart_into_firmware(context: &LinkContext, bootloader_uri: &str) -> bool {
+    for _ in 0..RESTART_ATTEMPTS {
+        // Whether this worked shows from the bootloader being gone.
+        if let Ok(link) = context.open_link(bootloader_uri).await {
+            let _ = send_command(&link, BootloaderCommand::ResetInit, None).await;
+            let _ = send_command(&link, BootloaderCommand::Reset, Some(&[0x01])).await; // Reset to firmware
+            sleep(Duration::from_millis(500)).await;
+            link.close().await;
+        }
+        if !bootloader_answers(context, bootloader_uri).await {
+            return true;
+        }
+    }
+    false
+}
+
+/// The bootloader info of a Crazyflie that runs its firmware: (STM32,
+/// nRF51). The Crazyflie is restarted into its bootloader to read it, and
+/// back into its firmware afterwards, also when reading fails: one left in
+/// its bootloader no longer answers at its URI, and the bootloader stays
+/// until the power button restarts it.
+async fn read_info_warm(context: &LinkContext, uri: &str) -> Result<(BootloaderInfo, BootloaderInfo)> {
+    let bootloader_uri = enter_bootloader(context, uri).await?;
+    let info = match context.open_link(&bootloader_uri).await {
+        Ok(link) => {
+            let info = read_info(&link).await;
+            link.close().await;
+            info
+        }
+        Err(e) => Err(e.into()),
+    };
+    if restart_into_firmware(context, &bootloader_uri).await {
+        return info;
+    }
+
+    let address = bootloader_uri.split('?').next().unwrap_or_default();
+    let stuck = format!(
+        "the Crazyflie is still in its bootloader, at {}. Restart it with its power button",
+        address
+    );
+    bail!(CliError::Connection(match info {
+        Ok(_) => stuck,
+        Err(read) => format!("{:#}, and {}", read, stuck),
+    }))
+}
+
+/// The bootloader info of both MCUs: (STM32, nRF51).
+async fn read_info(link: &Connection) -> Result<(BootloaderInfo, BootloaderInfo)> {
+    let stm32 = get_info(link, TARGET_STM32).await?;
+    let nrf51 = get_info(link, TARGET_NRF51).await?;
+    Ok((stm32, nrf51))
 }
 
 async fn restart_and_get_bllink(context: &LinkContext, uri: &str, cold: bool) -> Result<Bllink> {
@@ -259,22 +359,25 @@ fn print_target_info(name: &str, info: &BootloaderInfo) {
   println!("  CPU ID: {}", hex::encode_upper(&info.cpuid));
 }
 
+/// Print the bootloader info of a Crazyflie. With `cold` the Crazyflie was
+/// started into its bootloader with its power button and stays there,
+/// otherwise it is restarted into its bootloader and back into its firmware.
 pub async fn print_bootloader_info(link_context: &LinkContext, cold: bool, uri: &str) -> Result<()> {
 
-  let link = start_bootloader(link_context, cold, uri).await?;
+  let (stm32_info, nrf51_info) = if cold {
+    let link = link_context.open_link(&scan_for_bootloader().await?).await?;
+    let info = read_info(&link).await;
+    link.close().await;
+    info?
+  } else {
+    read_info_warm(link_context, uri).await?
+  };
 
   println!("Bootloader Info:");
   println!();
-
-  let stm32_info = get_info(&link, TARGET_STM32).await?;
   print_target_info("STM32", &stm32_info);
-
   println!();
-
-  let nrf51_info = get_info(&link, TARGET_NRF51).await?;
   print_target_info("nRF51", &nrf51_info);
-
-  link.close().await;
 
   Ok(())
 }
@@ -283,13 +386,7 @@ pub async fn print_bootloader_info(link_context: &LinkContext, cold: bool, uri: 
 /// (STM32, nRF51). The Crazyflie is restarted into its bootloader to read
 /// them, and back into its firmware afterwards.
 pub async fn bootloader_versions(link_context: &LinkContext, uri: &str) -> Result<(u8, u8)> {
-  let link = start_bootloader(link_context, false, uri).await?;
-  let stm32 = get_info(&link, TARGET_STM32).await?;
-  let nrf51 = get_info(&link, TARGET_NRF51).await?;
-  send_command(&link, BootloaderCommand::ResetInit, None).await?;
-  send_command(&link, BootloaderCommand::Reset, Some(&[0x01])).await?; // Reset to firmware
-  sleep(Duration::from_millis(500)).await;
-  link.close().await;
+  let (stm32, nrf51) = read_info_warm(link_context, uri).await?;
   Ok((stm32.protocol_version, nrf51.protocol_version))
 }
 

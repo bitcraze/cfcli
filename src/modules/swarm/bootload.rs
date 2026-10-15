@@ -6,9 +6,7 @@
 //! Crazyflies have bootloaders that could also take broadcast flashing,
 //! where every Crazyflie receives each image at the same time.
 
-use std::time::Duration;
-
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
@@ -19,8 +17,11 @@ use crate::utils::firmware::FirmwareUpgrade;
 use crate::utils::flash_source;
 use crate::{ConfigTocCache, SwarmBootloadCommands, SwarmFlashParameters};
 
-/// How long reading the bootloader versions of one Crazyflie may take.
-const INFO_TIMEOUT: Duration = Duration::from_secs(15);
+/// Crazyflies in their bootloaders at the same time on each Crazyradio. A
+/// link to a bootloader polls without letting up, and a Crazyflie that is
+/// restarting leaves the Crazyradio retrying, so more of them at once slow
+/// each other down until reading times out.
+const BOOTLOADER_PER_RADIO: usize = 2;
 /// The first bootloader protocol version with broadcast flashing, on both
 /// the nRF51 and the STM32.
 const BROADCAST_PROTOCOL: u8 = 0x11;
@@ -51,20 +52,14 @@ struct InfoRow {
 
 async fn info(runner: &Runner<'_>, csv: bool) -> Result<()> {
     let link_context = runner.link_context();
+    // Not cut short by a timeout: that could leave a Crazyflie in its
+    // bootloader, and every step of reading has its own.
     let results = runner
-        .each("Reading", async |t| {
+        .each_at_most("Reading", BOOTLOADER_PER_RADIO, async |t| {
             // Restarting a Crazyflie that isn't there fails with an unhelpful
             // link error.
             t.check_answers(link_context).await?;
-            tokio::time::timeout(INFO_TIMEOUT, bootloader::bootloader_versions(link_context, &t.link_uri))
-                .await
-                .map_err(|_| {
-                    anyhow!(CliError::Timeout(format!(
-                        "{} didn't finish within {} s",
-                        t.link_uri,
-                        INFO_TIMEOUT.as_secs()
-                    )))
-                })?
+            bootloader::bootloader_versions(link_context, &t.link_uri).await
         })
         .await;
     let (done, outcome) = split(results);
