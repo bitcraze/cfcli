@@ -13,7 +13,9 @@
 mod bootload;
 mod commands;
 mod lighthouse;
+mod numbering;
 mod rechannel;
+mod reprogram;
 mod runner;
 pub mod store;
 
@@ -25,13 +27,15 @@ use tabled::Tabled;
 
 use crate::error::CliError;
 use crate::utils::display::{csv_row, print_table, table};
-use crate::utils::radio;
+use crate::utils::radio::{self, RadioUri};
 use crate::{
     Config, ConfigTocCache, SwarmAddParameters, SwarmCommands, SwarmConfigCommands, SwarmCreateParameters,
     SwarmExportParameters, SwarmImportParameters, SwarmTargetArgs,
 };
 use runner::Runner;
 use crate::modules::documents::{Documents, Entry, SharedId};
+use numbering::Numbering;
+use reprogram::Planned;
 use store::{Swarm, Unit};
 
 /// Local and shared swarms behind one kind of ID: `<swarm>` is a file in
@@ -57,9 +61,15 @@ pub(crate) async fn run(
             SwarmConfigCommands::Name { name, swarm } => {
                 swarm_name(&swarms, &swarm_id(config, swarm.as_deref())?, name.as_deref()).await
             }
+            SwarmConfigCommands::Set { settings, swarm } => {
+                set(&swarms, &swarm_id(config, swarm.as_deref())?, settings).await
+            }
+            SwarmConfigCommands::Clear { keys, swarm } => {
+                clear(&swarms, &swarm_id(config, swarm.as_deref())?, keys).await
+            }
             SwarmConfigCommands::Add(params) => {
                 let id = swarm_id(config, params.swarm.as_deref())?;
-                add(&swarms, config, &id, params, link_context, non_interactive).await
+                add(&swarms, config, &id, params, link_context, toc_cache, non_interactive).await
             }
             SwarmConfigCommands::Remove { names, swarm } => {
                 remove(&swarms, &swarm_id(config, swarm.as_deref())?, names, non_interactive).await
@@ -324,6 +334,85 @@ async fn swarm_name(swarms: &Swarms, id: &str, name: Option<&str>) -> Result<()>
     Ok(())
 }
 
+/// The keys of `swarm config set` and `clear`.
+const BASE_NAME: &str = "base-name";
+const BASE_ADDRESS: &str = "base-address";
+
+/// The swarm's base name and address as `swarm config show` shows them.
+fn base_lines(swarm: &Swarm) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(base) = &swarm.base_name {
+        let width = numbering::name_width(None, swarm);
+        lines.push(format!("Base name: {} ({})", base, numbering::name_examples(base, width)));
+    }
+    if let Some(base) = &swarm.base_address {
+        lines.push(format!("Base address: {} ({})", base, numbering::address_range(base)));
+    }
+    lines
+}
+
+/// `swarm config set key=value,...`: change the swarm's settings.
+async fn set(swarms: &Swarms, id: &str, settings: &[String]) -> Result<()> {
+    // Check every setting before changing anything.
+    let mut base_name = None;
+    let mut base_address = None;
+    for pair in settings.iter().flat_map(|arg| arg.split(',')) {
+        let (key, value) = pair.split_once('=').ok_or_else(|| {
+            CliError::InvalidValue(format!("'{}' isn't key=value, e.g. {}=CF-", pair.trim(), BASE_NAME))
+        })?;
+        let key = key.trim().replace('_', "-");
+        if value.trim().is_empty() {
+            bail!(CliError::InvalidValue(format!(
+                "{} has no value; remove it with 'cfcli swarm config clear {}'",
+                key, key
+            )));
+        }
+        match key.as_str() {
+            BASE_NAME => base_name = Some(numbering::check_base_name(value)?),
+            BASE_ADDRESS => base_address = Some(numbering::check_base_address(value)?),
+            _ => bail!(CliError::InvalidValue(format!(
+                "unknown swarm setting '{}' (the settings are {} and {})",
+                key, BASE_NAME, BASE_ADDRESS
+            ))),
+        }
+    }
+    let swarm = swarms
+        .change(id, |swarm| {
+            if let Some(base) = &base_name {
+                swarm.base_name = Some(base.clone());
+            }
+            if let Some(base) = &base_address {
+                swarm.base_address = Some(base.clone());
+            }
+            Ok(swarm.clone())
+        })
+        .await?;
+    println!("Swarm '{}':", id);
+    for line in base_lines(&swarm) {
+        println!("{}", line);
+    }
+    Ok(())
+}
+
+/// `swarm config clear key ...`: remove some of the swarm's settings.
+async fn clear(swarms: &Swarms, id: &str, keys: &[String]) -> Result<()> {
+    swarms
+        .change(id, |swarm| {
+            for key in keys {
+                match key.as_str() {
+                    BASE_NAME => swarm.base_name = None,
+                    BASE_ADDRESS => swarm.base_address = None,
+                    _ => unreachable!("clap only lets the known keys through"),
+                }
+            }
+            Ok(())
+        })
+        .await?;
+    let cleared: Vec<String> = keys.iter().map(|key| key.replace('-', " ")).collect();
+    println!("Swarm '{}' has no {} now", id, cleared.join(" or "));
+    Ok(())
+}
+
 async fn delete(swarms: &Swarms, config: &mut Config, id: Option<&str>, non_interactive: bool) -> Result<()> {
     let id = match id {
         Some(id) => id.to_string(),
@@ -394,6 +483,9 @@ async fn show(swarms: &Swarms, id: &str, csv: bool) -> Result<()> {
     if let Some(lighthouse) = &swarm.lighthouse {
         println!("Flies in lighthouse config '{}'", lighthouse);
     }
+    for line in base_lines(&swarm) {
+        println!("{}", line);
+    }
     println!();
     if swarm.units.is_empty() {
         println!("No Crazyflies yet, add some with 'cfcli swarm config add'.");
@@ -426,6 +518,7 @@ async fn add(
     id: &str,
     params: &SwarmAddParameters,
     link_context: &LinkContext,
+    toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     let candidates: Vec<String> = match &params.scan {
@@ -452,87 +545,225 @@ async fn add(
         }
         None => params.uris.clone(),
     };
-    add_to(swarms, id, params, candidates, non_interactive).await
+    add_to(swarms, config, id, params, candidates, None, link_context, toc_cache, non_interactive).await
 }
 
-/// Add the Crazyflies on these URIs to swarm `id`. `add --from-usb` comes in
-/// here from main.rs with the radio URI it read over USB.
-pub(crate) async fn add_uris(
+/// Add the Crazyflie found on USB (`usb`), whose config has the radio URI
+/// `radio_uri`, to swarm `id`. `add --from-usb` comes in here from main.rs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn add_from_usb(
+    config: &Config,
+    id: &str,
+    params: &SwarmAddParameters,
+    usb: &str,
+    radio_uri: String,
+    link_context: &LinkContext,
+    toc_cache: ConfigTocCache,
+    non_interactive: bool,
+) -> Result<()> {
+    let swarms = Swarms::open(config)?;
+    add_to(&swarms, config, id, params, vec![radio_uri], Some(usb), link_context, toc_cache, non_interactive).await
+}
+
+/// The base a `--base-name`/`--base-address` flag asks for: the one given,
+/// else the swarm's. `None` when the flag isn't given.
+fn base_from(
+    flag: &Option<Option<String>>,
+    stored: Option<&str>,
+    id: &str,
+    key: &str,
+    example: &str,
+    check: fn(&str) -> Result<String>,
+) -> Result<Option<String>> {
+    match flag {
+        None => Ok(None),
+        Some(Some(given)) => Ok(Some(check(given)?)),
+        Some(None) => match stored {
+            Some(stored) => Ok(Some(stored.to_string())),
+            None => bail!(CliError::NotFound(format!(
+                "{} of swarm '{}'; set one with 'cfcli swarm config set {}={}', or give one with --{}={}",
+                key.replace('-', " "),
+                id,
+                key,
+                example,
+                key,
+                example
+            ))),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn add_to(
+    swarms: &Swarms,
     config: &Config,
     id: &str,
     params: &SwarmAddParameters,
     candidates: Vec<String>,
-    non_interactive: bool,
-) -> Result<()> {
-    add_to(&Swarms::open(config)?, id, params, candidates, non_interactive).await
-}
-
-async fn add_to(
-    swarms: &Swarms,
-    id: &str,
-    params: &SwarmAddParameters,
-    candidates: Vec<String>,
+    usb: Option<&str>,
+    link_context: &LinkContext,
+    toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     if params.name.is_some() && candidates.len() > 1 {
         bail!(CliError::InvalidValue("--name can only be used when adding a single Crazyflie".to_string()));
     }
+    if params.set_address.is_some() && candidates.len() > 1 {
+        bail!(CliError::InvalidValue("--set-address can only be used when adding a single Crazyflie".to_string()));
+    }
+    let set_address = match &params.set_address {
+        Some(address) => Some(crate::decode_address(address)?.iter().map(|b| format!("{:02X}", b)).collect::<String>()),
+        None => None,
+    };
+    let reprogramming = set_address.is_some() || params.base_address.is_some() || params.set_channel.is_some();
     let mut uris = Vec::new();
     for uri in &candidates {
         store::check_uri(uri)?;
+        if reprogramming && RadioUri::parse(uri)?.is_none() {
+            bail!(CliError::InvalidValue(format!(
+                "{} isn't on the radio, so it can't be reprogrammed (add a Crazyflie on USB with --from-usb)",
+                uri
+            )));
+        }
         uris.push(radio::any_radio(uri).0);
     }
 
-    // A single Crazyflie gets a name from the user, not a made-up one. Ask
-    // before changing anything: a shared swarm's change may run again.
-    let mut name = params.name.clone();
-    if let [uri] = uris.as_slice() {
-        let swarm = swarms.load(id).await?;
-        let names: Vec<String> = swarm.units.iter().map(|u| u.name.clone()).collect();
-        match &name {
-            Some(name) => check_new_name(name, &names)?,
-            None if swarm.find_link(uri)?.is_none() => {
-                crate::require_arg(non_interactive, "--name")?;
-                name = Some(prompt_name(&format!("Name for {}:", uri), Some(&swarm.next_name()), names)?);
+    let swarm = swarms.load(id).await?;
+    let names: Vec<String> = swarm.units.iter().map(|u| u.name.clone()).collect();
+    let base_name =
+        base_from(&params.base_name, swarm.base_name.as_deref(), id, BASE_NAME, "CF-", numbering::check_base_name)?;
+    let base_address = base_from(
+        &params.base_address,
+        swarm.base_address.as_deref(),
+        id,
+        BASE_ADDRESS,
+        "ABAD1DEA",
+        numbering::check_base_address,
+    )?;
+    if let Some(name) = &params.name {
+        check_new_name(name, &names)?;
+    }
+
+    // Without --name or --base-name, the names come from the swarm's base
+    // name (or CF-): as they are when adding several, as the suggestion
+    // when asking for the name of one.
+    let name_base = match (&params.name, base_name) {
+        (Some(_), _) => None,
+        (None, Some(base)) => Some(base),
+        (None, None) => Some(swarm.base_name.clone().unwrap_or_else(|| numbering::DEFAULT_BASE_NAME.to_string())),
+    };
+    let mut numbering = Numbering::new(&swarm, name_base, base_address);
+    if let Some(name) = &params.name {
+        numbering.take_name(name);
+    }
+
+    // What each new Crazyflie is called and where it ends up, decided
+    // before anything is changed.
+    let mut messages = Vec::new();
+    let mut planned: Vec<Planned> = Vec::new();
+    for uri in &uris {
+        if let Some(i) = swarm.find_link(uri)? {
+            messages.push(format!("{} is already in the swarm as {}", uri, swarm.units[i].name));
+            continue;
+        }
+        if planned.iter().any(|p| store::same_link(&p.from, uri)) {
+            continue;
+        }
+        let numbered = numbering.next()?;
+        let new_uri = match RadioUri::parse(uri)? {
+            Some(radio_uri) if reprogramming => {
+                let channel = params.set_channel.unwrap_or(radio_uri.channel);
+                let address = set_address.clone().or(numbered.address).unwrap_or_else(|| radio_uri.address.clone());
+                radio_uri.with_link(channel, &address)
             }
-            None => {}
+            _ => uri.clone(),
+        };
+        if reprogramming {
+            if let Some(i) = swarm.find_link(&new_uri)? {
+                bail!(CliError::InvalidValue(format!(
+                    "{} would be reprogrammed to {}, where {} already is",
+                    uri, new_uri, swarm.units[i].name
+                )));
+            }
+            if let Some(other) = planned.iter().find(|p| store::same_link(&p.uri, &new_uri)) {
+                bail!(CliError::InvalidValue(format!(
+                    "{} and {} would both be reprogrammed to {}",
+                    other.from, uri, new_uri
+                )));
+            }
+        }
+        let name = params.name.clone().or(numbered.name).expect("a name is given or numbered");
+        planned.push(Planned { from: uri.clone(), uri: new_uri, name });
+    }
+
+    if !planned.is_empty() {
+        if reprogramming && radio::available_radios(link_context).await.is_empty() {
+            bail!(CliError::Connection(
+                "no Crazyradio could be opened; reprogramming needs one to reboot the Crazyflie and find it \
+                 on its new address. Nothing was changed"
+                    .to_string()
+            ));
+        }
+        // A single Crazyflie gets its name from the user, unless --name or
+        // --base-name names it. Ask before changing anything: a shared
+        // swarm's change may run again.
+        if let [one] = planned.as_mut_slice() {
+            if params.name.is_none() && params.base_name.is_none() {
+                crate::require_arg(non_interactive, "--name or --base-name")?;
+                one.name = prompt_name(&format!("Name for {}:", one.uri), Some(&one.name), names)?;
+            }
         }
     }
 
-    let (messages, added, lighthouse) = swarms
-        .change(id, |swarm| {
-            let mut messages = Vec::new();
-            let mut added = Vec::new();
-            for uri in &uris {
-                if let Some(i) = swarm.find_link(uri)? {
-                    messages.push(format!("{} is already in the swarm as {}", uri, swarm.units[i].name));
-                    continue;
-                }
-                let name = match &name {
-                    Some(name) => {
-                        let names: Vec<String> = swarm.units.iter().map(|u| u.name.clone()).collect();
-                        check_new_name(name, &names)?;
-                        name.clone()
+    // Reprogram the Crazyflies, and add the ones that answer on their new
+    // address and channel.
+    let mut results = Vec::new();
+    for p in &planned {
+        let result =
+            if reprogramming { reprogram::reprogram(link_context, config, toc_cache.clone(), usb, p).await } else { Ok(()) };
+        if let Err(e) = &result {
+            eprintln!("{}: not added: {:#}", p.name, e);
+        }
+        results.push(result);
+    }
+    let to_add: Vec<&Planned> =
+        planned.iter().zip(&results).filter(|(_, result)| result.is_ok()).map(|(p, _)| p).collect();
+
+    let (changed, added, lighthouse) = if to_add.is_empty() {
+        (Vec::new(), Vec::new(), None)
+    } else {
+        swarms
+            .change(id, |swarm| {
+                let mut messages = Vec::new();
+                let mut added = Vec::new();
+                // Found by URI: on a newer version of a shared swarm
+                // someone else may have added them already.
+                for p in &to_add {
+                    if let Some(i) = swarm.find_link(&p.uri)? {
+                        messages.push(format!("{} is already in the swarm as {}", p.uri, swarm.units[i].name));
+                        continue;
                     }
-                    None => swarm.next_name(),
-                };
-                messages.push(format!("Added {} {}", name, uri));
-                added.push(name.clone());
-                swarm.units.push(Unit {
-                    uri: uri.clone(),
-                    name,
-                    description: params.description.clone(),
-                    extra: Default::default(),
-                });
-            }
-            Ok((messages, added, swarm.lighthouse.clone()))
-        })
-        .await?;
-    for message in messages {
+                    let names: Vec<String> = swarm.units.iter().map(|u| u.name.clone()).collect();
+                    check_new_name(&p.name, &names)?;
+                    messages.push(format!("Added {} {}", p.name, p.uri));
+                    added.push(p.name.clone());
+                    swarm.units.push(Unit {
+                        uri: p.uri.clone(),
+                        name: p.name.clone(),
+                        description: params.description.clone(),
+                        extra: Default::default(),
+                    });
+                }
+                Ok((messages, added, swarm.lighthouse.clone()))
+            })
+            .await?
+    };
+    for message in messages.iter().chain(&changed) {
         println!("{}", message);
     }
     lighthouse::hint_for_new(id, lighthouse.as_deref(), &added);
-    Ok(())
+    let (_, outcome) = runner::split(results);
+    outcome.finish()
 }
 
 async fn remove(swarms: &Swarms, id: &str, names: &[String], non_interactive: bool) -> Result<()> {

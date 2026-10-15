@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crazyflie_lib::crazyflie_link::LinkContext;
@@ -37,6 +38,12 @@ const PER_RADIO: usize = 8;
 
 /// Packets sent to a Crazyflie before it counts as not answering.
 const ANSWER_ATTEMPTS: usize = 3;
+
+/// How long a rebooted Crazyflie gets to show up (on its new channel or
+/// address).
+const BOOT_TIMEOUT: Duration = Duration::from_secs(8);
+/// Pause between looking for a rebooting Crazyflie.
+const BOOT_POLL: Duration = Duration::from_millis(300);
 
 /// One Crazyflie a command runs on.
 pub struct Target {
@@ -280,6 +287,18 @@ impl Target {
             if matches!(link_context.scan_selected(vec![self.link_uri.as_str()]).await, Ok(found) if !found.is_empty()) {
                 return true;
             }
+        }
+        false
+    }
+
+    /// Wait for a rebooted Crazyflie to answer.
+    pub async fn wait_for(&self, link_context: &LinkContext) -> bool {
+        let deadline = tokio::time::Instant::now() + BOOT_TIMEOUT;
+        while tokio::time::Instant::now() < deadline {
+            if self.answers(link_context).await {
+                return true;
+            }
+            tokio::time::sleep(BOOT_POLL).await;
         }
         false
     }

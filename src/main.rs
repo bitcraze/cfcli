@@ -1534,8 +1534,8 @@ async fn run() -> Result<()> {
             }
             let usb_uri = &found[0];
             println!("Found Crazyflie on USB: {}", usb_uri);
-            let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache, args.debug, preserve_console).await?;
-            modules::swarm::add_uris(&config, &id, params, vec![radio_uri], non_interactive).await?;
+            let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache.clone(), args.debug, preserve_console).await?;
+            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, &link_context, toc_cache, non_interactive).await?;
         }
         Commands::Swarm { command } => {
             modules::swarm::run(&mut config, command, &link_context, toc_cache, non_interactive, csv).await?;

@@ -112,7 +112,8 @@ Added Alpha radio:///80/2M/E7E7E7E704
 
 A Crazyflie that is already in the swarm (same channel and address) is skipped.
 That includes Crazyflies that still have the default address: give each one its
-own address first, with `cfcli config set address=...`. A radio of 0 is
+own address while adding it, see
+[Numbering new Crazyflies](#numbering-new-crazyflies). A radio of 0 is
 stored empty, meaning any Crazyradio, see [Any Crazyradio](#any-crazyradio).
 
 Rename a Crazyflie, or remove Crazyflies by name or URI. Without arguments,
@@ -130,6 +131,77 @@ cfcli swarm config remove
 Names are matched ignoring case, must be unique in the swarm and can't contain
 a comma. `add`, `remove` and `rename` change the selected swarm, or the one
 given with `--swarm <id>`.
+
+### Numbering new Crazyflies
+
+A swarm can have a base name and a base address, and `add` then numbers the
+new Crazyflies with them: `CF-01`, `CF-02`, ... on `ABAD1DEA01`, `ABAD1DEA02`,
+.... They are settings of the swarm, stored in it (not on the Crazyflies), so
+everyone sharing a swarm numbers from the same ones:
+
+```bash
+cfcli swarm config set base-name=CF-,base-address=ABAD1DEA
+cfcli swarm config clear base-name
+cfcli swarm config show
+```
+
+```text
+Swarm 'lab': Lab Crazyflies
+Base name: CF- (CF-01, CF-02, ...)
+Base address: ABAD1DEA (ABAD1DEA01 to ABAD1DEA99)
+```
+
+An address has 10 hex digits, and the number takes the digits the base address
+leaves: `ABAD1DEA` counts `ABAD1DEA01` to `ABAD1DEA99`, `ABAD1D` counts
+`ABAD1D0001` to `ABAD1D9999`. The number is written in decimal digits, so
+`CF-10` gets `ABAD1DEA10`, not `ABAD1DEA0A`, and names are zero padded as wide
+as the number in the address (2 digits without a base address).
+
+`--base-name` names the Crazyflies that are added, `--base-address`
+reprograms them to a new address. Without a value they use the swarm's base,
+and fail when it has none; with a value (`--base-name=Drone-`) they use that
+one for this command only, without storing it. `--set-channel` reprograms the
+channel too, and `--set-address` gives a single Crazyflie an exact address
+instead:
+
+```bash
+cfcli swarm config add --from-usb --base-name --base-address --set-channel 90
+cfcli swarm config add radio:///80/2M/E7E7E7E7E7 --base-address=ABAD1DEA --name Rig
+cfcli swarm config add --from-usb --set-address ABAD1DEA50 --name Spare
+```
+
+```text
+Found Crazyflie on USB: usb://2F0040001347343439303733
+CF-02: reprogrammed radio:///80/2M/E7E7E7E7E7 -> radio:///90/2M/ABAD1DEA02
+CF-02: rebooted, answers on radio:///90/2M/ABAD1DEA02
+Added CF-02 radio:///90/2M/ABAD1DEA02
+```
+
+Each new Crazyflie takes the lowest number whose name and address are both
+free, so a removed Crazyflie's number is used again, and a name and an
+address given together get the same number. An address counts as taken on any
+channel, and the default address `E7E7E7E7E7` is never handed out. Without
+`--base-address` the name gets its own number, which may differ from the
+address.
+
+Without `--name` or `--base-name`, `add` asks for the name of a single
+Crazyflie as usual, suggesting the swarm's base name (or `CF-`) with the
+number, and Crazyflies added several at once are named the same way without
+asking. `--base-name` also works with `--scan`, since it doesn't reprogram
+anything. Write a URI before `--base-name` and `--base-address`, or the URI is
+taken as their value.
+
+Reprogramming writes the new address and channel to the Crazyflie's EEPROM
+config, over USB with `--from-usb` and over the radio otherwise, and reads them
+back. The firmware only reads them at boot, so the Crazyflie is then rebooted
+over the radio and looked for on its new address; it is only added once it
+answers there. The reboot always goes over the radio, even for a Crazyflie on
+USB, so reprogramming needs a Crazyradio, and nothing is changed without one.
+The reboot also restarts any other Crazyflie on the same old channel and
+address, which does no harm. Reprogram over the radio only when a single
+Crazyflie answers on that address: two Crazyflies that still have the default
+address would both get the new one. `--scan` can't be combined with
+reprogramming for the same reason.
 
 ## Import and export
 
@@ -489,7 +561,8 @@ answers on its old channel but does on its new one only gets its URI updated.
 Two Crazyflies on the same channel with the same address can't be told apart,
 so a plan that would put them together is refused before anything is changed.
 Crazyflies that still have the default address need their own address first,
-with `cfcli config set address=...`.
+with `cfcli config set address=...` (or when adding them, see
+[Numbering new Crazyflies](#numbering-new-crazyflies)).
 
 ## Lighthouse
 
@@ -582,6 +655,8 @@ edit those; change shared swarms with the commands.
 name: Lab Crazyflies
 description: The bench
 lighthouse: cage
+base_name: CF-
+base_address: ABAD1DEA
 units:
 - uri: radio:///80/2M/E7E7E7E701
   name: CF-01
@@ -590,6 +665,8 @@ units:
   description: Test bench
 ```
 
-`description` and `lighthouse` (the lighthouse config the swarm flies in, see
-[Lighthouse](#lighthouse)) are optional, the rest is required. Fields cfcli
+`description`, `lighthouse` (the lighthouse config the swarm flies in, see
+[Lighthouse](#lighthouse)), `base_name` and `base_address` (see
+[Numbering new Crazyflies](#numbering-new-crazyflies)) are optional, the rest
+is required. Fields cfcli
 doesn't know are kept when it rewrites a file.
