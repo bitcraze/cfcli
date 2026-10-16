@@ -134,8 +134,9 @@ pub(crate) async fn run(
             let id = swarm_id(config, target.swarm.as_deref())?;
             let swarm = swarms.load(&id).await?;
             let selected = swarm.select(&id, &target.cf, &target.exclude)?;
+            let wanted = lighthouse::wanted(config, &id, swarm.lighthouse.as_deref(), command, csv).await?;
             let runner = Runner::new(link_context, config, toc_cache, &swarm, &selected).await?;
-            lighthouse::run(config, &runner, &id, swarm.lighthouse.as_deref(), command, csv).await
+            lighthouse::run(&runner, &wanted, command, csv).await
         }
         SwarmCommands::Rechannel(params) => {
             rechannel::rechannel(&swarms, config, params, link_context, toc_cache, non_interactive).await

@@ -622,7 +622,8 @@ interactive, it shows the one the swarm names, as `swarm config show` does.
 `swarm lh check` compares each Crazyflie's configuration with it, and
 `swarm lh write` writes it to the Crazyflies that don't have it yet (all of
 them with `--force`), storing it in their flash. `--config` uses another
-configuration than the one the swarm names.
+stored configuration than the one the swarm names, and `-i <FILE>` a file (as
+from `lh config read` or the Crazyflie client), like `lh config write -i`.
 
 ```text
 $ cfcli swarm lh check

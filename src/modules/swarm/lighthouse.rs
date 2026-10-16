@@ -6,7 +6,8 @@
 //! swarm file). A shared swarm names a shared one, so that everyone who uses
 //! the swarm gets it. Writing skips the Crazyflies that already have it,
 //! which makes `swarm lh write` the way to give new Crazyflies the swarm's
-//! configuration, and to update all of them when it changes.
+//! configuration, and to update all of them when it changes. `--config`
+//! (another stored one) or `-i` (a file) checks or writes another one.
 
 use anyhow::{anyhow, bail, Result};
 use tabled::Tabled;
@@ -18,7 +19,7 @@ use crate::error::CliError;
 use crate::modules::documents::{Entry, SharedId};
 use crate::modules::lighthouse::configs::{describe, may_name, pick_entry, LhConfigs};
 use crate::modules::lighthouse::{
-    check_supported, compare, describe_distance, is_same, read_config, supported_base_stations, write_config,
+    check_supported, compare, describe_distance, is_same, load, read_config, supported_base_stations, write_config,
     BaseStationDiff, CalibrationDelta, LighthouseConfigFile, Part,
 };
 use crate::utils::display::{csv_row, print_table, table};
@@ -120,37 +121,58 @@ async fn pick_for(config: &Config, id: &str, current: Option<&str>) -> Result<St
     pick_entry(&entries, &message, current)
 }
 
-/// `swarm lh check|write`
-pub async fn run(
+/// The configuration `swarm lh check|write` uses.
+pub struct Wanted {
+    file: LighthouseConfigFile,
+    /// How to give it to 'swarm lh write' again: "", " --config <id>" or
+    /// " -i <file>".
+    write_args: String,
+}
+
+/// The configuration for `swarm lh check|write`: a stored one (`--config`),
+/// a file (`-i`), or else the one the swarm names (`linked`). Loaded before
+/// the radios open, so a bad one fails at once.
+pub async fn wanted(
     config: &Config,
-    runner: &Runner<'_>,
     swarm_id: &str,
     linked: Option<&str>,
     command: &SwarmLhCommands,
     csv: bool,
-) -> Result<()> {
-    let given = match command {
-        SwarmLhCommands::Check(params) => params.config.as_deref(),
-        SwarmLhCommands::Write(params) => params.config.as_deref(),
+) -> Result<Wanted> {
+    let (given, input) = match command {
+        SwarmLhCommands::Check(params) => (params.config.as_deref(), params.input.as_deref()),
+        SwarmLhCommands::Write(params) => (params.config.as_deref(), params.input.as_deref()),
     };
-    let Some(id) = given.or(linked) else {
-        bail!(CliError::NotFound(format!(
-            "lighthouse config of swarm '{}'; name one with 'cfcli swarm config lh <CONFIG>' or give --config",
-            swarm_id
-        )));
+    let (file, label, write_args) = match input {
+        Some(path) => (load(path)?, format!("from {}", path), format!(" -i {}", path)),
+        None => {
+            let Some(id) = given.or(linked) else {
+                bail!(CliError::NotFound(format!(
+                    "lighthouse config of swarm '{}'; name one with 'cfcli swarm config lh <CONFIG>', or give \
+                     --config or a file with -i",
+                    swarm_id
+                )));
+            };
+            let configs = LhConfigs::open(config)?;
+            let write_args = given.map(|id| format!(" --config {}", id)).unwrap_or_default();
+            (configs.load(id).await?, describe(&configs, id), write_args)
+        }
     };
-    let configs = LhConfigs::open(config)?;
-    let wanted = configs.load(id).await?;
     if !csv {
         println!(
             "Lighthouse config {}: base stations {}",
-            describe(&configs, id),
-            ids(&wanted.geos.keys().copied().collect::<Vec<_>>())
+            label,
+            ids(&file.geos.keys().copied().collect::<Vec<_>>())
         );
     }
+    Ok(Wanted { file, write_args })
+}
+
+/// `swarm lh check|write`
+pub async fn run(runner: &Runner<'_>, wanted: &Wanted, command: &SwarmLhCommands, csv: bool) -> Result<()> {
     match command {
-        SwarmLhCommands::Check(_) => check(runner, &wanted, csv).await,
-        SwarmLhCommands::Write(params) => write(runner, &wanted, params.force).await,
+        SwarmLhCommands::Check(_) => check(runner, &wanted.file, &wanted.write_args, csv).await,
+        SwarmLhCommands::Write(params) => write(runner, &wanted.file, params.force).await,
     }
 }
 
@@ -234,7 +256,7 @@ struct CheckRow {
     status: String,
 }
 
-async fn check(runner: &Runner<'_>, wanted: &LighthouseConfigFile, csv: bool) -> Result<()> {
+async fn check(runner: &Runner<'_>, wanted: &LighthouseConfigFile, write_args: &str, csv: bool) -> Result<()> {
     let results = runner
         .connected("Reading", async |cf, _| {
             let on_cf = read_config(cf, |_, _| {}).await?;
@@ -272,10 +294,11 @@ async fn check(runner: &Runner<'_>, wanted: &LighthouseConfigFile, csv: bool) ->
     outcome.finish()?;
     if differing > 0 {
         bail!(CliError::Differs(format!(
-            "{} of {} {} another lighthouse configuration; 'cfcli swarm lh write' gives them this one",
+            "{} of {} {} another lighthouse configuration; 'cfcli swarm lh write{}' gives them this one",
             differing,
             super::crazyflies(done.len()),
-            if differing == 1 { "has" } else { "have" }
+            if differing == 1 { "has" } else { "have" },
+            write_args
         )));
     }
     Ok(())
