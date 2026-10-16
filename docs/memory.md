@@ -29,6 +29,10 @@ If a type name is given but multiple memories of that type are present and no
 instance index was supplied, the command errors out and prints the valid range
 of instance indices.
 
+Shell completion suggests memory type names without connecting to a Crazyflie.
+Instance indices are not suggested because the attached decks can change; add
+the required `:N` suffix yourself when selecting a specific instance.
+
 ## Listing memories
 
 To list all the available memories in the Crazyflie use the following command:

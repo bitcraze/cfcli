@@ -47,3 +47,16 @@
         }
     }
 
+
+    # Positional memory names are inserted by build.rs; no device query.
+    if ($command -match '^cfcli;mem;(display|read|write|verify|erase)$' -and
+        $wordToComplete -notlike '-*' -and
+        $cfcliPrev -notin @('-s', '--offset', '-n', '--length', '-d', '--data',
+                           '-i', '--input', '-o', '--output', '--timeout')) {
+        foreach ($cfcliMemoryType in ('@CFCLI_MEMORY_TYPES@' -split ' ')) {
+            $completions += [CompletionResult]::new(
+                $cfcliMemoryType, $cfcliMemoryType,
+                [CompletionResultType]::ParameterValue, $cfcliMemoryType)
+        }
+    }
+
