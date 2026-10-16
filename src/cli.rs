@@ -697,15 +697,21 @@ enum SwarmLhCommands {
 #[derive(Debug, Args)]
 struct SwarmLhParameters {
     /// Lighthouse config to use instead of the one the swarm names
-    #[clap(long, value_name = "CONFIG")]
+    #[clap(long, value_name = "CONFIG", conflicts_with = "input")]
     config: Option<String>,
+    /// YAML file to use instead of the config the swarm names
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct SwarmLhWriteParameters {
     /// Lighthouse config to use instead of the one the swarm names
-    #[clap(long, value_name = "CONFIG")]
+    #[clap(long, value_name = "CONFIG", conflicts_with = "input")]
     config: Option<String>,
+    /// YAML file to use instead of the config the swarm names
+    #[clap(long, short = 'i', value_hint = ValueHint::FilePath)]
+    input: Option<String>,
     /// Write it also to Crazyflies that already have it
     #[clap(long)]
     force: bool,
