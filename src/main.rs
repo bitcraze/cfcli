@@ -1642,3 +1642,74 @@ async fn run() -> Result<()> {
 
     result
 }
+
+#[cfg(test)]
+mod config_address_tests {
+    use super::*;
+
+    fn settings(input: &str) -> HashMap<String, String> {
+        let cli = <CliArgs as clap::Parser>::try_parse_from(
+            ["cfcli", "config", "set", input],
+        ).unwrap();
+        let Commands::Config { command: ConfigCommands::Set(values) } = cli.command else {
+            panic!("expected config set");
+        };
+        values.settings
+    }
+
+    #[test]
+    fn addresses_keep_their_hexadecimal_value() {
+        let cases: [(&str, &str, [u8; 5]); 6] = [
+            ("0xABAD1DEA01", "ABAD1DEA01", [0xAB, 0xAD, 0x1D, 0xEA, 0x01]),
+            ("0xE7E7E7E7", "E7E7E7E7", [0x00, 0xE7, 0xE7, 0xE7, 0xE7]),
+            ("0x10", "10", [0, 0, 0, 0, 0x10]),
+            ("0XABAD1DEA01", "ABAD1DEA01", [0xAB, 0xAD, 0x1D, 0xEA, 0x01]),
+            ("ABAD1DEA01", "ABAD1DEA01", [0xAB, 0xAD, 0x1D, 0xEA, 0x01]),
+            ("0x0000000010", "0000000010", [0, 0, 0, 0, 0x10]),
+        ];
+
+        for (input, expected, bytes) in cases {
+            let values = settings(&format!("address={}", input));
+            assert_eq!(values["address"], expected, "{}", input);
+            assert_eq!(decode_address(&values["address"]).unwrap(), bytes, "{}", input);
+        }
+    }
+
+    #[test]
+    fn other_config_values_keep_numeric_parsing() {
+        let values = settings(
+            "channel=0x5A,speed=0X2,address=0x10,pitch_trim=-1.5,roll_trim=2.25",
+        );
+        assert_eq!(values["channel"], "90");
+        assert_eq!(values["speed"], "2");
+        assert_eq!(values["address"], "10");
+        assert_eq!(values["pitch_trim"], "-1.5");
+        assert_eq!(values["roll_trim"], "2.25");
+    }
+
+    #[test]
+    fn parameter_hex_parsing_is_unchanged() {
+        let values = parse_key_val_pairs("address=0x10,loco.mode=0X2,other=word").unwrap();
+        assert_eq!(values["address"], "16");
+        assert_eq!(values["loco.mode"], "2");
+        assert_eq!(values["other"], "word");
+    }
+
+    #[test]
+    fn invalid_settings_still_fail_validation() {
+        for input in ["address", "=0x10", "channel=1,"] {
+            assert!(
+                <CliArgs as clap::Parser>::try_parse_from(
+                    ["cfcli", "config", "set", input],
+                ).is_err(),
+                "{}",
+                input
+            );
+        }
+
+        for address in ["0xGG", "0x10000000000"] {
+            let values = settings(&format!("address={}", address));
+            assert!(decode_address(&values["address"]).is_err(), "{}", address);
+        }
+    }
+}
