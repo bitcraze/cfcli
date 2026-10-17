@@ -11,6 +11,18 @@
 /// Custom parser: "a=1,b=2" → { "a" => "1", "b" => "2" }
 /// Supports hex values with 0x prefix: "a=0x10,b=2" → { "a" => "16", "b" => "2" }
 fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
+  parse_key_val_pairs_impl(s, false)
+}
+
+/// EEPROM radio addresses are hexadecimal, with an optional 0x or 0X prefix.
+fn parse_config_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
+  parse_key_val_pairs_impl(s, true)
+}
+
+fn parse_key_val_pairs_impl(
+  s: &str,
+  preserve_address: bool,
+) -> Result<HashMap<String, String>, String> {
   let mut map = HashMap::new();
 
   for pair in s.split(',') {
@@ -22,9 +34,10 @@ fn parse_key_val_pairs(s: &str) -> Result<HashMap<String, String>, String> {
       return Err("Empty key found".into());
     }
 
-    // Parse hex if it starts with 0x, otherwise keep as string
-    let value = if let Some(hex_str) = value_str.strip_prefix("0x").or_else(|| value_str.strip_prefix("0X")) {
-      // Try to parse as hex, but keep original string if parsing fails
+    let hex = value_str.strip_prefix("0x").or_else(|| value_str.strip_prefix("0X"));
+    let value = if preserve_address && key == "address" {
+      hex.unwrap_or(value_str).to_string()
+    } else if let Some(hex_str) = hex {
       match u64::from_str_radix(hex_str, 16) {
         Ok(num) => num.to_string(),
         Err(_) => value_str.to_string(),
@@ -1041,7 +1054,7 @@ struct ConfigNameAndValue {
     ///   pitch_trim: Pitch trim (float between -20.0 and 20.0)
     ///   roll_trim : Roll trim (float between -20.0 and 20.0)
     /// Example: channel=10,address=E7E7E7E7E7,speed=2
-    #[clap(value_parser, value_parser = parse_key_val_pairs, verbatim_doc_comment)]
+    #[clap(value_parser, value_parser = parse_config_key_val_pairs, verbatim_doc_comment)]
     settings: HashMap<String, String>
 }
 
