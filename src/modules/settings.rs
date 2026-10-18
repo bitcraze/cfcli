@@ -3,6 +3,7 @@ use crate::{Config, console_preserve_path, decode_address};
 use crate::modules::documents;
 use crate::modules::lighthouse::LighthouseConfigFile;
 use crate::modules::swarm::store::Store;
+use crate::utils::connection::DEFAULT_MODE;
 
 pub fn show(config: &Config) {
     println!("Timeout: {}ms{}", config.effective_timeout(),
@@ -14,6 +15,7 @@ pub fn show(config: &Config) {
     println!("Preserved console history file: {}", console_preserve_path().display());
     println!("Selected swarm: {}", config.swarm.as_deref().unwrap_or("none"));
     sync_show(config);
+    connection_show(config);
     if let Ok(store) = Store::open() {
         println!("Swarm folder: {}", store.dir().display());
     }
@@ -89,6 +91,30 @@ pub fn address_clear(config: &mut Config) {
         println!("Could not save settings: {:?}", err);
     });
     println!("Addresses reset to default (E7E7E7E7E7)");
+}
+
+pub fn connection_show(config: &Config) {
+    println!(
+        "Connection: {}{}",
+        config.connection.as_deref().unwrap_or(DEFAULT_MODE),
+        if config.connection.is_none() { " (default)" } else { "" }
+    );
+}
+
+pub fn connection_set(config: &mut Config, mode: &str) {
+    config.connection = Some(mode.to_string());
+    confy::store("cf-cli", None, config.clone()).unwrap_or_else(|err| {
+        println!("Could not save settings: {:?}", err);
+    });
+    println!("Connection set to {}", mode);
+}
+
+pub fn connection_clear(config: &mut Config) {
+    config.connection = None;
+    confy::store("cf-cli", None, config.clone()).unwrap_or_else(|err| {
+        println!("Could not save settings: {:?}", err);
+    });
+    println!("Connection reset to default ({})", DEFAULT_MODE);
 }
 
 pub fn sync_show(config: &Config) {

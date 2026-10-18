@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
-use crazyflie_lib::subsystems::log::{LogData, LogPeriod, LogStream};
-use crazyflie_lib::{Crazyflie, Value, ValueType};
+use crazyflie_connection_server::{Crazyflie, LogStream};
+use crazyflie_lib::subsystems::log::LogData;
+use crazyflie_lib::{Value, ValueType};
+use std::collections::HashMap;
 use std::io::Write;
+use std::time::Duration;
+use crate::utils::connection::log_type;
 use crate::utils::display::{csv_row, print_table, table, table_from_records, value_to_csv_string, Column, StreamTable};
 use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
@@ -19,13 +23,13 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
   if csv {
     println!("name,type");
     for name in cf.log.names() {
-      let var_type = cf.log.get_type(&name)?;
+      let var_type = log_type(cf, &name)?;
       csv_row(&[&name, &format!("{:?}", var_type)]);
     }
   } else {
     let mut rows = Vec::new();
     for name in cf.log.names() {
-      let var_type = cf.log.get_type(&name)?;
+      let var_type = log_type(cf, &name)?;
       rows.push(LogVariable { name, var_type: format!("{:?}", var_type) });
     }
     print_table(&table(&rows));
@@ -34,22 +38,39 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
   Ok(())
 }
 
-/// Log the variables (comma-separated) every `period` ms.
-pub async fn start(cf: &Crazyflie, names: &[String], period: u64) -> Result<LogStream> {
-  let mut block = cf.log.create_block().await?;
-  for name in names {
-      block.add_variable(name).await?;
+/// Samples of a log subscription, with the values typed like the variables.
+/// Dropping it removes the log block.
+pub struct Samples {
+  stream: LogStream,
+  types: HashMap<String, ValueType>,
+}
+
+impl Samples {
+  pub async fn next(&mut self) -> Result<LogData> {
+    let sample = self.stream.next().await?;
+    let data = sample
+      .data
+      .into_iter()
+      .map(|(name, value)| {
+        let value_type = self.types.get(&name).copied().unwrap_or(ValueType::F64);
+        (name, Value::from_f64_lossy(value_type, value))
+      })
+      .collect();
+    Ok(LogData { timestamp: sample.timestamp, data })
   }
-  Ok(block.start(LogPeriod::from_millis(period)?).await?)
+}
+
+/// Log the variables every `period` ms. The server creates the log block.
+pub async fn start(cf: &Crazyflie, names: &[String], period: u64) -> Result<Samples> {
+  let types = names.iter().map(|name| Ok((name.clone(), log_type(cf, name)?))).collect::<Result<_>>()?;
+  let names: Vec<&str> = names.iter().map(String::as_str).collect();
+  let stream = cf.log.subscribe(&names, Duration::from_millis(period)).await?;
+  Ok(Samples { stream, types })
 }
 
 /// One sample of the variables.
 pub async fn sample(cf: &Crazyflie, names: &[String], period: u64) -> Result<LogData> {
-  let stream = start(cf, names, period).await?;
-  let data = stream.next().await?;
-  // The block is gone with the connection anyway.
-  let _ = stream.stop().await;
-  Ok(data)
+  start(cf, names, period).await?.next().await
 }
 
 /// The values of a sample as plain numbers at full precision, in the order
@@ -110,7 +131,7 @@ pub fn stream_columns<'a>(cf: &Crazyflie, names: &'a [String]) -> Vec<Column<'a>
   let mut columns = vec![Column { name: "Time (ms)", width: TIME_WIDTH, right: true }];
   columns.extend(names.iter().map(|name| Column {
     name,
-    width: cf.log.get_type(name).map_or(FLOAT_WIDTH, type_width),
+    width: log_type(cf, name).map_or(FLOAT_WIDTH, type_width),
     right: true,
   }));
   columns
@@ -170,7 +191,7 @@ pub async fn print_once(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> 
 
 pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Result<()> {
   let name_list = split_names(names);
-  let stream = start(cf, &name_list, period).await?;
+  let mut stream = start(cf, &name_list, period).await?;
 
   if csv {
     let mut header: Vec<&str> = vec!["timestamp_ms"];

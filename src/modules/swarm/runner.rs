@@ -15,17 +15,23 @@
 //! time. [`Runner::connected`] connects using only the TOC cache at first,
 //! lets one Crazyflie per TOC checksum download what is missing, and then
 //! connects the rest from the cache.
+//!
+//! [`Runner::attached`] then hands each connection to a connection server
+//! inside cfcli, so that the commands use the client API, the same code as
+//! the single-Crazyflie commands.
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use crazyflie_connection_server::ServerConfig;
 use crazyflie_lib::crazyflie_link::LinkContext;
 use crazyflie_lib::{Crazyflie, TocCache};
 use futures::stream::{self, StreamExt};
 use tabled::Tabled;
+use tokio::sync::OnceCell;
 
 use super::store::Swarm;
 use crate::error::{self, CliError};
@@ -78,6 +84,27 @@ pub struct Runner<'a> {
     link_context: &'a LinkContext,
     toc_cache: ConfigTocCache,
     pub targets: Vec<Target>,
+    served: OnceCell<Served>,
+}
+
+/// The connection server inside cfcli that [`Runner::attached`] hands the
+/// connections to, and the client attached to it.
+struct Served {
+    server: crazyflie_connection_server::Server,
+    client: crazyflie_connection_server::Client,
+}
+
+/// A Crazyflie the runner connected, served to the client API.
+pub struct Attached {
+    lib: Arc<Crazyflie>,
+    pub cf: crazyflie_connection_server::Crazyflie,
+}
+
+impl Attached {
+    pub async fn disconnect(self) {
+        drop(self.cf);
+        self.lib.disconnect().await;
+    }
 }
 
 impl<'a> Runner<'a> {
@@ -129,7 +156,7 @@ impl<'a> Runner<'a> {
                 }
             })
             .collect();
-        Ok(Runner { link_context, toc_cache, targets })
+        Ok(Runner { link_context, toc_cache, targets, served: OnceCell::new() })
     }
 
     pub fn link_context(&self) -> &'a LinkContext {
@@ -225,11 +252,77 @@ impl<'a> Runner<'a> {
         .collect()
     }
 
-    /// Connect to every target and keep the connections, for commands that
-    /// talk to all the Crazyflies at the same time. Each TOC missing from
-    /// the cache is downloaded from one Crazyflie only.
-    pub async fn connect_all(&self, label: &str) -> Vec<Result<Crazyflie>> {
-        self.connect_each(label, async |cf: Crazyflie, _: &Target| cf).await
+    /// [`Runner::connected`] with the client API.
+    pub async fn attached<T>(
+        &self,
+        label: &str,
+        op: impl AsyncFn(&crazyflie_connection_server::Crazyflie, &Target) -> Result<T>,
+    ) -> Vec<Result<T>> {
+        self.connect_each(label, async |cf: Crazyflie, target: &Target| {
+            let attached = self.attach(cf, target).await?;
+            let result = op(&attached.cf, target).await;
+            attached.disconnect().await;
+            result
+        })
+        .await
+        .into_iter()
+        .map(|result| result.and_then(|inner| inner))
+        .collect()
+    }
+
+    /// Connect to every target and keep the connections, with the client
+    /// API, for commands that talk to all the Crazyflies at the same time.
+    /// Each TOC missing from the cache is downloaded from one Crazyflie only.
+    pub async fn attach_all(&self, label: &str) -> Vec<Result<Attached>> {
+        self.connect_each(label, async |cf: Crazyflie, target: &Target| self.attach(cf, target).await)
+            .await
+            .into_iter()
+            .map(|result| result.and_then(|inner| inner))
+            .collect()
+    }
+
+    /// The first target with the client API, e.g. to pick names from its TOC.
+    pub async fn attach_first(&self) -> Result<Attached> {
+        let target = &self.targets[0];
+        let cf = self.connect(target).await?;
+        self.attach(cf, target).await
+    }
+
+    /// Serve a connection to the client API.
+    async fn attach(&self, cf: Crazyflie, target: &Target) -> Result<Attached> {
+        let lib = Arc::new(cf);
+        let attached = async {
+            let served = self.served().await?;
+            served.server.adopt(&target.uri, lib.clone()).await.map_err(|e| anyhow!(e))?;
+            Ok::<_, anyhow::Error>(served.client.attach(&target.uri).await?)
+        }
+        .await;
+        match attached {
+            Ok(cf) => Ok(Attached { lib, cf }),
+            Err(e) => {
+                lib.disconnect().await;
+                Err(e)
+            }
+        }
+    }
+
+    async fn served(&self) -> Result<&Served> {
+        self.served
+            .get_or_try_init(|| async {
+                // Only serves the runner's own connections: it opens no radio.
+                let config = ServerConfig {
+                    name: "cfcli swarm".to_string(),
+                    linger: Duration::ZERO,
+                    hold_radios: false,
+                    toc_cache: None,
+                    link_context: None,
+                };
+                let server = crazyflie_connection_server::Server::new(config).await;
+                let client = crazyflie_connection_server::Client::in_process(server.clone());
+                client.set_name("cfcli swarm").await?;
+                Ok(Served { server, client })
+            })
+            .await
     }
 
     /// Connect to every target and hand the connection to `then`, which
@@ -525,6 +618,7 @@ mod tests {
             addresses: Vec::new(),
             swarm: None,
             sync: None,
+            connection: None,
         };
         let probe = ProbeCache::new(ConfigTocCache::new(config, false));
         assert_eq!(probe.get_toc(&[1, 0xaa, 0xbb, 0xcc, 0xdd]).as_deref(), Some("{\"a\":[1,8]}"));
