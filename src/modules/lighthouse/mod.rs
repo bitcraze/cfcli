@@ -7,13 +7,11 @@
 //! Lighthouse V2 base stations are supported.
 
 use anyhow::{bail, Context, Result};
-use crazyflie_lib::{
-    subsystems::memory::{
-        LighthouseBsCalibration, LighthouseBsGeometry, LighthouseCalibrationSweep,
-        LighthouseMemory, MemoryType,
-    },
-    Crazyflie, Error,
+use crazyflie_connection_server::memory::{
+    LighthouseBsCalibration, LighthouseBsGeometry, LighthouseCalibrationSweep, LighthouseMemory, MemoryType,
 };
+use crazyflie_connection_server::Crazyflie;
+use crazyflie_lib::subsystems::memory as lib_memory;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,7 +31,7 @@ pub const SYSTEM_TYPE_V2: u8 = 2;
 
 /// Base station IDs the lighthouse memory has room for. A firmware build
 /// supports fewer (4 by default, see [`supported_base_stations`]).
-const MAX_BASE_STATIONS: u8 = LighthouseMemory::MAX_BASE_STATIONS as u8;
+const MAX_BASE_STATIONS: u8 = lib_memory::LighthouseMemory::MAX_BASE_STATIONS as u8;
 
 fn make_progress(length: usize, label: &str, non_interactive: bool) -> indicatif::ProgressBar {
     use std::io::IsTerminal;
@@ -478,11 +476,11 @@ pub fn supported_base_stations(cf: &Crazyflie) -> Option<u8> {
 }
 
 fn supported_by_size(size: usize) -> Option<u8> {
-    let calibrations = size.checked_sub(LighthouseMemory::CALIB_START_ADDR)?;
-    if calibrations == 0 || calibrations % LighthouseBsCalibration::SIZE != 0 {
+    let calibrations = size.checked_sub(lib_memory::LighthouseMemory::CALIB_START_ADDR)?;
+    if calibrations == 0 || calibrations % lib_memory::LighthouseBsCalibration::SIZE != 0 {
         return None;
     }
-    let count = calibrations / LighthouseBsCalibration::SIZE;
+    let count = calibrations / lib_memory::LighthouseBsCalibration::SIZE;
     Some(count.min(MAX_BASE_STATIONS as usize) as u8)
 }
 
@@ -493,49 +491,41 @@ async fn open_memory(cf: &Crazyflie) -> Result<LighthouseMemory> {
             "no lighthouse memory on the Crazyflie (is the Lighthouse deck attached?)".to_string()
         ));
     };
-    match cf.memory.open_memory((*device).clone()).await {
-        Some(Ok(m)) => Ok(m),
-        Some(Err(e)) => bail!("Failed to open lighthouse memory: {}", e),
-        None => bail!("Failed to open lighthouse memory"),
-    }
+    cf.memory.open_memory(device).await.context("Failed to open lighthouse memory")
 }
 
 /// Read the Crazyflie's configuration: the valid geometries and calibrations.
 /// `progress` is called with (done, total) after each read.
 pub async fn read_config(cf: &Crazyflie, mut progress: impl FnMut(usize, usize)) -> Result<LighthouseConfigFile> {
-    let count = supported_base_stations(cf).unwrap_or(MAX_BASE_STATIONS);
+    // When the size doesn't tell, the IDs this firmware build doesn't have
+    // fail to read.
+    let supported = supported_base_stations(cf);
+    let count = supported.unwrap_or(MAX_BASE_STATIONS);
     let memory = open_memory(cf).await?;
     let total = 2 * count as usize;
     let mut config = LighthouseConfigFile::default();
-    let result: Result<()> = async {
-        for id in 0..count {
-            match memory.read_geometry(id).await {
-                Ok(geo) if geo.valid => {
-                    config.geos.insert(id, GeometryFileEntry::from(&geo));
-                }
-                Ok(_) => {}
-                // Not supported by this firmware build (size unknown).
-                Err(Error::MemoryError(_)) => {}
-                Err(e) => return Err(e).with_context(|| format!("Failed to read geometry {}", id)),
+    for id in 0..count {
+        match memory.read_geometry(id).await {
+            Ok(geo) if geo.valid => {
+                config.geos.insert(id, GeometryFileEntry::from(&geo));
             }
-            progress(id as usize + 1, total);
+            Ok(_) => {}
+            Err(_) if supported.is_none() => {}
+            Err(e) => return Err(e).with_context(|| format!("Failed to read geometry {}", id)),
         }
-        for id in 0..count {
-            match memory.read_calibration(id).await {
-                Ok(calib) if calib.valid => {
-                    config.calibs.insert(id, CalibrationFileEntry::from(&calib));
-                }
-                Ok(_) => {}
-                Err(Error::MemoryError(_)) => {}
-                Err(e) => return Err(e).with_context(|| format!("Failed to read calibration {}", id)),
-            }
-            progress(count as usize + id as usize + 1, total);
-        }
-        Ok(())
+        progress(id as usize + 1, total);
     }
-    .await;
-    cf.memory.close_memory(memory).await?;
-    result?;
+    for id in 0..count {
+        match memory.read_calibration(id).await {
+            Ok(calib) if calib.valid => {
+                config.calibs.insert(id, CalibrationFileEntry::from(&calib));
+            }
+            Ok(_) => {}
+            Err(_) if supported.is_none() => {}
+            Err(e) => return Err(e).with_context(|| format!("Failed to read calibration {}", id)),
+        }
+        progress(count as usize + id as usize + 1, total);
+    }
     Ok(config)
 }
 
@@ -580,36 +570,28 @@ pub async fn write_config(
     let total = 2 * count as usize;
 
     let memory = open_memory(cf).await?;
-    let result: Result<()> = async {
-        for id in 0..count {
-            let geo = config.geos.get(&id).map(LighthouseBsGeometry::from).unwrap_or_default();
-            match memory.write_geometry(id, &geo).await {
-                Ok(()) => {}
-                // Clearing an ID this firmware build doesn't have (size unknown).
-                Err(Error::MemoryError(_)) if !config.geos.contains_key(&id) => {}
-                Err(e) => {
-                    return Err(e).with_context(|| format!("Failed to write geometry for base station {}", id))
-                }
-            }
-            progress(id as usize + 1, total);
+    // Clearing an ID this firmware build doesn't have fails (size unknown).
+    let unsupported = |known: bool| !known && supported.is_none();
+    for id in 0..count {
+        let geo = config.geos.get(&id).map(LighthouseBsGeometry::from).unwrap_or_default();
+        match memory.write_geometry(id, &geo).await {
+            Ok(()) => {}
+            Err(_) if unsupported(config.geos.contains_key(&id)) => {}
+            Err(e) => return Err(e).with_context(|| format!("Failed to write geometry for base station {}", id)),
         }
-        for id in 0..count {
-            let calib = config.calibs.get(&id).map(LighthouseBsCalibration::from).unwrap_or_default();
-            match memory.write_calibration(id, &calib).await {
-                Ok(()) => {}
-                Err(Error::MemoryError(_)) if !config.calibs.contains_key(&id) => {}
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("Failed to write calibration for base station {}", id))
-                }
-            }
-            progress(count as usize + id as usize + 1, total);
-        }
-        Ok(())
+        progress(id as usize + 1, total);
     }
-    .await;
-    cf.memory.close_memory(memory).await?;
-    result?;
+    for id in 0..count {
+        let calib = config.calibs.get(&id).map(LighthouseBsCalibration::from).unwrap_or_default();
+        match memory.write_calibration(id, &calib).await {
+            Ok(()) => {}
+            Err(_) if unsupported(config.calibs.contains_key(&id)) => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to write calibration for base station {}", id))
+            }
+        }
+        progress(count as usize + id as usize + 1, total);
+    }
 
     let ids: Vec<u8> = (0..count).collect();
     let persisted = cf

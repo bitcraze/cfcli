@@ -171,7 +171,7 @@ pub(super) async fn rechannel(
     }
     if !client.is_in_process() {
         bail!(CliError::Connection(
-            "swarm rechannel does not go through a connection server yet (it writes the EEPROM). Use --connection direct"
+            "swarm rechannel does not go through a connection server yet (the server can't reboot a Crazyflie onto another channel). Use --connection direct"
                 .to_string()
         ));
     }
@@ -206,7 +206,7 @@ pub(super) async fn rechannel(
     if !to_write.is_empty() {
         let writer = runner_for(client, link_context, config, &swarm, &moves, &to_write).await?;
         let written = writer
-            .connected("Reprogramming", async |cf, target| {
+            .attached("Reprogramming", async |cf, target| {
                 config::write_radio_channel(cf, moves[index_of(target)].to).await
             })
             .await;

@@ -8,7 +8,7 @@ use byteorder::{LittleEndian, ByteOrder};
 use crate::ConfigTocCache;
 use crate::error::CliError;
 use crate::modules::memory::{
-    read_deck_ctrl_dfu_header,
+    parse_deck_ctrl_dfu_header,
     DECK_CTRL_DFU_STATUS_CAN_ENABLE_DFU,
     DECK_CTRL_DFU_STATUS_IN_DFU_MODE,
 };
@@ -579,7 +579,7 @@ async fn flash_deck_ctrl(
 
     let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache.clone()).await?;
     let raw = open_deck_ctrl_dfu_raw(&cf).await?;
-    let header = read_deck_ctrl_dfu_header(&raw).await?;
+    let header = parse_deck_ctrl_dfu_header(&raw.read(0, 4).await?)?;
 
     if header.version != 1 {
         bail!("Unsupported DeckCtrlDFU version: {}", header.version);
@@ -609,7 +609,7 @@ async fn flash_deck_ctrl(
     // re-enumerated, so we re-look up the memory after reconnecting.
     let cf = crazyflie_lib::Crazyflie::connect_from_uri(link_context, uri, toc_cache.clone()).await?;
     let raw = open_deck_ctrl_dfu_raw(&cf).await?;
-    let header = read_deck_ctrl_dfu_header(&raw).await?;
+    let header = parse_deck_ctrl_dfu_header(&raw.read(0, 4).await?)?;
     if (header.status & DECK_CTRL_DFU_STATUS_IN_DFU_MODE) == 0 {
         bail!("DeckCtrl did not enter DFU mode");
     }

@@ -12,14 +12,13 @@
 use anyhow::{anyhow, bail, Context, Result};
 use crazyflie_connection_server::Client;
 use crazyflie_lib::crazyflie_link::LinkContext;
-use crazyflie_lib::Crazyflie;
 
 use super::runner::Runner;
 use super::store::{Swarm, Unit};
 use crate::error::CliError;
 use crate::modules::{bootloader, config};
 use crate::utils::radio::RadioUri;
-use crate::{Config, ConfigTocCache};
+use crate::Config;
 
 /// A Crazyflie about to be added.
 pub struct Planned {
@@ -36,7 +35,6 @@ pub async fn reprogram(
     client: &Client,
     link_context: &LinkContext,
     config: &Config,
-    toc_cache: ConfigTocCache,
     usb: Option<&str>,
     planned: &Planned,
 ) -> Result<()> {
@@ -57,25 +55,18 @@ pub async fn reprogram(
 
     let channel = (to.channel != from.channel).then_some(to.channel);
     let address = if to.address != from.address { Some(crate::decode_address(&to.address)?) } else { None };
-    let written = match usb {
-        Some(usb) => {
-            let cf = Crazyflie::connect_from_uri(link_context, usb, toc_cache)
-                .await
-                .context(CliError::Connection(format!("connecting to {}", usb)))?;
-            let written = config::write_radio(&cf, channel, address).await;
-            cf.disconnect().await;
-            written
-        }
-        None => {
-            let attached = runner.attach(old).await?;
-            let written = match crate::utils::connection::lib(&attached.cf, "reprogramming") {
-                Ok(cf) => config::write_radio(&cf, channel, address).await,
-                Err(e) => Err(e),
-            };
-            attached.disconnect().await;
-            written
-        }
+    // Over USB, or over the radio on the old link
+    let cf = match usb {
+        Some(usb) => client.attach(usb).await.context(CliError::Connection(format!("connecting to {}", usb)))?,
+        None => runner.attach(old).await?.cf,
     };
+    let written = config::write_radio(&cf, channel, address).await;
+    // Gone before the reboot, which opens a link of its own
+    let lib = cf.lib();
+    cf.detach();
+    if let Some(lib) = lib {
+        lib.disconnect().await;
+    }
     written.context("not reprogrammed")?;
     println!("{}: reprogrammed {} -> {}", planned.name, planned.from, planned.uri);
 

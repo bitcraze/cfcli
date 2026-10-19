@@ -73,7 +73,7 @@ pub(crate) async fn run(
             SwarmConfigCommands::Add(params) => {
                 let id = swarm_id(config, params.swarm.as_deref())?;
                 let client = connection.client().await?;
-                add(&swarms, config, &id, params, client, link_context, toc_cache, non_interactive).await
+                add(&swarms, config, &id, params, client, link_context, non_interactive).await
             }
             SwarmConfigCommands::Remove { names, swarm } => {
                 remove(&swarms, &swarm_id(config, swarm.as_deref())?, names, non_interactive).await
@@ -527,7 +527,6 @@ async fn add(
     params: &SwarmAddParameters,
     client: &crazyflie_connection_server::Client,
     link_context: &LinkContext,
-    toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     let candidates: Vec<String> = match &params.scan {
@@ -556,7 +555,7 @@ async fn add(
         }
         None => params.uris.clone(),
     };
-    add_to(swarms, config, id, params, candidates, None, client, link_context, toc_cache, non_interactive).await
+    add_to(swarms, config, id, params, candidates, None, client, link_context, non_interactive).await
 }
 
 /// Add the Crazyflie found on USB (`usb`), whose config has the radio URI
@@ -570,11 +569,10 @@ pub(crate) async fn add_from_usb(
     radio_uri: String,
     client: &crazyflie_connection_server::Client,
     link_context: &LinkContext,
-    toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     let swarms = Swarms::open(config)?;
-    add_to(&swarms, config, id, params, vec![radio_uri], Some(usb), client, link_context, toc_cache, non_interactive)
+    add_to(&swarms, config, id, params, vec![radio_uri], Some(usb), client, link_context, non_interactive)
         .await
 }
 
@@ -616,7 +614,6 @@ async fn add_to(
     usb: Option<&str>,
     client: &crazyflie_connection_server::Client,
     link_context: &LinkContext,
-    toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     if params.name.is_some() && candidates.len() > 1 {
@@ -633,7 +630,7 @@ async fn add_to(
     if reprogramming && !client.is_in_process() {
         bail!(CliError::Connection(
             "reprogramming (--base-address, --set-address, --set-channel) does not go through a connection server \
-             yet (it writes the EEPROM). Use --connection direct"
+             yet (the server can't reboot a Crazyflie onto another link). Use --connection direct"
                 .to_string()
         ));
     }
@@ -742,7 +739,7 @@ async fn add_to(
     for p in &planned {
         let result =
             if reprogramming {
-                reprogram::reprogram(client, link_context, config, toc_cache.clone(), usb, p).await
+                reprogram::reprogram(client, link_context, config, usb, p).await
             } else {
                 Ok(())
             };

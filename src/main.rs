@@ -2,7 +2,7 @@ use crate::modules::bootloader;
 use crate::utils::deckctrl::DeckConfig;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_num::maybe_hex;
-use crazyflie_lib::subsystems::memory::{MemoryDevice, MemoryType, RadioSpeed, RawMemory};
+use crazyflie_connection_server::memory::{MemoryInfo, MemoryType, RawMemory};
 use crazyflie_lib::TocCache;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
@@ -69,9 +69,9 @@ struct MemoryRow {
 }
 
 impl MemoryTypeArg {
-    /// Convert to the `crazyflie_lib` memory type. Defined here (not on the
-    /// CLI type itself) so the CLI module stays free of the lib dependency.
-    fn to_lib(self) -> MemoryType {
+    /// Convert to the client API's memory type. Defined here (not on the
+    /// CLI type itself) so the CLI module stays free of the API dependency.
+    fn to_memory_type(self) -> MemoryType {
         match self {
             MemoryTypeArg::EepromConfig => MemoryType::EEPROMConfig,
             MemoryTypeArg::OneWire => MemoryType::OneWire,
@@ -94,18 +94,18 @@ impl MemoryTypeArg {
 }
 
 fn resolve_memory_ref<'a>(
-    memories: &[&'a MemoryDevice],
+    memories: &[&'a MemoryInfo],
     reference: &MemoryRef,
-) -> Result<&'a MemoryDevice> {
+) -> Result<&'a MemoryInfo> {
     match reference {
         MemoryRef::Id(id) => memories
             .iter()
-            .find(|m| m.memory_id == *id)
+            .find(|m| m.id == *id)
             .copied()
             .ok_or_else(|| CliError::NotFound(format!("memory with ID {}", id)).into()),
         MemoryRef::Type(mt, instance) => {
-            let lib_mt = mt.to_lib();
-            let matches: Vec<&MemoryDevice> = memories
+            let lib_mt = mt.to_memory_type();
+            let matches: Vec<&MemoryInfo> = memories
                 .iter()
                 .filter(|m| m.memory_type == lib_mt)
                 .copied()
@@ -306,6 +306,10 @@ fn uses_client(cmd: &Commands) -> bool {
         | Commands::Param { .. }
         | Commands::Platform { command: PlatformCommands::Info | PlatformCommands::Reboot | PlatformCommands::PowerOff | PlatformCommands::Sleep | PlatformCommands::Wakeup }
         | Commands::Debug { .. }
+        | Commands::Deck { .. }
+        | Commands::Lh { command: LighthouseCommands::Config { .. } }
+        | Commands::Config { .. }
+        | Commands::Mem { .. }
         | Commands::Hlc { .. }
         | Commands::Server { .. } => true,
         _ => false,
@@ -441,8 +445,18 @@ async fn radio_uri_from_usb(
     radio_uri
 }
 
+/// The radio URI in the EEPROM config of a Crazyflie on this computer's USB.
 async fn read_radio_uri(cf: &crazyflie_lib::Crazyflie) -> Result<String> {
-    let eeprom = modules::config::open(cf).await?;
+    use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed};
+    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
+    let Some(device) = memories.first() else {
+        bail!("No EEPROMConfig memory found");
+    };
+    let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>((*device).clone()).await {
+        Some(Ok(eeprom)) => eeprom,
+        Some(Err(e)) => bail!("Could not read the EEPROM config: {}", e),
+        None => bail!("No EEPROM config memory found"),
+    };
 
     let speed_str = match eeprom.get_radio_speed() {
         RadioSpeed::R250Kbps => "250K",
@@ -451,7 +465,9 @@ async fn read_radio_uri(cf: &crazyflie_lib::Crazyflie) -> Result<String> {
     };
     let address_str = eeprom.get_radio_address().iter().map(|b| format!("{:02X}", b)).collect::<String>();
 
-    Ok(format!("radio://0/{}/{}/{}", eeprom.get_radio_channel(), speed_str, address_str))
+    let uri = format!("radio://0/{}/{}/{}", eeprom.get_radio_channel(), speed_str, address_str);
+    cf.memory.close_memory(eeprom).await?;
+    Ok(uri)
 }
 
 #[tokio::main]
@@ -976,7 +992,7 @@ async fn run() -> Result<()> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let mut eeprom_memory = modules::config::open(cf).await?;
 
@@ -1009,7 +1025,7 @@ async fn run() -> Result<()> {
                             Ok(s) if s <= 2 => s,
                             _ => bail!(CliError::InvalidValue(format!("speed '{}' must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)", value))),
                           };
-                          eeprom_memory.set_radio_speed(RadioSpeed::try_from(speed)?);
+                          eeprom_memory.set_radio_speed(speed);
                           println!("Set radio speed to {}", speed);
                         }
                         "pitch_trim" => {
@@ -1038,7 +1054,7 @@ async fn run() -> Result<()> {
 
                 }
                 ConfigCommands::Display => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -1046,7 +1062,7 @@ async fn run() -> Result<()> {
                       bail!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
                     }
 
-                    modules::memory::display(&cf, memories[0].clone()).await?;
+                    modules::memory::display(cf, memories[0]).await?;
 
                   }
             }
@@ -1114,18 +1130,16 @@ async fn run() -> Result<()> {
         Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memory = cf.memory.get_memories(None);
 
                     if csv {
                         println!("id,type,size_bytes,serial");
                         for mem in memory {
-                            let serial = mem.serial.as_ref()
-                                .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
-                                .unwrap_or_default();
+                            let serial = mem.serial.clone().unwrap_or_default();
                             utils::display::csv_row(&[
-                                &mem.memory_id.to_string(),
+                                &mem.id.to_string(),
                                 &format!("{:?}", mem.memory_type),
                                 &mem.size.to_string(),
                                 &serial,
@@ -1135,14 +1149,10 @@ async fn run() -> Result<()> {
                         let rows: Vec<MemoryRow> = memory
                             .iter()
                             .map(|mem| MemoryRow {
-                                id: mem.memory_id.to_string(),
+                                id: mem.id.to_string(),
                                 memory_type: format!("{:?}", mem.memory_type),
                                 size: format!("{} (0x{:x})", mem.size, mem.size),
-                                serial: mem
-                                    .serial
-                                    .as_ref()
-                                    .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
-                                    .unwrap_or_default(),
+                                serial: mem.serial.clone().unwrap_or_default(),
                             })
                             .collect();
 
@@ -1156,17 +1166,14 @@ async fn run() -> Result<()> {
 
                 }
                 MemoryCommands::Read(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
-                    let mem_id = device.memory_id;
+                    let mem_id = device.id;
 
-                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(device).await {
-                      Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
-                      None => bail!("Memory ID={} not found", mem_id),
-                    };
+                    let raw_access_memory = cf.memory.open_memory::<RawMemory>(&device).await
+                      .with_context(|| format!("Could not access memory ID={} as raw memory", mem_id))?;
 
                     if let Some(output_file) = &var.output {
 
@@ -1200,17 +1207,14 @@ async fn run() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
-                    let mem_id = device.memory_id;
+                    let mem_id = device.id;
 
-                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(device).await {
-                      Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
-                      None => bail!("Memory ID={} not found", mem_id),
-                    };
+                    let raw_access_memory = cf.memory.open_memory::<RawMemory>(&device).await
+                      .with_context(|| format!("Could not access memory ID={} as raw memory", mem_id))?;
 
                     let progress_bar = utils::display::get_progressbar(data.len(), None);
                     let pb = progress_bar.clone();
@@ -1235,15 +1239,15 @@ async fn run() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
 
-                    modules::memory::verify(&cf, device, var.offset, &expected).await?;
+                    modules::memory::verify(cf, &device, var.offset, &expected).await?;
                 }
                 MemoryCommands::Display(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1252,7 +1256,7 @@ async fn run() -> Result<()> {
                       None => {
                         require_arg(non_interactive, "<mem>")?;
                         let options: Vec<String> = memories.iter().map(|mem| {
-                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
+                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
                         }).collect();
 
                         let selected_option = Select::new("Select a memory:", options)
@@ -1266,18 +1270,18 @@ async fn run() -> Result<()> {
                           .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
                         memories.iter()
-                          .find(|m| m.memory_id == selected_id)
+                          .find(|m| m.id == selected_id)
                           .copied()
                           .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", selected_id))?
                           .clone()
                       }
                     };
 
-                    modules::memory::display(&cf, device).await?;
+                    modules::memory::display(cf, &device).await?;
 
                   }
                 MemoryCommands::Erase(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1286,7 +1290,7 @@ async fn run() -> Result<()> {
                       None => {
                         require_arg(non_interactive, "<mem>")?;
                         let options: Vec<String> = memories.iter().map(|mem| {
-                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
+                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
                         }).collect();
 
                         let selected_option = Select::new("Select a memory:", options)
@@ -1300,14 +1304,14 @@ async fn run() -> Result<()> {
                           .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
                         memories.iter()
-                          .find(|m| m.memory_id == selected_id)
+                          .find(|m| m.id == selected_id)
                           .copied()
                           .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", selected_id))?
                           .clone()
                       }
                     };
 
-                    modules::memory::erase(&cf, device).await?;
+                    modules::memory::erase(cf, &device).await?;
 
                   }
             }
@@ -1553,29 +1557,29 @@ async fn run() -> Result<()> {
                     (Some(id), _) => configs::show(&LhConfigs::open(&config)?, id, csv).await?,
                     (None, Some(file_path)) => modules::lighthouse::display_file(file_path, csv)?,
                     (None, None) => {
-                        let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                        let cf = connection.attach(uri.as_str(), args.debug).await?;
                         modules::lighthouse::display(cf, csv, non_interactive).await?;
                     }
                 },
                 LighthouseConfigCommands::Write(params) => {
                     let (file, _) =
                         configs::source(&config, params.id.as_deref(), params.input.as_deref(), !non_interactive).await?;
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::lighthouse::write(cf, &file, non_interactive).await?;
                 }
                 LighthouseConfigCommands::Read(params) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::lighthouse::read(cf, params.output.as_deref(), non_interactive).await?;
                 }
                 LighthouseConfigCommands::Check(params) => {
                     let (file, source) =
                         configs::source(&config, params.id.as_deref(), params.input.as_deref(), false).await?;
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::lighthouse::check(cf, &file, &source, csv, non_interactive).await?;
                 }
                 LighthouseConfigCommands::Save(params) => {
                     let lh_configs = LhConfigs::open(&config)?;
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     configs::save(&lh_configs, cf, &params.id, params.name.as_deref(), params.force, non_interactive).await?;
                 }
                 LighthouseConfigCommands::Import(params) => {
@@ -1634,7 +1638,7 @@ async fn run() -> Result<()> {
             println!("Found Crazyflie on USB: {}", usb_uri);
             let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache.clone(), args.debug, preserve_console).await?;
             let client = connection.client().await?;
-            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, client, &link_context, toc_cache, non_interactive).await?;
+            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, client, &link_context, non_interactive).await?;
         }
         Commands::Swarm { command } => {
             modules::swarm::run(&mut config, command, &mut connection, &link_context, toc_cache, non_interactive, csv).await?;
@@ -1645,8 +1649,8 @@ async fn run() -> Result<()> {
         Commands::Deck { command } => {
             match command {
                 DeckCommands::List => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::deck::list(&cf, csv).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
+                    modules::deck::list(cf, csv).await?;
                 }
             }
         }

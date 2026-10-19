@@ -68,8 +68,7 @@ async fn platform_info(runner: &Runner<'_>, csv: bool) -> Result<()> {
 
 pub async fn deck(runner: &Runner<'_>, command: &SwarmDeckCommands, csv: bool) -> Result<()> {
     let SwarmDeckCommands::List = command;
-    runner.direct("swarm deck list")?;
-    let results = runner.connected("Reading", async |cf, _| Ok(deck::decks(cf).await)).await;
+    let results = runner.attached("Reading", async |cf, _| Ok(deck::decks(cf).await)).await;
     let (done, outcome) = split(results);
     if csv {
         csv_row(&["cf", "uri", "name", "revision", "serial"]);

@@ -22,7 +22,6 @@
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -271,21 +270,6 @@ impl<'a> Runner<'a> {
             let result = op(&attached.cf, target).await;
             attached.disconnect().await;
             result
-        })
-        .await
-    }
-
-    /// [`Runner::attached`] with the crazyflie-lib `Crazyflie`, for commands
-    /// that the client API doesn't cover yet. Direct mode only: check with
-    /// [`Runner::direct`] first.
-    pub async fn connected<T>(
-        &self,
-        label: &str,
-        op: impl AsyncFn(&crazyflie_lib::Crazyflie, &Target) -> Result<T>,
-    ) -> Vec<Result<T>> {
-        self.attached(label, async |cf: &Crazyflie, target: &Target| {
-            let lib: Arc<crazyflie_lib::Crazyflie> = crate::utils::connection::lib(cf, label)?;
-            op(&lib, target).await
         })
         .await
     }
