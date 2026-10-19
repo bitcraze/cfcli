@@ -122,6 +122,16 @@ pub async fn run(listen: &str, linger: u64) -> Result<()> {
     Ok(())
 }
 
+/// Whether the Crazyflies are reached through a connection server outside
+/// cfcli: `local`, an address, or `auto` with a server on this computer.
+pub async fn through_server(mode: &str) -> bool {
+    match mode {
+        "direct" | "shared" => false,
+        "auto" | "" => crazyflie_connection_server::local_server_running().await,
+        _ => true,
+    }
+}
+
 /// Fail unless a command that uses crazyflie-lib directly can open the
 /// Crazyradios: in direct mode, or in auto mode with no server running.
 pub async fn require_direct(mode: &str) -> Result<()> {

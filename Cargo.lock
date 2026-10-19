@@ -767,6 +767,8 @@ name = "crazyflie-connection-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
+ "cfloader",
  "crazyflie-connection-protocol",
  "crazyflie-lib",
  "futures",

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use crazyflie_lib::Crazyflie;
 use crazyflie_lib::subsystems::memory::{DeckMemory, MemoryDevice, MemoryType, OwMemory, RawMemory};
 use tokio::time::{sleep, Duration};
@@ -710,6 +710,83 @@ pub async fn flash(link_context: &LinkContext, uri: &str, toc_cache: ConfigTocCa
   }
 
   flash_decks(link_context, uri, toc_cache, &firmware_upgrade, DeckOutput::Terminal).await
+}
+
+/// Flash the STM32 and nRF51 firmware of an upgrade as a job on a connection
+/// server, which shares its Crazyradio with its other connections. The nRF51
+/// bootloader and softdevice and deck firmware aren't flashed this way yet.
+pub async fn flash_through_server(
+    client: &crazyflie_connection_server::Client,
+    uri: &str,
+    upgrade: &FirmwareUpgrade,
+) -> Result<()> {
+    use crazyflie_connection_server::{FlashImage, FlashStart};
+
+    if upgrade.nrf51_softdevice().is_some() {
+        bail!(CliError::Connection(
+            "the nRF51 bootloader and softdevice can't be flashed through a connection server yet. Use --connection direct"
+                .to_string()
+        ));
+    }
+    if uri.starts_with("usb://") {
+        bail!(CliError::InvalidValue("stm32-fw / nrf51-fw flashing requires a radio URI".to_string()));
+    }
+    let images: Vec<FlashImage> = upgrade
+        .get_firmware_for_bootloader()
+        .into_iter()
+        .filter(|firmware| firmware.file_type == "fw")
+        .map(|firmware| FlashImage {
+            target: firmware.target,
+            start: firmware.start_override.map(|start| match start {
+                FlashStartOverride::Address(address) => FlashStart::Address(address),
+                FlashStartOverride::Page(page) => FlashStart::Page(page),
+            }),
+            data: firmware.data,
+        })
+        .collect();
+
+    if !images.is_empty() {
+        // One bar per image, like the direct path; the job's other steps are printed
+        let mut bar: Option<(String, indicatif::ProgressBar)> = None;
+        let finish = |bar: &mut Option<(String, indicatif::ProgressBar)>| {
+            if let Some((target, done)) = bar.take() {
+                finish_progress(&done, flashed_message(&target));
+            }
+        };
+        client
+            .flash(uri, images, |progress| match progress.step.strip_prefix("Flashing ") {
+                Some(target) => {
+                    if bar.as_ref().is_none_or(|(current, _)| current != target) {
+                        finish(&mut bar);
+                        bar = Some((target.to_owned(), get_progressbar(progress.total as usize, Some(target))));
+                    }
+                    if let Some((_, bar)) = &bar {
+                        bar.set_position(progress.done);
+                    }
+                }
+                None => {
+                    finish(&mut bar);
+                    println!("{}", progress.step);
+                }
+            })
+            .await
+            .with_context(|| format!("Flashing {} through the connection server", uri))?;
+        finish(&mut bar);
+    }
+
+    let decks = upgrade.get_firmware_for_decks().len() + upgrade.get_firmware_for_deckctrl().len();
+    if decks > 0 {
+        println!("Deck firmware isn't flashed through a connection server yet ({} skipped). Flash it with --connection direct.", decks);
+    }
+    Ok(())
+}
+
+fn flashed_message(target: &str) -> String {
+    match target {
+        "stm32" => "STM32F405 flashed successfully!".to_string(),
+        "nrf51" => "nRF51822 flashed successfully!".to_string(),
+        other => format!("{} flashed successfully!", other),
+    }
 }
 
 /// Flash the DeckCtrl and deck firmware of an upgrade, to a Crazyflie that

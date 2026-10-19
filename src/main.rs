@@ -640,7 +640,10 @@ async fn run() -> Result<()> {
     let link_context = crazyflie_lib::crazyflie_link::LinkContext::new();
 
     let mode = utils::connection::mode(args.connection.as_deref(), &config);
-    let direct_only = uses_selected_uri(&args.command) && !uses_client(&args.command);
+    // With a connection server holding the Crazyradios, it flashes as a job
+    let flash_through_server = matches!(&args.command, Commands::Bootload { command: BootloadCommands::Flash(params) } if !params.cold)
+        && utils::connection::through_server(&mode).await;
+    let direct_only = uses_selected_uri(&args.command) && !uses_client(&args.command) && !flash_through_server;
     if direct_only {
         utils::connection::require_direct(&mode).await?;
     }
@@ -1670,6 +1673,15 @@ async fn run() -> Result<()> {
                           .to_string()
                       }
                     }
+                  } else if flash_through_server {
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
+                    let platform = cf
+                      .platform
+                      .device_type_name()
+                      .map(str::to_string)
+                      .ok_or_else(|| anyhow::anyhow!("The connection server doesn't know the platform of {}", uri))?;
+                    cf.detach();
+                    platform
                   } else {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache.clone(), args.debug).await?;
                     let platform = cf.platform.device_type_name().await?;
@@ -1688,6 +1700,8 @@ async fn run() -> Result<()> {
                     println!("No valid targets to flash, exiting!");
                   } else if !utils::flash_source::confirm_nrf51_bootloader(&upgrade, 1, source.accept_bootloader_risk, non_interactive)? {
                     println!("Nothing flashed");
+                  } else if flash_through_server {
+                    modules::bootloader::flash_through_server(connection.client().await?, uri.as_str(), &upgrade).await?;
                   } else {
                     modules::bootloader::flash(
                       &link_context,
