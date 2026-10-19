@@ -310,6 +310,7 @@ fn uses_client(cmd: &Commands) -> bool {
         | Commands::Lh { command: LighthouseCommands::Config { .. } }
         | Commands::Config { .. }
         | Commands::Mem { .. }
+        | Commands::Loco { .. }
         | Commands::Hlc { .. }
         | Commands::Server { .. } => true,
         _ => false,
@@ -1404,22 +1405,22 @@ async fn run() -> Result<()> {
 
             match command {
                 LocoCommands::Display => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::lps::display(&cf, csv, non_interactive).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
+                    modules::lps::display(cf, csv, non_interactive).await?;
                 }
                 LocoCommands::Config { command } => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     match command {
                         LocoConfigCommands::Display(_) => {
-                            modules::lps::display(&cf, csv, non_interactive).await?;
+                            modules::lps::display(cf, csv, non_interactive).await?;
                         }
                         LocoConfigCommands::Read(params) => {
-                            modules::lps::read(&cf, params.output.as_deref(), non_interactive).await?;
+                            modules::lps::read(cf, params.output.as_deref(), non_interactive).await?;
                         }
                         LocoConfigCommands::Write(params) => {
                             modules::lps::write(
-                                &cf,
+                                cf,
                                 params.input.as_deref(),
                                 !params.no_verify,
                                 std::time::Duration::from_secs(params.verify_timeout),
@@ -1484,15 +1485,13 @@ async fn run() -> Result<()> {
                     println!("Stop command sent!");
                 }
                 HlCommands::Trajectory { command: traj_cmd } => {
-                    // Trajectories use the memory subsystem, not in the client API yet.
-                    let cf = utils::connection::lib(cf, "hlc trajectory")?;
                     match traj_cmd {
                         TrajectoryCommands::Upload(params) => {
-                            modules::trajectory::upload(&cf, &params.input, params.trajectory_id, params.offset).await?;
+                            modules::trajectory::upload(cf, &params.input, params.trajectory_id, params.offset).await?;
                         }
                         TrajectoryCommands::Run(params) => {
                             modules::trajectory::run(
-                                &cf,
+                                cf,
                                 params.trajectory_id,
                                 params.time_scale,
                                 params.relative_position,
@@ -1503,7 +1502,7 @@ async fn run() -> Result<()> {
                         TrajectoryCommands::Display(params) => {
                             // File case handled above, this is memory display
                             if params.file.is_none() {
-                                modules::trajectory::display_memory(&cf).await?;
+                                modules::trajectory::display_memory(cf).await?;
                             }
                         }
                     }

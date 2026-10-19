@@ -1,10 +1,8 @@
 //! Trajectory upload module for cfcli
 
 use anyhow::{bail, Context, Result};
-use crazyflie_lib::{
-    subsystems::memory::{MemoryType, Poly, Poly4D, TrajectoryMemory},
-    Crazyflie,
-};
+use crazyflie_connection_server::memory::{MemoryType, Poly, Poly4D, TrajectoryMemory, POLY4D_BYTES};
+use crazyflie_connection_server::Crazyflie;
 use serde::Deserialize;
 
 use crate::utils::display::get_progressbar;
@@ -71,18 +69,10 @@ pub async fn upload(cf: &Crazyflie, file_path: &str, trajectory_id: u8, offset: 
         None => bail!("No trajectory memory found on Crazyflie"),
     };
 
-    println!("Found trajectory memory (ID: {})", trajectory_mem_device.memory_id);
+    println!("Found trajectory memory (ID: {})", trajectory_mem_device.id);
 
-    // Open the trajectory memory
-    let trajectory_mem: TrajectoryMemory = match cf
-        .memory
-        .open_memory((*trajectory_mem_device).clone())
-        .await
-    {
-        Some(Ok(m)) => m,
-        Some(Err(e)) => bail!("Failed to initialize trajectory memory: {}", e),
-        None => bail!("Failed to open trajectory memory"),
-    };
+    let trajectory_mem: TrajectoryMemory =
+        cf.memory.open_memory(trajectory_mem_device).await.context("Failed to open trajectory memory")?;
 
     // Convert segments to Poly4D
     let poly4d_segments: Vec<Poly4D> = trajectory_file
@@ -91,8 +81,7 @@ pub async fn upload(cf: &Crazyflie, file_path: &str, trajectory_id: u8, offset: 
         .map(Poly4D::from)
         .collect();
 
-    // Calculate total bytes to write (each Poly4D is 132 bytes)
-    let total_bytes = poly4d_segments.len() * 132;
+    let total_bytes = poly4d_segments.len() * POLY4D_BYTES;
 
     // Upload the trajectory with progress
     println!(
@@ -130,9 +119,6 @@ pub async fn upload(cf: &Crazyflie, file_path: &str, trajectory_id: u8, offset: 
         )
         .await
         .with_context(|| "Failed to define trajectory")?;
-
-    // Close the memory
-    cf.memory.close_memory(trajectory_mem).await?;
 
     println!("Trajectory uploaded and defined successfully!");
     println!(
@@ -252,12 +238,12 @@ pub async fn display_memory(cf: &Crazyflie) -> Result<()> {
     println!();
 
     for mem in memories {
-        println!("Memory ID: {}", mem.memory_id);
+        println!("Memory ID: {}", mem.id);
         println!("  Type: {:?}", mem.memory_type);
         println!("  Size: {} bytes ({:.1} KB)", mem.size, mem.size as f32 / 1024.0);
 
         // Calculate how many Poly4D segments can fit
-        let max_segments = mem.size / 132;
+        let max_segments = mem.size as usize / POLY4D_BYTES;
         println!("  Max Poly4D segments: {}", max_segments);
 
         // Estimate max trajectory duration (assuming ~1s per segment average)
