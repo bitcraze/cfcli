@@ -11,11 +11,12 @@
 //! commands still done with crazyflie-lib or cfloader directly (bootloader,
 //! memories) reach them on the same one. Through a server the server picks.
 //!
-//! Each Crazyradio handles [`PER_RADIO`] of the Crazyflies at a time (through
-//! a server: each channel). One at a time would take minutes for a big swarm,
-//! and all at once leaves each link so little of the radio's time that
-//! connecting starts to time out. The results come back in the order of the
-//! swarm file, whatever order the Crazyflies answer in.
+//! A command runs on all the Crazyflies at once, also the ones that share a
+//! Crazyradio. A few at a time is slower: the ones already connected keep
+//! polling the radio while the next ones connect (25 on one radio: 3.0 s at 8
+//! at a time, 1.4 s all at once, 2026-10-19). Only the bootloader steps run a
+//! few per radio at a time ([`Runner::each_at_most`]). The results come back
+//! in the order of the swarm file, whatever order the Crazyflies answer in.
 //!
 //! A Crazyflie that fails doesn't stop the others. [`Outcome::finish`] turns
 //! the failures into the command's exit code.
@@ -35,9 +36,6 @@ use crate::error::{self, CliError};
 use crate::utils::display::csv_row;
 use crate::utils::radio::{self, RadioUri};
 use crate::Config;
-
-/// Crazyflies handled at the same time on each Crazyradio.
-const PER_RADIO: usize = 8;
 
 /// How long a rebooted Crazyflie gets to show up (on its new channel or
 /// address).
@@ -212,10 +210,10 @@ impl<'a> Runner<'a> {
         futures::future::join_all(runs).await.into_iter().flatten().collect()
     }
 
-    /// Run `op` on every target and return the results in target order.
-    /// `label` is shown next to the progress bar.
+    /// Run `op` on every target at once and return the results in target
+    /// order. `label` is shown next to the progress bar.
     pub async fn each<T>(&self, label: &str, op: impl AsyncFn(&Target) -> Result<T>) -> Vec<Result<T>> {
-        self.each_at_most(label, PER_RADIO, op).await
+        self.each_at_most(label, usize::MAX, op).await
     }
 
     /// [`Runner::each`] with at most `per_radio` targets at a time on each

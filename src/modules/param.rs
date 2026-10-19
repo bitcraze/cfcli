@@ -61,7 +61,7 @@ pub async fn csv_fields(cf: &Crazyflie, name: &str) -> Result<Vec<String>> {
     let value: Value = get_param(cf, name).await?;
     let writable = if cf.param.is_writable(name)? { "RW" } else { "RO" };
 
-    let (persistent, default_s, stored_s) = if cf.param.is_persistent(name)? {
+    let (persistent, default_s, stored_s) = if cf.param.is_persistent(name).await? {
         match persistent_state(cf, name).await {
             Ok(state) => {
                 let default = value_to_csv_string(&state.default_value);
@@ -124,7 +124,7 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
         let value: Value = get_param(cf, &name).await?;
         let writable = if cf.param.is_writable(&name)? { "RW" } else { "RO" };
 
-        let (persistent, value_str) = if cf.param.is_persistent(&name)? {
+        let (persistent, value_str) = if cf.param.is_persistent(&name).await? {
             match persistent_state(cf, &name).await {
                 Ok(state) if state.is_stored => {
                     let stored_val = state.stored_value.unwrap();
@@ -183,7 +183,7 @@ pub async fn get_rows(cf: &Crazyflie, names: &str) -> Result<Vec<ParamGetRow>> {
         let value: Value = get_param(cf, name).await?;
         let writable = if cf.param.is_writable(&name)? { "RW" } else { "RO" };
 
-        let (persistent, default_str, stored_str) = if cf.param.is_persistent(name)? {
+        let (persistent, default_str, stored_str) = if cf.param.is_persistent(name).await? {
             match persistent_state(cf, name).await {
                 Ok(state) => {
                     let stored = if state.is_stored { "Yes".to_string() } else { "No".to_string() };
@@ -259,7 +259,7 @@ pub async fn pick_names(cf: &Crazyflie, message: &str) -> Result<String> {
 pub async fn pick_persistent(cf: &Crazyflie, message: &str) -> Result<String> {
     let mut persistent = Vec::new();
     for name in cf.param.names() {
-        if cf.param.is_persistent(&name)? {
+        if cf.param.is_persistent(&name).await? {
             persistent.push(name);
         }
     }
