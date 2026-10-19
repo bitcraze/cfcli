@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Result};
+use crazyflie_connection_server::Client;
 use crazyflie_lib::crazyflie_link::LinkContext;
 use inquire::Confirm;
 use tabled::Tabled;
@@ -25,7 +26,7 @@ use crate::error::CliError;
 use crate::modules::{bootloader, config};
 use crate::utils::display::{print_table, table};
 use crate::utils::radio::RadioUri;
-use crate::{Config, ConfigTocCache, SwarmRechannelParameters};
+use crate::{Config, SwarmRechannelParameters};
 
 /// The lower channels are the more crowded ones (Wi-Fi), so `--count`
 /// starts here and goes down.
@@ -109,8 +110,8 @@ pub(super) async fn rechannel(
     swarms: &Swarms,
     config: &mut Config,
     params: &SwarmRechannelParameters,
+    client: &Client,
     link_context: &LinkContext,
-    toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     let target = &params.target;
@@ -168,6 +169,12 @@ pub(super) async fn rechannel(
     if params.dry_run {
         return Ok(());
     }
+    if !client.is_in_process() {
+        bail!(CliError::Connection(
+            "swarm rechannel does not go through a connection server yet (it writes the EEPROM). Use --connection direct"
+                .to_string()
+        ));
+    }
     if !params.yes {
         crate::require_arg(non_interactive, "--yes")?;
         let question = format!("Reprogram {}?", super::crazyflies(moves.len()));
@@ -184,20 +191,20 @@ pub(super) async fn rechannel(
         moved.units[m.unit].uri = m.new_uri.clone();
     }
     let units: Vec<usize> = moves.iter().map(|m| m.unit).collect();
-    let on_old = Runner::new(link_context, config, toc_cache.clone(), &swarm, &units).await?;
-    let on_new = Runner::new(link_context, config, toc_cache.clone(), &moved, &units).await?;
+    let on_old = Runner::new(client, link_context, config, &swarm, &units).await?;
+    let on_new = Runner::new(client, link_context, config, &moved, &units).await?;
     let index_of = |target: &Target| moves.iter().position(|m| m.name == target.name).expect("a moving Crazyflie");
 
     // 1. Where each one is now.
-    let answers_old = answering(&on_old, "Checking", link_context).await;
-    let answers_new = answering(&on_new, "Checking", link_context).await;
+    let answers_old = answering(&on_old).await?;
+    let answers_new = answering(&on_new).await?;
 
     // 2. Reprogram the ones on their old channel.
     let mut results: Vec<Option<Result<String>>> = std::iter::repeat_with(|| None).take(moves.len()).collect();
     let to_write: Vec<usize> = (0..moves.len()).filter(|i| answers_old[*i]).collect();
     let mut rebooted = Vec::new();
     if !to_write.is_empty() {
-        let writer = runner_for(link_context, config, &toc_cache, &swarm, &moves, &to_write).await?;
+        let writer = runner_for(client, link_context, config, &swarm, &moves, &to_write).await?;
         let written = writer
             .connected("Reprogramming", async |cf, target| {
                 config::write_radio_channel(cf, moves[index_of(target)].to).await
@@ -212,7 +219,7 @@ pub(super) async fn rechannel(
         }
         // 3. Reboot them, so that the firmware picks up the new channel.
         if !done.is_empty() {
-            let rebooter = runner_for(link_context, config, &toc_cache, &swarm, &moves, &done).await?;
+            let rebooter = runner_for(client, link_context, config, &swarm, &moves, &done).await?;
             let reboots = rebooter
                 .each("Rebooting", async |t| bootloader::reboot(link_context, &t.link_uri).await)
                 .await;
@@ -228,9 +235,9 @@ pub(super) async fn rechannel(
     // 4. Look for the rebooted ones on their new channel.
     let mut found = vec![false; moves.len()];
     if !rebooted.is_empty() {
-        let finder = runner_for(link_context, config, &toc_cache, &moved, &moves, &rebooted).await?;
+        let finder = runner_for(client, link_context, config, &moved, &moves, &rebooted).await?;
         let looked = finder
-            .each("Looking on the new channels", async |t| Ok(t.wait_for(link_context).await))
+            .each("Looking on the new channels", async |t| Ok(finder.wait_for(t).await))
             .await;
         for (k, result) in looked.into_iter().enumerate() {
             found[rebooted[k]] = result.unwrap_or(false);
@@ -239,8 +246,8 @@ pub(super) async fn rechannel(
     let rebooted_not_found: Vec<usize> = rebooted.iter().copied().filter(|i| !found[*i]).collect();
     let mut still_on_old = vec![false; moves.len()];
     if !rebooted_not_found.is_empty() {
-        let checker = runner_for(link_context, config, &toc_cache, &swarm, &moves, &rebooted_not_found).await?;
-        for (k, answers) in answering(&checker, "Checking", link_context).await.into_iter().enumerate() {
+        let checker = runner_for(client, link_context, config, &swarm, &moves, &rebooted_not_found).await?;
+        for (k, answers) in answering(&checker).await?.into_iter().enumerate() {
             still_on_old[rebooted_not_found[k]] = answers;
         }
     }
@@ -330,25 +337,21 @@ fn follow_move(selected: &str, old_uri: &str, to: u8) -> Option<String> {
 
 /// A runner for some of the moving Crazyflies (indices into `moves`).
 async fn runner_for<'a>(
+    client: &Client,
     link_context: &'a LinkContext,
     config: &Config,
-    toc_cache: &ConfigTocCache,
     swarm: &super::store::Swarm,
     moves: &[Move],
     which: &[usize],
 ) -> Result<Runner<'a>> {
     let units: Vec<usize> = which.iter().map(|i| moves[*i].unit).collect();
-    Runner::new(link_context, config, toc_cache.clone(), swarm, &units).await
+    Runner::new(client, link_context, config, swarm, &units).await
 }
 
 /// Whether each of the runner's Crazyflies answers.
-async fn answering(runner: &Runner<'_>, label: &str, link_context: &LinkContext) -> Vec<bool> {
-    runner
-        .each(label, async |t| Ok(t.answers(link_context).await))
-        .await
-        .into_iter()
-        .map(|answers| answers.unwrap_or(false))
-        .collect()
+async fn answering(runner: &Runner<'_>) -> Result<Vec<bool>> {
+    let all: Vec<usize> = (0..runner.targets.len()).collect();
+    Ok(runner.answering(&all).await?.iter().map(Option::is_some).collect())
 }
 
 /// Reject duplicate channels, warn about channels that interfere.

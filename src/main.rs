@@ -304,7 +304,8 @@ fn uses_client(cmd: &Commands) -> bool {
         Commands::Console { .. }
         | Commands::Log { .. }
         | Commands::Param { .. }
-        | Commands::Platform { command: PlatformCommands::Info }
+        | Commands::Platform { command: PlatformCommands::Info | PlatformCommands::Reboot | PlatformCommands::PowerOff | PlatformCommands::Sleep | PlatformCommands::Wakeup }
+        | Commands::Debug { .. }
         | Commands::Hlc { .. }
         | Commands::Server { .. } => true,
         _ => false,
@@ -637,7 +638,7 @@ async fn run() -> Result<()> {
     #[cfg(all(unix, feature = "packet_capture"))]
     crazyflie_lib::crazyflie_link::capture::init();
 
-    let link_context = crazyflie_lib::crazyflie_link::LinkContext::new();
+    let link_context = Arc::new(crazyflie_lib::crazyflie_link::LinkContext::new());
 
     let mode = utils::connection::mode(args.connection.as_deref(), &config);
     // With a connection server holding the Crazyradios, it flashes as a job
@@ -662,7 +663,7 @@ async fn run() -> Result<()> {
     };
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
-    let mut connection = utils::connection::Connection::new(mode, toc_cache.clone());
+    let mut connection = utils::connection::Connection::new(mode, toc_cache.clone(), link_context.clone());
     let preserve_console = args.preserve_console;
     let timeout_ms = args.timeout;
     let non_interactive = args.non_interactive || !std::io::stdin().is_terminal();
@@ -1096,13 +1097,15 @@ async fn run() -> Result<()> {
                     }
                     let connected = client.list().await?;
                     if csv {
-                        println!("uri,clients");
+                        println!("uri,radio,clients");
                         for cf in &connected {
-                            utils::display::csv_row(&[&cf.uri, &cf.clients.join(";")]);
+                            let radio = cf.radio.map(|r| r.to_string()).unwrap_or_default();
+                            utils::display::csv_row(&[&cf.uri, &radio, &cf.clients.join(";")]);
                         }
                     } else {
                         for cf in &connected {
-                            println!("> {}{}", cf.uri, clients_suffix(&cf.clients));
+                            let radio = cf.radio.map(|r| format!(" (radio {})", r)).unwrap_or_default();
+                            println!("> {}{}{}", cf.uri, radio, clients_suffix(&cf.clients));
                         }
                     }
                 }
@@ -1328,17 +1331,24 @@ async fn run() -> Result<()> {
                     }
 
                 }
+                // The server checks that the Crazyflie answers first: the
+                // commands get no answer. A reboot returns once the firmware
+                // answers again.
                 PlatformCommands::Reboot => {
-                    modules::bootloader::reboot(&link_context, uri.as_str()).await?;
+                    connection.client().await?.reboot(uri.as_str()).await
+                        .context(CliError::Connection(format!("rebooting {}", uri)))?;
                 },
                 PlatformCommands::PowerOff => {
-                    crazyflie_lib::Crazyflie::power_off_all(&link_context, uri.as_str()).await?;
+                    connection.client().await?.power_off_all(uri.as_str()).await
+                        .context(CliError::Connection(format!("powering off {}", uri)))?;
                 },
                 PlatformCommands::Sleep => {
-                    crazyflie_lib::Crazyflie::power_off_stm32_domain(&link_context, uri.as_str()).await?;
+                    connection.client().await?.power_off_stm32_domain(uri.as_str()).await
+                        .context(CliError::Connection(format!("putting {} to sleep", uri)))?;
                 },
                 PlatformCommands::Wakeup => {
-                    crazyflie_lib::Crazyflie::power_on_stm32_domain(&link_context, uri.as_str()).await?;
+                    connection.client().await?.power_on_stm32_domain(uri.as_str()).await
+                        .context(CliError::Connection(format!("waking up {}", uri)))?;
                 }
                 PlatformCommands::Dfu => {
                     if !modules::bootloader::stm32_dfu(&link_context, uri.as_str()).await? {
@@ -1525,7 +1535,7 @@ async fn run() -> Result<()> {
         Commands::Debug { command } => {
             match command {
                 DebugCommands::Assert(params) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::debug::assert_dump(
                         cf,
                         std::time::Duration::from_millis(params.wait_timeout_ms),
@@ -1623,10 +1633,11 @@ async fn run() -> Result<()> {
             let usb_uri = &found[0];
             println!("Found Crazyflie on USB: {}", usb_uri);
             let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache.clone(), args.debug, preserve_console).await?;
-            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, &link_context, toc_cache, non_interactive).await?;
+            let client = connection.client().await?;
+            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, client, &link_context, toc_cache, non_interactive).await?;
         }
         Commands::Swarm { command } => {
-            modules::swarm::run(&mut config, command, &link_context, toc_cache, non_interactive, csv).await?;
+            modules::swarm::run(&mut config, command, &mut connection, &link_context, toc_cache, non_interactive, csv).await?;
         }
         Commands::Auth { command } => {
             modules::auth::run(command).await?;

@@ -9,14 +9,13 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::time::Duration;
 
-use anyhow::Result;
-use crazyflie_lib::Crazyflie;
+use anyhow::{Context, Result};
 use futures::stream::StreamExt;
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Outcome, Runner, SwarmRow};
 use crate::error::CliError;
-use crate::modules::{bootloader, debug, deck, log, param, platform};
+use crate::modules::{debug, deck, log, param, platform};
 use crate::utils::display::{csv_row, print_table, table, Column, StreamTable};
 use crate::{
     AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmLogCommands, SwarmParamCommands,
@@ -24,50 +23,29 @@ use crate::{
 };
 
 pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv: bool) -> Result<()> {
-    let link_context = runner.link_context();
-    // These commands are sent without waiting for an answer, so each
-    // Crazyflie is first checked to answer at all. Otherwise one that is
-    // switched off would be reported as done. A sleeping Crazyflie answers:
-    // its nRF51 stays on.
-    let (results, done) = match command {
+    // The commands get no answer, so the server first checks that each
+    // Crazyflie answers at all; one that is switched off fails instead of
+    // being reported as done. A sleeping Crazyflie answers: its nRF51 stays on.
+    let (label, done) = match command {
         SwarmPlatformCommands::Info => return platform_info(runner, csv).await,
-        SwarmPlatformCommands::Reboot => (
-            runner
-                .each("Rebooting", async |t| {
-                    t.check_answers(link_context).await?;
-                    bootloader::reboot(link_context, &t.link_uri).await
-                })
-                .await,
-            "rebooted",
-        ),
-        SwarmPlatformCommands::PowerOff => (
-            runner
-                .each("Powering off", async |t| {
-                    t.check_answers(link_context).await?;
-                    Ok(Crazyflie::power_off_all(link_context, &t.link_uri).await?)
-                })
-                .await,
-            "powered off",
-        ),
-        SwarmPlatformCommands::Sleep => (
-            runner
-                .each("Putting to sleep", async |t| {
-                    t.check_answers(link_context).await?;
-                    Ok(Crazyflie::power_off_stm32_domain(link_context, &t.link_uri).await?)
-                })
-                .await,
-            "asleep",
-        ),
-        SwarmPlatformCommands::Wakeup => (
-            runner
-                .each("Waking up", async |t| {
-                    t.check_answers(link_context).await?;
-                    Ok(Crazyflie::power_on_stm32_domain(link_context, &t.link_uri).await?)
-                })
-                .await,
-            "woken up",
-        ),
+        SwarmPlatformCommands::Reboot => ("Rebooting", "rebooted"),
+        SwarmPlatformCommands::PowerOff => ("Powering off", "powered off"),
+        SwarmPlatformCommands::Sleep => ("Putting to sleep", "asleep"),
+        SwarmPlatformCommands::Wakeup => ("Waking up", "woken up"),
     };
+    let client = runner.client();
+    let results = runner
+        .each(label, async |t| {
+            let uri = t.link_uri.as_str();
+            let sent = match command {
+                SwarmPlatformCommands::Reboot => client.reboot(uri).await,
+                SwarmPlatformCommands::PowerOff => client.power_off_all(uri).await,
+                SwarmPlatformCommands::Sleep => client.power_off_stm32_domain(uri).await,
+                _ => client.power_on_stm32_domain(uri).await,
+            };
+            sent.context(CliError::Connection(format!("{} {}", label.to_lowercase(), uri)))
+        })
+        .await;
     finish_actions(runner, results, done)
 }
 
@@ -90,6 +68,7 @@ async fn platform_info(runner: &Runner<'_>, csv: bool) -> Result<()> {
 
 pub async fn deck(runner: &Runner<'_>, command: &SwarmDeckCommands, csv: bool) -> Result<()> {
     let SwarmDeckCommands::List = command;
+    runner.direct("swarm deck list")?;
     let results = runner.connected("Reading", async |cf, _| Ok(deck::decks(cf).await)).await;
     let (done, outcome) = split(results);
     if csv {
@@ -264,7 +243,7 @@ struct AssertRow {
 pub async fn debug(runner: &Runner<'_>, command: &SwarmDebugCommands, csv: bool) -> Result<()> {
     let SwarmDebugCommands::Assert(AssertArgs { wait_timeout_ms }) = command;
     let wait = Duration::from_millis(*wait_timeout_ms);
-    let results = runner.connected("Reading", async |cf, _| debug::assert_info(cf, wait).await).await;
+    let results = runner.attached("Reading", async |cf, _| debug::assert_info(cf, wait).await).await;
     let (done, outcome) = split(results);
     if csv {
         csv_row(&["cf", "uri", "assert_info"]);

@@ -8,16 +8,18 @@
 //! busy, so flashing several at once wouldn't be faster. `info` shows which
 //! Crazyflies have bootloaders that take broadcast.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use crazyflie_connection_server::FlashProgress;
 use tabled::Tabled;
 
 use super::broadcast::{self, Job};
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::bootloader;
-use crate::utils::display::{csv_row, print_table, table};
+use crate::utils::display::{csv_row, finish_progress, get_progressbar, print_table, table};
 use crate::utils::firmware::FirmwareUpgrade;
 use crate::utils::flash_source;
 use crate::{ConfigTocCache, SwarmBootloadCommands, SwarmFlashParameters};
@@ -56,14 +58,14 @@ struct InfoRow {
 }
 
 async fn info(runner: &Runner<'_>, csv: bool) -> Result<()> {
-    let link_context = runner.link_context();
+    let link_context = runner.direct("swarm bootload info")?;
     // Not cut short by a timeout: that could leave a Crazyflie in its
     // bootloader, and every step of reading has its own.
     let results = runner
         .each_at_most("Reading", BOOTLOADER_PER_RADIO, async |t| {
             // Restarting a Crazyflie that isn't there fails with an unhelpful
             // link error.
-            t.check_answers(link_context).await?;
+            runner.check_answers(t).await?;
             bootloader::bootloader_versions(link_context, &t.link_uri).await
         })
         .await;
@@ -111,6 +113,13 @@ async fn flash(
     non_interactive: bool,
 ) -> Result<()> {
     let source = &params.source;
+    if params.unicast && !runner.is_direct() {
+        bail!(CliError::Connection(
+            "--unicast does not go through a connection server: the server flashes the Crazyflies whose \
+             bootloaders don't take broadcast one after another. Use --connection direct"
+                .to_string()
+        ));
+    }
     // Everything that comes from the command line first, before any
     // Crazyflie is touched.
     let only = params.platform.as_deref().map(flash_source::platform_name).transpose()?;
@@ -119,7 +128,9 @@ async fn flash(
 
     // The platform decides which files of a release a Crazyflie gets.
     let platforms = runner
-        .connected("Reading", async |cf, _| Ok(cf.platform.device_type_name().await?))
+        .attached("Reading", async |cf, _| {
+            cf.platform.device_type_name().map(str::to_string).ok_or_else(|| anyhow!("its platform is unknown"))
+        })
         .await;
     let to_flash: Vec<(usize, &str)> = platforms
         .iter()
@@ -204,7 +215,11 @@ async fn flash(
         }
     }
 
-    if params.unicast {
+    if !runner.is_direct() {
+        for (i, result) in flash_through_server(runner, &jobs).await? {
+            results[i] = Some(result);
+        }
+    } else if params.unicast {
         // One Crazyflie after another.
         let link_context = runner.link_context();
         for job in &jobs {
@@ -243,6 +258,101 @@ async fn flash(
     println!("Took {}:{:02}", elapsed / 60, elapsed % 60);
     let (_, outcome) = split(results);
     outcome.finish()
+}
+
+/// Flash the jobs through the connection server: a job on the server per
+/// platform, which broadcasts to the Crazyflies whose bootloaders take it and
+/// flashes the others one after another. Returns a result for each job, by
+/// target index. Fails before anything is flashed if a platform's firmware
+/// can't go through a server.
+async fn flash_through_server(runner: &Runner<'_>, jobs: &[Job<'_>]) -> Result<Vec<(usize, Result<String>)>> {
+    let mut platforms: Vec<(&str, Vec<crazyflie_connection_server::FlashImage>, Vec<&Job>)> = Vec::new();
+    for job in jobs {
+        match platforms.iter_mut().find(|(platform, _, _)| *platform == job.platform) {
+            Some((_, _, members)) => members.push(job),
+            None => platforms.push((&job.platform, bootloader::server_images(job.upgrade)?, vec![job])),
+        }
+    }
+
+    let mut results = Vec::new();
+    for (platform, images, members) in platforms {
+        bootloader::print_decks_skipped(members[0].upgrade);
+        let (by_radio, by_usb): (Vec<&Job>, Vec<&Job>) =
+            members.into_iter().partition(|job| runner.targets[job.index].is_radio());
+        for job in by_usb {
+            results.push((job.index, Err(anyhow!("stm32-fw / nrf51-fw flashing requires a radio URI"))));
+        }
+        if by_radio.is_empty() {
+            continue;
+        }
+        if images.is_empty() {
+            for job in by_radio {
+                results.push((job.index, Ok("nothing to flash through a connection server".to_string())));
+            }
+            continue;
+        }
+
+        println!();
+        println!("{} ({}) through the connection server", super::crazyflies(by_radio.len()), platform);
+        let uris: Vec<&str> = by_radio.iter().map(|job| runner.targets[job.index].link_uri.as_str()).collect();
+        let names: HashMap<String, &str> = by_radio
+            .iter()
+            .filter_map(|job| {
+                let target = &runner.targets[job.index];
+                Some((crazyflie_connection_server::normalize_uri(&target.link_uri).ok()?.key, target.name.as_str()))
+            })
+            .collect();
+        let mut shown = JobProgress { names, bar: None };
+        let flashed = runner
+            .client()
+            .flash_swarm(&uris, images, |progress| shown.show(progress))
+            .await
+            .context(CliError::Connection("flashing through the connection server".to_string()));
+        shown.finish();
+        for (job, result) in by_radio.into_iter().zip(flashed?) {
+            results.push((job.index, result.map(|how| format!("flashed ({})", how)).map_err(|reason| anyhow!(reason))));
+        }
+    }
+    Ok(results)
+}
+
+/// The progress of a flash job on a server: each step of each Crazyflie on
+/// a line, a bar while an image is written.
+struct JobProgress<'n> {
+    /// Each Crazyflie's name, by normalized URI.
+    names: HashMap<String, &'n str>,
+    /// The bar shown, with the Crazyflie and step it is for.
+    bar: Option<(Option<String>, String, indicatif::ProgressBar)>,
+}
+
+impl JobProgress<'_> {
+    fn show(&mut self, progress: FlashProgress) {
+        let label = match &progress.uri {
+            Some(uri) => format!("{}: {}", self.names.get(uri).copied().unwrap_or(uri), progress.step),
+            None => progress.step.clone(),
+        };
+        // Steps without a byte count report 0 or 1 of 1.
+        if progress.total <= 1 {
+            self.finish();
+            println!("{}", label);
+            return;
+        }
+        if self.bar.as_ref().is_none_or(|(uri, step, _)| *uri != progress.uri || *step != progress.step) {
+            self.finish();
+            let bar = get_progressbar(progress.total as usize, Some(&label));
+            self.bar = Some((progress.uri.clone(), progress.step.clone(), bar));
+        }
+        if let Some((_, _, bar)) = &self.bar {
+            bar.set_position(progress.done);
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Some((uri, step, bar)) = self.bar.take() {
+            let who = uri.as_ref().map(|uri| format!("{}: ", self.names.get(uri).copied().unwrap_or(uri)));
+            finish_progress(&bar, format!("{}{} done", who.unwrap_or_default(), step));
+        }
+    }
 }
 
 /// Refuse STM32 and nRF51 images (`bound`, the `--bin` keys) for Crazyflies

@@ -170,6 +170,11 @@ pub async fn wanted(
 
 /// `swarm lh check|write`
 pub async fn run(runner: &Runner<'_>, wanted: &Wanted, command: &SwarmLhCommands, csv: bool) -> Result<()> {
+    // The configuration is in the Crazyflies' lighthouse memory.
+    runner.direct(match command {
+        SwarmLhCommands::Check(_) => "swarm lh check",
+        SwarmLhCommands::Write(_) => "swarm lh write",
+    })?;
     match command {
         SwarmLhCommands::Check(_) => check(runner, &wanted.file, &wanted.write_args, csv).await,
         SwarmLhCommands::Write(params) => write(runner, &wanted.file, params.force).await,

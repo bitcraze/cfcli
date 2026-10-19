@@ -10,6 +10,7 @@
 //! USB. That is why reprogramming needs a Crazyradio even over USB.
 
 use anyhow::{anyhow, bail, Context, Result};
+use crazyflie_connection_server::Client;
 use crazyflie_lib::crazyflie_link::LinkContext;
 use crazyflie_lib::Crazyflie;
 
@@ -32,6 +33,7 @@ pub struct Planned {
 /// Reprogram a Crazyflie from `planned.from` to `planned.uri` and check that
 /// it answers there. `usb` is the USB URI it was found on, if any.
 pub async fn reprogram(
+    client: &Client,
     link_context: &LinkContext,
     config: &Config,
     toc_cache: ConfigTocCache,
@@ -50,30 +52,41 @@ pub async fn reprogram(
     for uri in [&planned.from, &planned.uri] {
         links.units.push(Unit { uri: uri.clone(), name: planned.name.clone(), description: None, extra: Default::default() });
     }
-    let runner = Runner::new(link_context, config, toc_cache.clone(), &links, &[0, 1]).await?;
+    let runner = Runner::new(client, link_context, config, &links, &[0, 1]).await?;
     let (old, new) = (&runner.targets[0], &runner.targets[1]);
 
-    let cf = match usb {
-        Some(usb) => Crazyflie::connect_from_uri(link_context, usb, toc_cache)
-            .await
-            .context(CliError::Connection(format!("connecting to {}", usb)))?,
-        None => runner.connect(old).await?,
-    };
     let channel = (to.channel != from.channel).then_some(to.channel);
     let address = if to.address != from.address { Some(crate::decode_address(&to.address)?) } else { None };
-    let written = config::write_radio(&cf, channel, address).await;
-    cf.disconnect().await;
+    let written = match usb {
+        Some(usb) => {
+            let cf = Crazyflie::connect_from_uri(link_context, usb, toc_cache)
+                .await
+                .context(CliError::Connection(format!("connecting to {}", usb)))?;
+            let written = config::write_radio(&cf, channel, address).await;
+            cf.disconnect().await;
+            written
+        }
+        None => {
+            let attached = runner.attach(old).await?;
+            let written = match crate::utils::connection::lib(&attached.cf, "reprogramming") {
+                Ok(cf) => config::write_radio(&cf, channel, address).await,
+                Err(e) => Err(e),
+            };
+            attached.disconnect().await;
+            written
+        }
+    };
     written.context("not reprogrammed")?;
     println!("{}: reprogrammed {} -> {}", planned.name, planned.from, planned.uri);
 
     bootloader::reboot(link_context, &old.link_uri)
         .await
         .context("reprogrammed, but not rebooted (it takes the new address when restarted)")?;
-    if new.wait_for(link_context).await {
+    if runner.wait_for(new).await {
         println!("{}: rebooted, answers on {}", planned.name, planned.uri);
         return Ok(());
     }
-    if old.answers(link_context).await {
+    if runner.answers(old).await {
         bail!("still answers on {} after the reboot, the new address didn't take", planned.from);
     }
     bail!(CliError::Connection(format!(

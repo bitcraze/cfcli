@@ -7,6 +7,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use crazyflie_connection_server::{Client, Crazyflie, InProcess, ServerConfig};
+use crazyflie_lib::crazyflie_link::LinkContext;
 use crazyflie_lib::{Value, ValueType};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,19 +27,22 @@ pub fn mode(arg: Option<&str>, config: &Config) -> String {
 pub struct Connection {
     mode: String,
     toc_cache: ConfigTocCache,
+    link_context: Arc<LinkContext>,
     client: Option<Client>,
     cf: Option<Crazyflie>,
 }
 
 impl Connection {
-    pub fn new(mode: String, toc_cache: ConfigTocCache) -> Self {
-        Connection { mode, toc_cache, client: None, cf: None }
+    /// `link_context` is cfcli's own, which the server shares in direct mode.
+    pub fn new(mode: String, toc_cache: ConfigTocCache, link_context: Arc<LinkContext>) -> Self {
+        Connection { mode, toc_cache, link_context, client: None, cf: None }
     }
 
     /// The client, opened on first use. In direct mode the server runs in
     /// this process, opens a Crazyradio only while it uses it (so other
-    /// programs keep the others), uses cfcli's TOC cache and disconnects at
-    /// exit.
+    /// programs keep the others), uses cfcli's TOC cache and Crazyradios (so
+    /// that the commands still done with crazyflie-lib share them) and
+    /// disconnects at exit.
     pub async fn client(&mut self) -> Result<&Client> {
         if self.client.is_none() {
             let direct = ServerConfig {
@@ -46,7 +50,7 @@ impl Connection {
                 linger: Duration::ZERO,
                 hold_radios: false,
                 toc_cache: None,
-                link_context: None,
+                link_context: Some(self.link_context.clone()),
             }
             .with_toc_cache(self.toc_cache.clone());
             // cfcli commands are short-lived, so `auto` never serves other programs.

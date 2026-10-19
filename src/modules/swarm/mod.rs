@@ -27,6 +27,7 @@ use inquire::{Confirm, MultiSelect, Select, Text};
 use tabled::Tabled;
 
 use crate::error::CliError;
+use crate::utils::connection::Connection;
 use crate::utils::display::{csv_row, print_table, table};
 use crate::utils::radio::{self, RadioUri};
 use crate::{
@@ -46,6 +47,7 @@ pub(crate) type Swarms = Documents<Swarm>;
 pub(crate) async fn run(
     config: &mut Config,
     command: &SwarmCommands,
+    connection: &mut Connection,
     link_context: &LinkContext,
     toc_cache: ConfigTocCache,
     non_interactive: bool,
@@ -70,7 +72,8 @@ pub(crate) async fn run(
             }
             SwarmConfigCommands::Add(params) => {
                 let id = swarm_id(config, params.swarm.as_deref())?;
-                add(&swarms, config, &id, params, link_context, toc_cache, non_interactive).await
+                let client = connection.client().await?;
+                add(&swarms, config, &id, params, client, link_context, toc_cache, non_interactive).await
             }
             SwarmConfigCommands::Remove { names, swarm } => {
                 remove(&swarms, &swarm_id(config, swarm.as_deref())?, names, non_interactive).await
@@ -104,30 +107,30 @@ pub(crate) async fn run(
             }
         },
         SwarmCommands::Scan(target) => {
-            scan(&runner(&swarms, config, target, link_context, toc_cache).await?, csv).await
+            scan(&runner(&swarms, config, target, connection, link_context).await?, csv).await
         }
         SwarmCommands::Platform { target, command } => {
-            let runner = runner(&swarms, config, target, link_context, toc_cache).await?;
+            let runner = runner(&swarms, config, target, connection, link_context).await?;
             commands::platform(&runner, command, csv).await
         }
         SwarmCommands::Param { target, command } => {
-            let runner = runner(&swarms, config, target, link_context, toc_cache).await?;
+            let runner = runner(&swarms, config, target, connection, link_context).await?;
             commands::param(&runner, command, non_interactive, csv).await
         }
         SwarmCommands::Deck { target, command } => {
-            let runner = runner(&swarms, config, target, link_context, toc_cache).await?;
+            let runner = runner(&swarms, config, target, connection, link_context).await?;
             commands::deck(&runner, command, csv).await
         }
         SwarmCommands::Log { target, command } => {
-            let runner = runner(&swarms, config, target, link_context, toc_cache).await?;
+            let runner = runner(&swarms, config, target, connection, link_context).await?;
             commands::log(&runner, command, non_interactive, csv).await
         }
         SwarmCommands::Bootload { target, command } => {
-            let runner = runner(&swarms, config, target, link_context, toc_cache.clone()).await?;
+            let runner = runner(&swarms, config, target, connection, link_context).await?;
             bootload::bootload(&runner, command, toc_cache, non_interactive, csv).await
         }
         SwarmCommands::Debug { target, command } => {
-            let runner = runner(&swarms, config, target, link_context, toc_cache).await?;
+            let runner = runner(&swarms, config, target, connection, link_context).await?;
             commands::debug(&runner, command, csv).await
         }
         SwarmCommands::Lh { target, command } => {
@@ -135,11 +138,13 @@ pub(crate) async fn run(
             let swarm = swarms.load(&id).await?;
             let selected = swarm.select(&id, &target.cf, &target.exclude)?;
             let wanted = lighthouse::wanted(config, &id, swarm.lighthouse.as_deref(), command, csv).await?;
-            let runner = Runner::new(link_context, config, toc_cache, &swarm, &selected).await?;
+            let client = connection.client().await?;
+            let runner = Runner::new(client, link_context, config, &swarm, &selected).await?;
             lighthouse::run(&runner, &wanted, command, csv).await
         }
         SwarmCommands::Rechannel(params) => {
-            rechannel::rechannel(&swarms, config, params, link_context, toc_cache, non_interactive).await
+            let client = connection.client().await?;
+            rechannel::rechannel(&swarms, config, params, client, link_context, non_interactive).await
         }
     }
 }
@@ -149,13 +154,13 @@ async fn runner<'a>(
     swarms: &Swarms,
     config: &Config,
     target: &SwarmTargetArgs,
+    connection: &mut Connection,
     link_context: &'a LinkContext,
-    toc_cache: ConfigTocCache,
 ) -> Result<Runner<'a>> {
     let id = swarm_id(config, target.swarm.as_deref())?;
     let swarm = swarms.load(&id).await?;
     let selected = swarm.select(&id, &target.cf, &target.exclude)?;
-    Runner::new(link_context, config, toc_cache, &swarm, &selected).await
+    Runner::new(connection.client().await?, link_context, config, &swarm, &selected).await
 }
 
 /// The swarm a command acts on: the one given, else the selected one.
@@ -514,11 +519,13 @@ pub(crate) async fn swarm_to_change(config: &Config, given: Option<&str>) -> Res
     Ok(id)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn add(
     swarms: &Swarms,
     config: &Config,
     id: &str,
     params: &SwarmAddParameters,
+    client: &crazyflie_connection_server::Client,
     link_context: &LinkContext,
     toc_cache: ConfigTocCache,
     non_interactive: bool,
@@ -531,7 +538,9 @@ async fn add(
             };
             let mut found = Vec::new();
             for address in &addresses {
-                for uri in link_context.scan(crate::decode_address(address)?).await? {
+                let address = crate::decode_address(address)?;
+                let scanned = client.scan(Some(address)).await.context(CliError::Connection("scanning".to_string()))?;
+                for uri in scanned.into_iter().map(|cf| cf.uri) {
                     // USB-attached Crazyflies show up in a scan too; a swarm
                     // is reached over the radio.
                     if uri.starts_with("radio://") && !found.contains(&uri) {
@@ -547,7 +556,7 @@ async fn add(
         }
         None => params.uris.clone(),
     };
-    add_to(swarms, config, id, params, candidates, None, link_context, toc_cache, non_interactive).await
+    add_to(swarms, config, id, params, candidates, None, client, link_context, toc_cache, non_interactive).await
 }
 
 /// Add the Crazyflie found on USB (`usb`), whose config has the radio URI
@@ -559,12 +568,14 @@ pub(crate) async fn add_from_usb(
     params: &SwarmAddParameters,
     usb: &str,
     radio_uri: String,
+    client: &crazyflie_connection_server::Client,
     link_context: &LinkContext,
     toc_cache: ConfigTocCache,
     non_interactive: bool,
 ) -> Result<()> {
     let swarms = Swarms::open(config)?;
-    add_to(&swarms, config, id, params, vec![radio_uri], Some(usb), link_context, toc_cache, non_interactive).await
+    add_to(&swarms, config, id, params, vec![radio_uri], Some(usb), client, link_context, toc_cache, non_interactive)
+        .await
 }
 
 /// The base a `--base-name`/`--base-address` flag asks for: the one given,
@@ -603,6 +614,7 @@ async fn add_to(
     params: &SwarmAddParameters,
     candidates: Vec<String>,
     usb: Option<&str>,
+    client: &crazyflie_connection_server::Client,
     link_context: &LinkContext,
     toc_cache: ConfigTocCache,
     non_interactive: bool,
@@ -618,6 +630,13 @@ async fn add_to(
         None => None,
     };
     let reprogramming = set_address.is_some() || params.base_address.is_some() || params.set_channel.is_some();
+    if reprogramming && !client.is_in_process() {
+        bail!(CliError::Connection(
+            "reprogramming (--base-address, --set-address, --set-channel) does not go through a connection server \
+             yet (it writes the EEPROM). Use --connection direct"
+                .to_string()
+        ));
+    }
     let mut uris = Vec::new();
     for uri in &candidates {
         store::check_uri(uri)?;
@@ -722,7 +741,11 @@ async fn add_to(
     let mut results = Vec::new();
     for p in &planned {
         let result =
-            if reprogramming { reprogram::reprogram(link_context, config, toc_cache.clone(), usb, p).await } else { Ok(()) };
+            if reprogramming {
+                reprogram::reprogram(client, link_context, config, toc_cache.clone(), usb, p).await
+            } else {
+                Ok(())
+            };
         if let Err(e) = &result {
             eprintln!("{}: not added: {:#}", p.name, e);
         }
@@ -1085,31 +1108,27 @@ struct ScanRow {
 }
 
 /// Check which Crazyflies answer: one packet each (a few tries), no
-/// connection.
+/// connection. The ones a connection server is connected to answer without
+/// radio traffic.
 async fn scan(runner: &Runner<'_>, csv: bool) -> Result<()> {
-    let link_context = runner.link_context();
-    let usb_present = if runner.targets.iter().any(|t| t.radio.is_none()) {
-        crate::scan_usb(link_context).await?
-    } else {
-        Vec::new()
-    };
-    let results = runner
-        .each("Checking", async |t| match t.radio {
-            Some(_) => Ok(t.answers(link_context).await),
-            None => Ok(usb_present.contains(&t.uri)),
-        })
-        .await;
-    let online: Vec<bool> = results.into_iter().map(|r| r.unwrap_or(false)).collect();
+    let all: Vec<usize> = (0..runner.targets.len()).collect();
+    let answered = runner.answering(&all).await?;
+    let online: Vec<bool> = answered.iter().map(Option::is_some).collect();
 
     let rows: Vec<ScanRow> = runner
         .targets
         .iter()
-        .zip(&online)
-        .map(|(t, online)| ScanRow {
+        .zip(&answered)
+        .map(|(t, answered)| ScanRow {
             name: t.name.clone(),
             uri: t.uri.clone(),
-            radio: t.radio.map(|r| r.to_string()).unwrap_or_else(|| "USB".to_string()),
-            online: if *online { "yes" } else { "no" }.to_string(),
+            // The radio it answered on, else (direct mode) the one it was given
+            radio: match (t.is_radio(), answered.flatten().or(t.radio)) {
+                (false, _) => "USB".to_string(),
+                (true, Some(radio)) => radio.to_string(),
+                (true, None) => String::new(),
+            },
+            online: if answered.is_some() { "yes" } else { "no" }.to_string(),
         })
         .collect();
 

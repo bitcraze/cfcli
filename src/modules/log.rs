@@ -198,7 +198,8 @@ pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Resul
     for n in &name_list { header.push(n); }
     csv_row(&header);
     let mut stdout = std::io::stdout();
-    while let Ok(data) = stream.next().await {
+    loop {
+      let data = stream.next().await.map_err(|e| stopped(cf, e))?;
       let row = csv_fields(&data, &name_list);
       let row_refs: Vec<&str> = row.iter().map(|s| s.as_str()).collect();
       csv_row(&row_refs);
@@ -208,11 +209,16 @@ pub async fn print(cf: &Crazyflie, names: &str, period: u64, csv: bool) -> Resul
     }
   } else {
     let mut table = StreamTable::new(&stream_columns(cf, &name_list));
-    while let Ok(data) = stream.next().await {
+    loop {
+      let data = stream.next().await.map_err(|e| stopped(cf, e))?;
       let row = stream_fields(&data, &name_list);
       table.row(&row.iter().map(String::as_str).collect::<Vec<_>>());
     }
   }
+}
 
-  Ok(())
+/// The error for a log stream that ended: the Crazyflie was disconnected
+/// (e.g. another program rebooted or flashed it) or logging failed.
+fn stopped(cf: &Crazyflie, error: anyhow::Error) -> anyhow::Error {
+  crate::error::CliError::Connection(format!("{} stopped logging: {:#}", cf.uri(), error)).into()
 }

@@ -720,30 +720,10 @@ pub async fn flash_through_server(
     uri: &str,
     upgrade: &FirmwareUpgrade,
 ) -> Result<()> {
-    use crazyflie_connection_server::{FlashImage, FlashStart};
-
-    if upgrade.nrf51_softdevice().is_some() {
-        bail!(CliError::Connection(
-            "the nRF51 bootloader and softdevice can't be flashed through a connection server yet. Use --connection direct"
-                .to_string()
-        ));
-    }
+    let images = server_images(upgrade)?;
     if uri.starts_with("usb://") {
         bail!(CliError::InvalidValue("stm32-fw / nrf51-fw flashing requires a radio URI".to_string()));
     }
-    let images: Vec<FlashImage> = upgrade
-        .get_firmware_for_bootloader()
-        .into_iter()
-        .filter(|firmware| firmware.file_type == "fw")
-        .map(|firmware| FlashImage {
-            target: firmware.target,
-            start: firmware.start_override.map(|start| match start {
-                FlashStartOverride::Address(address) => FlashStart::Address(address),
-                FlashStartOverride::Page(page) => FlashStart::Page(page),
-            }),
-            data: firmware.data,
-        })
-        .collect();
 
     if !images.is_empty() {
         // One bar per image, like the direct path; the job's other steps are printed
@@ -774,11 +754,44 @@ pub async fn flash_through_server(
         finish(&mut bar);
     }
 
+    print_decks_skipped(upgrade);
+    Ok(())
+}
+
+/// The STM32 and nRF51 images of an upgrade, for a flash job on a
+/// connection server. Refuses the nRF51 bootloader+softdevice, which a
+/// server can't flash yet.
+pub fn server_images(upgrade: &FirmwareUpgrade) -> Result<Vec<crazyflie_connection_server::FlashImage>> {
+    use crazyflie_connection_server::{FlashImage, FlashStart};
+
+    if upgrade.nrf51_softdevice().is_some() {
+        bail!(CliError::Connection(
+            "the nRF51 bootloader and softdevice can't be flashed through a connection server yet. Use --connection direct"
+                .to_string()
+        ));
+    }
+    Ok(upgrade
+        .get_firmware_for_bootloader()
+        .into_iter()
+        .filter(|firmware| firmware.file_type == "fw")
+        .map(|firmware| FlashImage {
+            target: firmware.target,
+            start: firmware.start_override.map(|start| match start {
+                FlashStartOverride::Address(address) => FlashStart::Address(address),
+                FlashStartOverride::Page(page) => FlashStart::Page(page),
+            }),
+            data: firmware.data,
+        })
+        .collect())
+}
+
+/// Say that an upgrade's deck firmware was left out, flashing through a
+/// connection server.
+pub fn print_decks_skipped(upgrade: &FirmwareUpgrade) {
     let decks = upgrade.get_firmware_for_decks().len() + upgrade.get_firmware_for_deckctrl().len();
     if decks > 0 {
         println!("Deck firmware isn't flashed through a connection server yet ({} skipped). Flash it with --connection direct.", decks);
     }
-    Ok(())
 }
 
 fn flashed_message(target: &str) -> String {
