@@ -97,7 +97,7 @@ impl Connection {
 /// Run a connection server until Ctrl-C: it holds this
 /// computer's Crazyradios and shares the Crazyflies between the programs
 /// attached to it.
-pub async fn run(listen: &str, linger: u64) -> Result<()> {
+pub async fn run(listen: &str, linger: u64, toc_cache: Option<std::path::PathBuf>) -> Result<()> {
     let addr: std::net::SocketAddr = listen
         .parse()
         .map_err(|_| CliError::InvalidValue(format!("'{}' is not an address like 127.0.0.1:7777", listen)))?;
@@ -106,16 +106,33 @@ pub async fn run(listen: &str, linger: u64) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .context(CliError::Connection(format!("listening on {}", addr)))?;
+    // On disk, not in cfcli's config file: a long-running server would write
+    // back the whole config it loaded, undoing other cfcli runs' changes
+    let toc_dir = match toc_cache {
+        Some(dir) => dir,
+        None => {
+            use etcetera::BaseStrategy;
+            etcetera::choose_base_strategy()
+                .map_err(|e| anyhow!("no cache directory ({}); give one with --toc-cache", e))?
+                .cache_dir()
+                .join("cf-cli")
+                .join("server-toc-cache")
+        }
+    };
+    let toc_cache = crazyflie_connection_server::FileTocCache::new(&toc_dir)
+        .context(format!("creating the TOC cache {}", toc_dir.display()))?;
     let config = ServerConfig {
         name: format!("cfcli on {}", gethostname::gethostname().to_string_lossy()),
         linger: Duration::from_secs(linger),
         ..Default::default()
-    };
+    }
+    .with_toc_cache(toc_cache);
     let server = crazyflie_connection_server::Server::new(config).await;
     if server.radios().is_empty() {
         eprintln!("Warning: no Crazyradio could be opened, only USB Crazyflies are reachable");
     }
     println!("Connection server on ws://{} with Crazyradios {:?}. Ctrl-C stops it.", addr, server.radios());
+    println!("TOCs are cached in {}", toc_dir.display());
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };

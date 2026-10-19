@@ -1106,6 +1106,11 @@ enum ServerCommands {
         /// Seconds a Crazyflie stays connected after its last client is gone
         #[clap(long, default_value_t = 10)]
         linger: u64,
+        /// Directory the server keeps the Crazyflies' TOCs in, so that it
+        /// doesn't download them again after a restart [default: the cache
+        /// directory, e.g. ~/.cache/cf-cli/server-toc-cache]
+        #[clap(long, value_name = "DIR", value_hint = ValueHint::DirPath)]
+        toc_cache: Option<std::path::PathBuf>,
     },
     /// List the Crazyflies the server is connected to, and the programs attached to them
     List,

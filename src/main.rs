@@ -1104,8 +1104,8 @@ async fn run() -> Result<()> {
         }
         Commands::Server { command } => {
             match command {
-                ServerCommands::Run { listen, linger } => {
-                    utils::connection::run(listen, *linger).await?;
+                ServerCommands::Run { listen, linger, toc_cache } => {
+                    utils::connection::run(listen, *linger, toc_cache.clone()).await?;
                 }
                 ServerCommands::List => {
                     let client = connection.client().await?;

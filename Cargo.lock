@@ -462,6 +462,7 @@ dependencies = [
  "crazyflie-connection-server",
  "crazyflie-lib",
  "env_logger",
+ "etcetera",
  "flume",
  "futures",
  "futures-util",
