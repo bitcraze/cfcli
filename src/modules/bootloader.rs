@@ -15,6 +15,7 @@ use crate::modules::memory::{
 use crate::utils::firmware::{Firmware, FirmwareUpgrade, FlashStartOverride};
 use crate::utils::display::*;
 use crate::utils::radio::RadioUri;
+use crate::utils::udp::check_not_udp;
 
 const DECK_CTRL_DFU_FLASH_OFFSET: usize = 0x10000;
 const DECK_CTRL_DFU_CFG_DEFAULT_OFFSET: usize = 0x17800;
@@ -235,6 +236,7 @@ async fn reset_and_get_bootloader_address(link: &Connection) -> Result<Vec<u8>> 
 /// return the URI to reach the bootloader at. The bootloader is reached
 /// with the same Crazyradio as the firmware, the first one for usb://.
 async fn enter_bootloader(context: &LinkContext, uri: &str) -> Result<String> {
+    check_not_udp(uri, "Restarting into the bootloader")?;
     let radio = RadioUri::parse(uri).ok().flatten().and_then(|r| r.radio).unwrap_or(0);
     let separator = if uri.contains('?') { "&" } else { "?" };
     let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
@@ -314,6 +316,7 @@ async fn read_info(link: &Connection) -> Result<(BootloaderInfo, BootloaderInfo)
 /// Restart a Crazyflie that runs its firmware into its bootloader, and return
 /// the address the bootloader listens on (on channel 0), for cfloader.
 pub async fn enter_bootloader_for_cfloader(context: &LinkContext, uri: &str) -> Result<[u8; 5]> {
+    check_not_udp(uri, "Restarting into the bootloader")?;
     let separator = if uri.contains('?') { "&" } else { "?" };
     let link = context.open_link(&format!("{}{}safelink=0", uri, separator)).await?;
     let new_address = reset_and_get_bootloader_address(&link).await;
@@ -422,6 +425,7 @@ pub async fn bootloader_versions(link_context: &LinkContext, uri: &str) -> Resul
 /// which only receives it over the radio: the STM32 firmware does not pass it
 /// on from USB. Returns whether the STM32 then showed up on USB in DFU mode.
 pub async fn stm32_dfu(link_context: &LinkContext, uri: &str) -> Result<bool> {
+  check_not_udp(uri, "Restarting the STM32 into DFU")?;
   if uri.starts_with("usb://") {
     bail!("Restarting the STM32 into DFU needs a radio URI, the nRF51 does not get this command over USB");
   }
@@ -451,6 +455,7 @@ fn stm32_dfu_present() -> Result<bool> {
 }
 
 pub async fn reboot(link_context: &LinkContext, uri: &str,) -> Result<()> {
+  check_not_udp(uri, "Rebooting")?;
 
   let link = link_context.open_link(uri).await?;
   send_command(&link, BootloaderCommand::ResetInit, None).await?;

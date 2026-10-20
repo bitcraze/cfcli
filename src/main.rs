@@ -47,6 +47,7 @@ pub mod utils {
     pub mod firmware;
     pub mod flash_source;
     pub mod radio;
+    pub mod udp;
 }
 
 use error::CliError;
@@ -1246,12 +1247,15 @@ async fn run() -> Result<()> {
                     modules::bootloader::reboot(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::PowerOff => {
+                    utils::udp::check_not_udp(&uri, "Powering off")?;
                     crazyflie_lib::Crazyflie::power_off_all(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::Sleep => {
+                    utils::udp::check_not_udp(&uri, "Sleep")?;
                     crazyflie_lib::Crazyflie::power_off_stm32_domain(&link_context, uri.as_str()).await?;
                 },
                 PlatformCommands::Wakeup => {
+                    utils::udp::check_not_udp(&uri, "Wakeup")?;
                     crazyflie_lib::Crazyflie::power_on_stm32_domain(&link_context, uri.as_str()).await?;
                 }
                 PlatformCommands::Dfu => {
