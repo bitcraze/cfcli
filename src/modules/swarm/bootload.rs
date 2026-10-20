@@ -126,10 +126,24 @@ async fn flash(
     let release = flash_source::release(&source.release, non_interactive).await?;
     let bins = flash_source::bins(&source.bin, &source.targets, non_interactive)?;
 
-    // The platform decides which files of a release a Crazyflie gets.
+    // The platform decides which files of a release a Crazyflie gets. One
+    // that is asleep is woken up to read it, since flashing restarts it anyway.
     let platforms = runner
-        .attached("Reading", async |cf, _| {
-            cf.platform.device_type_name().map(str::to_string).ok_or_else(|| anyhow!("its platform is unknown"))
+        .each("Reading", async |target| {
+            let attached = match runner.attach(target).await {
+                Err(e) if format!("{:#}", e).contains("asleep") => {
+                    runner
+                        .client()
+                        .power_on_stm32_domain(&target.link_uri)
+                        .await
+                        .context(CliError::Connection(format!("waking up {}", target.link_uri)))?;
+                    runner.attach(target).await?
+                }
+                attached => attached?,
+            };
+            let platform = attached.cf.platform.device_type_name().map(str::to_string);
+            attached.disconnect().await;
+            platform.ok_or_else(|| anyhow!("its platform is unknown"))
         })
         .await;
     let to_flash: Vec<(usize, &str)> = platforms
