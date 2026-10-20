@@ -23,7 +23,7 @@ use tabled::Tabled;
 use super::runner::{split, Runner, Target};
 use super::Swarms;
 use crate::error::CliError;
-use crate::modules::{bootloader, config};
+use crate::modules::config;
 use crate::utils::display::{print_table, table};
 use crate::utils::radio::RadioUri;
 use crate::{Config, SwarmRechannelParameters};
@@ -169,12 +169,6 @@ pub(super) async fn rechannel(
     if params.dry_run {
         return Ok(());
     }
-    if !client.is_in_process() {
-        bail!(CliError::Connection(
-            "swarm rechannel does not go through a connection server yet (the server can't reboot a Crazyflie onto another channel). Use --connection direct"
-                .to_string()
-        ));
-    }
     if !params.yes {
         crate::require_arg(non_interactive, "--yes")?;
         let question = format!("Reprogram {}?", super::crazyflies(moves.len()));
@@ -203,6 +197,7 @@ pub(super) async fn rechannel(
     let mut results: Vec<Option<Result<String>>> = std::iter::repeat_with(|| None).take(moves.len()).collect();
     let to_write: Vec<usize> = (0..moves.len()).filter(|i| answers_old[*i]).collect();
     let mut rebooted = Vec::new();
+    let mut found = vec![false; moves.len()];
     if !to_write.is_empty() {
         let writer = runner_for(client, link_context, config, &swarm, &moves, &to_write).await?;
         let written = writer
@@ -217,30 +212,31 @@ pub(super) async fn rechannel(
                 Err(e) => results[to_write[k]] = Some(Err(e.context("not reprogrammed"))),
             }
         }
-        // 3. Reboot them, so that the firmware picks up the new channel.
+        // 3. Reboot them onto the new channel, which the firmware reads at
+        //    boot. Each reboot returns once it answers there.
         if !done.is_empty() {
             let rebooter = runner_for(client, link_context, config, &swarm, &moves, &done).await?;
+            let on_new_link = runner_for(client, link_context, config, &moved, &moves, &done).await?;
             let reboots = rebooter
-                .each("Rebooting", async |t| bootloader::reboot(link_context, &t.link_uri).await)
+                .each("Rebooting onto the new channels", async |t| {
+                    let k = rebooter.targets.iter().position(|old| old.name == t.name).expect("one of them");
+                    Ok(client.reboot_to(&t.link_uri, &on_new_link.targets[k].link_uri).await?)
+                })
                 .await;
             for (k, result) in reboots.into_iter().enumerate() {
-                match result {
-                    Ok(()) => rebooted.push(done[k]),
-                    Err(e) => results[done[k]] = Some(Err(e.context("reprogrammed but not rebooted"))),
-                }
+                rebooted.push(done[k]);
+                found[done[k]] = result.is_ok();
             }
         }
     }
 
-    // 4. Look for the rebooted ones on their new channel.
-    let mut found = vec![false; moves.len()];
-    if !rebooted.is_empty() {
-        let finder = runner_for(client, link_context, config, &moved, &moves, &rebooted).await?;
-        let looked = finder
-            .each("Looking on the new channels", async |t| Ok(finder.wait_for(t).await))
-            .await;
-        for (k, result) in looked.into_iter().enumerate() {
-            found[rebooted[k]] = result.unwrap_or(false);
+    // 4. The ones that didn't answer on their new channel in time: there
+    //    after all, still on the old one, or gone.
+    let not_found: Vec<usize> = rebooted.iter().copied().filter(|i| !found[*i]).collect();
+    if !not_found.is_empty() {
+        let finder = runner_for(client, link_context, config, &moved, &moves, &not_found).await?;
+        for (k, answers) in answering(&finder).await?.into_iter().enumerate() {
+            found[not_found[k]] = answers;
         }
     }
     let rebooted_not_found: Vec<usize> = rebooted.iter().copied().filter(|i| !found[*i]).collect();

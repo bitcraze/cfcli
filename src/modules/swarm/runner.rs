@@ -23,7 +23,6 @@
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crazyflie_connection_server::{Client, Crazyflie};
@@ -36,12 +35,6 @@ use crate::error::{self, CliError};
 use crate::utils::display::csv_row;
 use crate::utils::radio::{self, RadioUri};
 use crate::Config;
-
-/// How long a rebooted Crazyflie gets to show up (on its new channel or
-/// address).
-const BOOT_TIMEOUT: Duration = Duration::from_secs(8);
-/// Pause between looking for a rebooting Crazyflie.
-const BOOT_POLL: Duration = Duration::from_millis(300);
 
 /// One Crazyflie a command runs on.
 pub struct Target {
@@ -312,17 +305,6 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// Wait for a rebooted Crazyflie to answer.
-    pub async fn wait_for(&self, target: &Target) -> bool {
-        let deadline = tokio::time::Instant::now() + BOOT_TIMEOUT;
-        while tokio::time::Instant::now() < deadline {
-            if self.answers(target).await {
-                return true;
-            }
-            tokio::time::sleep(BOOT_POLL).await;
-        }
-        false
-    }
 }
 
 /// A progress bar on stderr, hidden when stderr isn't a terminal.

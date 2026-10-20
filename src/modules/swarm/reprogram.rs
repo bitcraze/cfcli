@@ -16,7 +16,7 @@ use crazyflie_lib::crazyflie_link::LinkContext;
 use super::runner::Runner;
 use super::store::{Swarm, Unit};
 use crate::error::CliError;
-use crate::modules::{bootloader, config};
+use crate::modules::config;
 use crate::utils::radio::RadioUri;
 use crate::Config;
 
@@ -70,10 +70,9 @@ pub async fn reprogram(
     written.context("not reprogrammed")?;
     println!("{}: reprogrammed {} -> {}", planned.name, planned.from, planned.uri);
 
-    bootloader::reboot(link_context, &old.link_uri)
-        .await
-        .context("reprogrammed, but not rebooted (it takes the new address when restarted)")?;
-    if runner.wait_for(new).await {
+    // The reboot returns once it answers on the new link
+    let rebooted = runner.client().reboot_to(&old.link_uri, &new.link_uri).await;
+    if rebooted.is_ok() || runner.answers(new).await {
         println!("{}: rebooted, answers on {}", planned.name, planned.uri);
         return Ok(());
     }

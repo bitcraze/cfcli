@@ -627,11 +627,9 @@ async fn add_to(
         None => None,
     };
     let reprogramming = set_address.is_some() || params.base_address.is_some() || params.set_channel.is_some();
-    if reprogramming && !client.is_in_process() {
+    if reprogramming && usb.is_some() && !client.is_in_process() {
         bail!(CliError::Connection(
-            "reprogramming (--base-address, --set-address, --set-channel) does not go through a connection server \
-             yet (the server can't reboot a Crazyflie onto another link). Use --connection direct"
-                .to_string()
+            "reprogramming a Crazyflie on this computer's USB needs --connection direct".to_string()
         ));
     }
     let mut uris = Vec::new();
@@ -715,7 +713,7 @@ async fn add_to(
     }
 
     if !planned.is_empty() {
-        if reprogramming && radio::available_radios(link_context).await.is_empty() {
+        if reprogramming && client.is_in_process() && radio::available_radios(link_context).await.is_empty() {
             bail!(CliError::Connection(
                 "no Crazyradio could be opened; reprogramming needs one to reboot the Crazyflie and find it \
                  on its new address. Nothing was changed"
