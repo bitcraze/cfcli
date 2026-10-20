@@ -87,9 +87,9 @@ pub fn same_link(a: &str, b: &str) -> bool {
 
 /// Check a URI that is about to go into a swarm.
 pub fn check_uri(uri: &str) -> Result<()> {
-    if RadioUri::parse(uri)?.is_none() && !uri.starts_with("usb://") {
+    if RadioUri::parse(uri)?.is_none() && !uri.starts_with("usb://") && !uri.starts_with("udp://") {
         bail!(CliError::InvalidValue(format!(
-            "URI '{}': only radio:// and usb:// URIs can be added to a swarm",
+            "URI '{}': only radio://, usb:// and udp:// URIs can be added to a swarm",
             uri
         )));
     }
