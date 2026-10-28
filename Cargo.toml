@@ -59,7 +59,7 @@ env_logger = "0.11"
 anyhow = "1.0"
 crazyflie-lib = { version = "0.8", default-features = false }
 # Reaches the Crazyflies directly or through a connection server (experimental)
-crazyflie-connection-server = "0.1"
+crazyflie-connection-server = "0.2"
 rusb = "0.9"
 cfloader = "0.2"
 clap = { version = "4.6", features = ["derive", "env"] }
