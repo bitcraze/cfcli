@@ -131,7 +131,7 @@ pub async fn run(listen: &str, linger: u64, toc_cache: Option<std::path::PathBuf
     if server.radios().is_empty() {
         eprintln!("Warning: no Crazyradio could be opened, only USB Crazyflies are reachable");
     }
-    println!("Connection server on ws://{} with Crazyradios {:?}. Ctrl-C stops it.", addr, server.radios());
+    println!("Connection server (experimental) on ws://{} with Crazyradios {:?}. Ctrl-C stops it.", addr, server.radios());
     println!("TOCs are cached in {}", toc_dir.display());
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;

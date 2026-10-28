@@ -237,9 +237,10 @@ struct CliArgs {
     #[clap(long, global = true)]
     csv: bool,
 
-    /// Where to reach the Crazyflies: direct (this computer's Crazyradios),
-    /// auto (a connection server on this computer if one runs, else direct),
-    /// local, or a server address (host, host:port). Overrides 'settings connection'
+    /// Experimental: where to reach the Crazyflies: direct (this computer's
+    /// Crazyradios), auto (a connection server on this computer if one runs,
+    /// else direct), local, or a server address (host, host:port). Overrides
+    /// 'settings connection'
     #[clap(long, global = true, env = "CRAZYFLIE_CONNECTION")]
     connection: Option<String>,
 }
@@ -317,7 +318,7 @@ enum Commands {
         command: SettingsCommands,
     },
 
-    /// Connection server: share Crazyradios and Crazyflies between programs and computers
+    /// Connection server (experimental): share Crazyradios and Crazyflies between programs and computers
     Server {
         #[clap(subcommand)]
         command: ServerCommands,
@@ -1076,7 +1077,7 @@ enum SettingsCommands {
         #[clap(subcommand)]
         command: SettingsSyncCommands,
     },
-    /// Where to reach the Crazyflies: directly or through a connection server
+    /// Where to reach the Crazyflies: directly or through a connection server (experimental)
     Connection {
         #[clap(subcommand)]
         command: SettingsConnectionCommands,
@@ -1097,8 +1098,8 @@ enum SettingsConnectionCommands {
 
 #[derive(Debug, Subcommand)]
 enum ServerCommands {
-    /// Run a connection server: it holds this computer's Crazyradios and
-    /// shares the Crazyflies between every program attached to it
+    /// Run a connection server (experimental): it holds this computer's
+    /// Crazyradios and shares the Crazyflies between every program attached to it
     Run {
         /// Address to listen on. Use 0.0.0.0:7777 for other computers (no authentication yet)
         #[clap(long, default_value = "127.0.0.1:7777")]
