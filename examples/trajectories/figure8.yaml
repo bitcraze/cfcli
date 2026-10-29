@@ -8,7 +8,7 @@
 #   yaw: polynomial coefficients for yaw angle
 #
 # Usage:
-#   cfcli trajectory upload examples/figure8.yaml
+#   cfcli hlc trajectory upload 1 -i examples/trajectories/figure8.yaml
 
 segments:
   - duration: 1.050000

@@ -236,6 +236,13 @@ struct CliArgs {
     /// Emit machine-readable CSV (for read commands that support it)
     #[clap(long, global = true)]
     csv: bool,
+
+    /// Experimental: where to reach the Crazyflies: direct (this computer's
+    /// Crazyradios), auto (a connection server on this computer if one runs,
+    /// else direct), local, or a server address (host, host:port). Overrides
+    /// 'settings connection'
+    #[clap(long, global = true, env = "CRAZYFLIE_CONNECTION")]
+    connection: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -309,6 +316,12 @@ enum Commands {
     Settings {
         #[clap(subcommand)]
         command: SettingsCommands,
+    },
+
+    /// Connection server (experimental): share Crazyradios and Crazyflies between programs and computers
+    Server {
+        #[clap(subcommand)]
+        command: ServerCommands,
     },
 
     /// Loco Positioning System
@@ -1064,6 +1077,44 @@ enum SettingsCommands {
         #[clap(subcommand)]
         command: SettingsSyncCommands,
     },
+    /// Where to reach the Crazyflies: directly or through a connection server (experimental)
+    Connection {
+        #[clap(subcommand)]
+        command: SettingsConnectionCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SettingsConnectionCommands {
+    /// Show the connection mode
+    Show,
+    /// Set the connection mode: direct, auto, local or a server address (host, host:port)
+    Set {
+        mode: String,
+    },
+    /// Reset the connection mode to the default (auto)
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServerCommands {
+    /// Run a connection server (experimental): it holds this computer's
+    /// Crazyradios and shares the Crazyflies between every program attached to it
+    Run {
+        /// Address to listen on. Use 0.0.0.0:7777 for other computers (no authentication yet)
+        #[clap(long, default_value = "127.0.0.1:7777")]
+        listen: String,
+        /// Seconds a Crazyflie stays connected after its last client is gone
+        #[clap(long, default_value_t = 10)]
+        linger: u64,
+        /// Directory the server keeps the Crazyflies' TOCs in, so that it
+        /// doesn't download them again after a restart [default: the cache
+        /// directory, e.g. ~/.cache/cf-cli/server-toc-cache]
+        #[clap(long, value_name = "DIR", value_hint = ValueHint::DirPath)]
+        toc_cache: Option<std::path::PathBuf>,
+    },
+    /// List the Crazyflies the server is connected to, and the programs attached to them
+    List,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1505,7 +1556,7 @@ enum HlCommands {
     Land(HlLandParameters),
     /// Go to a specified position
     Goto(HlGotoParameters),
-    /// Stop all high-level commands and disable motors
+    /// Stop all high-level commands and cut the thrust (the Crazyflie stays armed, the motors idle)
     Stop,
     /// Trajectory operations
     Trajectory {

@@ -14,16 +14,14 @@
 //!   is the unique CPU id of the controller.
 //!
 //! Both kinds report the serial number in the memory info packet, so it is
-//! available from `MemoryDevice::serial` without reading the memory itself.
+//! available from `MemoryInfo::serial` without reading the memory itself.
 //! The name and revision on the other hand require a read, and a deck that
 //! doesn't answer (or holds a memory we can't make sense of) is still listed
 //! with its serial number and `?` for the fields we couldn't read.
 
 use anyhow::{bail, Result};
-use crazyflie_lib::{
-    subsystems::memory::{MemoryDevice, MemoryType, OwMemory, RawMemory},
-    Crazyflie,
-};
+use crazyflie_connection_server::memory::{MemoryInfo, MemoryType, OwMemory, RawMemory};
+use crazyflie_connection_server::Crazyflie;
 use tabled::Tabled;
 
 use crate::utils::display::{csv_row, print_table, table};
@@ -54,14 +52,11 @@ pub struct Deck {
 
 impl Deck {
     /// A deck we know is there (it has a memory) but haven't read yet.
-    fn unread(device: &MemoryDevice) -> Self {
+    fn unread(device: &MemoryInfo) -> Self {
         Self {
             name: UNKNOWN.to_string(),
             revision: UNKNOWN.to_string(),
-            serial: match &device.serial {
-                Some(serial) => serial.iter().map(|b| format!("{:02X}", b)).collect(),
-                None => UNKNOWN.to_string(),
-            },
+            serial: device.serial.clone().unwrap_or_else(|| UNKNOWN.to_string()),
         }
     }
 }
@@ -90,7 +85,7 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
 
 /// The decks attached to the Crazyflie.
 pub async fn decks(cf: &Crazyflie) -> Vec<Deck> {
-    let devices: Vec<MemoryDevice> = cf
+    let devices: Vec<MemoryInfo> = cf
         .memory
         .get_memories(None)
         .into_iter()
@@ -109,17 +104,13 @@ pub async fn decks(cf: &Crazyflie) -> Vec<Deck> {
 }
 
 /// Read name and revision from a 1-wire deck memory.
-async fn read_ow_deck(cf: &Crazyflie, device: &MemoryDevice) -> Deck {
+async fn read_ow_deck(cf: &Crazyflie, device: &MemoryInfo) -> Deck {
     let mut deck = Deck::unread(device);
 
-    let ow = match cf.memory.open_memory::<OwMemory>(device.clone()).await {
-        Some(Ok(ow)) => ow,
-        Some(Err(e)) => {
+    let ow = match cf.memory.open_memory::<OwMemory>(device).await {
+        Ok(ow) => ow,
+        Err(e) => {
             warn(device, &format!("{}", e));
-            return deck;
-        }
-        None => {
-            warn(device, "memory not found");
             return deck;
         }
     };
@@ -135,17 +126,13 @@ async fn read_ow_deck(cf: &Crazyflie, device: &MemoryDevice) -> Deck {
 }
 
 /// Read name and revision from the info page of a deck-controller deck.
-async fn read_deckctrl_deck(cf: &Crazyflie, device: &MemoryDevice) -> Deck {
+async fn read_deckctrl_deck(cf: &Crazyflie, device: &MemoryInfo) -> Deck {
     let mut deck = Deck::unread(device);
 
-    let raw = match cf.memory.open_memory::<RawMemory>(device.clone()).await {
-        Some(Ok(raw)) => raw,
-        Some(Err(e)) => {
+    let raw = match cf.memory.open_memory::<RawMemory>(device).await {
+        Ok(raw) => raw,
+        Err(e) => {
             warn(device, &format!("{}", e));
-            return deck;
-        }
-        None => {
-            warn(device, "memory not found");
             return deck;
         }
     };
@@ -196,10 +183,10 @@ fn parse_deckctrl_info(info: &[u8]) -> Result<(String, String)> {
 
 /// Report a deck we couldn't fully read on stderr, so that stdout stays
 /// parsable (the deck is still listed, with `?` for the missing fields).
-fn warn(device: &MemoryDevice, message: &str) {
+fn warn(device: &MemoryInfo, message: &str) {
     eprintln!(
-        "Warning: could not read {} memory ID={}: {}",
-        device.memory_type, device.memory_id, message
+        "Warning: could not read {:?} memory ID={}: {}",
+        device.memory_type, device.id, message
     );
 }
 

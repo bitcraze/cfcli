@@ -1,14 +1,19 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use tabled::Tabled;
-use crazyflie_lib::{
-    subsystems::memory::{EEPROMConfigMemory, MemoryDevice, MemoryType, OwMemory, DeckMemory, RawMemory},
-    Crazyflie,
-};
+use crazyflie_connection_server::memory::{EEPROMConfigMemory, MemoryInfo, MemoryType, OwMemory, RawMemory};
+use crazyflie_connection_server::Crazyflie;
+use crazyflie_lib::subsystems::memory::DeckMemory;
 
 fn print_eeprom_info(eeprom: &EEPROMConfigMemory) {
+    let speed = match eeprom.get_radio_speed() {
+        0 => "250 kbps".to_string(),
+        1 => "1 Mbps".to_string(),
+        2 => "2 Mbps".to_string(),
+        other => format!("unknown ({})", other),
+    };
     println!("EEPROM Config:");
     println!("  Radio Channel: {}", eeprom.get_radio_channel());
-    println!("  Radio Speed: {}", eeprom.get_radio_speed());
+    println!("  Radio Speed: {}", speed);
     println!("  Pitch Trim: {:.4}", eeprom.get_pitch_trim());
     println!("  Roll Trim: {:.4}", eeprom.get_roll_trim());
     println!("  Radio Address: 0x{}", eeprom.get_radio_address().iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""));
@@ -46,8 +51,11 @@ pub struct DeckCtrlDfuHeader {
     pub status: u8,
 }
 
-pub async fn read_deck_ctrl_dfu_header(raw: &RawMemory) -> Result<DeckCtrlDfuHeader> {
-    let header = raw.read(0, 4).await?;
+/// The DeckCtrl DFU header: the first 4 bytes of the memory.
+pub fn parse_deck_ctrl_dfu_header(header: &[u8]) -> Result<DeckCtrlDfuHeader> {
+    if header.len() < 3 {
+        bail!("short DeckCtrl DFU header ({} bytes)", header.len());
+    }
     Ok(DeckCtrlDfuHeader {
         version: header[0],
         deck_ctrl_count: header[1],
@@ -56,7 +64,7 @@ pub async fn read_deck_ctrl_dfu_header(raw: &RawMemory) -> Result<DeckCtrlDfuHea
 }
 
 async fn print_deck_ctrl_dfu_info(raw: &RawMemory) -> Result<()> {
-    let header = read_deck_ctrl_dfu_header(raw).await?;
+    let header = parse_deck_ctrl_dfu_header(&raw.read(0, 4).await?)?;
 
     println!("DeckCtrl DFU Memory");
     println!("  Version        : {}", header.version);
@@ -86,97 +94,56 @@ async fn print_deck_memory_info(deckmem: &DeckMemory) -> Result<()> {
     Ok(())
 }
 
-pub async fn display(cf: &Crazyflie, memory: MemoryDevice) -> Result<()> {
+pub async fn display(cf: &Crazyflie, memory: &MemoryInfo) -> Result<()> {
+    let id = memory.id;
     match memory.memory_type {
         MemoryType::EEPROMConfig => {
-            let eeprom = match cf
-                .memory
-                .open_memory::<EEPROMConfigMemory>(memory.clone())
-                .await
-            {
-                Some(Ok(e)) => e,
-                Some(Err(e)) => bail!("Could not access memory ID={} as EEPROMConfig: {}", memory.memory_id, e),
-                None => bail!("Memory ID={} not found", memory.memory_id),
-            };
-
+            let eeprom = cf.memory.open_memory::<EEPROMConfigMemory>(memory).await
+                .with_context(|| format!("Could not access memory ID={} as EEPROMConfig", id))?;
             print_eeprom_info(&eeprom);
         }
         MemoryType::OneWire => {
-            let ow_memory = match cf
-                .memory
-                .open_memory::<OwMemory>(memory.clone())
-                .await
-            {
-                Some(Ok(o)) => o,
-                Some(Err(e)) => bail!("Could not access memory ID={} as OneWire: {}", memory.memory_id, e),
-                None => bail!("Memory ID={} not found", memory.memory_id),
-            };
+            let ow_memory = cf.memory.open_memory::<OwMemory>(memory).await
+                .with_context(|| format!("Could not access memory ID={} as OneWire", id))?;
             print_ow_info(&ow_memory);
         }
         MemoryType::DeckMemory => {
-            let deck_memory = match cf
-                .memory
-                .open_memory::<DeckMemory>(memory.clone())
-                .await
-            {
+            // Not in the client API yet: through crazyflie-lib (direct mode)
+            let lib = crate::utils::connection::lib(cf, "Displaying deck memory")?;
+            let device = lib.memory.get_memories(None).into_iter().find(|m| m.memory_id == id).cloned()
+                .ok_or_else(|| anyhow!("Memory ID={} not found", id))?;
+            let deck_memory = match lib.memory.open_memory::<DeckMemory>(device).await {
                 Some(Ok(e)) => e,
-                Some(Err(e)) => bail!("Could not access memory ID={} as DeckMemory: {}", memory.memory_id, e),
-                None => bail!("Memory ID={} not found", memory.memory_id),
+                Some(Err(e)) => bail!("Could not access memory ID={} as DeckMemory: {}", id, e),
+                None => bail!("Memory ID={} not found", id),
             };
-
-            print_deck_memory_info(&deck_memory).await?;
+            let shown = print_deck_memory_info(&deck_memory).await;
+            lib.memory.close_memory(deck_memory).await?;
+            shown?;
         }
         MemoryType::DeckCtrlDFU => {
-            let raw = match cf
-                .memory
-                .open_memory::<RawMemory>(memory.clone())
-                .await
-            {
-                Some(Ok(r)) => r,
-                Some(Err(e)) => bail!("Could not access memory ID={} as RawMemory: {}", memory.memory_id, e),
-                None => bail!("Memory ID={} not found", memory.memory_id),
-            };
+            let raw = cf.memory.open_memory::<RawMemory>(memory).await
+                .with_context(|| format!("Could not access memory ID={} as RawMemory", id))?;
             print_deck_ctrl_dfu_info(&raw).await?;
         }
-        _ => bail!("Don't know how to handle memory ID={} yet, cannot display it", memory.memory_id),
+        _ => bail!("Don't know how to handle memory ID={} yet, cannot display it", id),
     }
 
     Ok(())
 }
 
-pub async fn erase(cf: &Crazyflie, memory: MemoryDevice) -> Result<()> {
-    match memory.memory_type {
-        MemoryType::EEPROMConfig => {
-            let eeprom = match cf
-                .memory
-                .open_memory::<RawMemory>(memory.clone())
-                .await
-            {
-                Some(Ok(e)) => e,
-                Some(Err(e)) => bail!("Could not access memory ID={} as RawMemory: {}", memory.memory_id, e),
-                None => bail!("Memory ID={} not found", memory.memory_id),
-            };
-
-            eeprom.write(0, &vec![0xFFu8; 32]).await?;
-            println!("EEPROMConfig memory ID={} erased.", memory.memory_id);
-
-        }
-        MemoryType::OneWire => {
-            let ow_memory = match cf
-                .memory
-                .open_memory::<RawMemory>(memory.clone())
-                .await
-            {
-                Some(Ok(o)) => o,
-                Some(Err(e)) => bail!("Could not access memory ID={} as RawMemory: {}", memory.memory_id, e),
-                None => bail!("Memory ID={} not found", memory.memory_id),
-            };
-            ow_memory.write(0, &vec![0xFFu8; 112]).await?;
-            println!("OneWire memory ID={} erased.", memory.memory_id);
-        }
-        _ => bail!("Don't know how to handle memory ID={} yet, cannot erase it", memory.memory_id),
-    }
-
+pub async fn erase(cf: &Crazyflie, memory: &MemoryInfo) -> Result<()> {
+    let id = memory.id;
+    let size = match memory.memory_type {
+        MemoryType::EEPROMConfig => 32,
+        MemoryType::OneWire => 112,
+        _ => bail!("Don't know how to handle memory ID={} yet, cannot erase it", id),
+    };
+    let raw = cf.memory.open_memory::<RawMemory>(memory).await
+        .with_context(|| format!("Could not access memory ID={} as RawMemory", id))?;
+    raw.write(0, &vec![0xFFu8; size]).await?;
+    let name = if memory.memory_type == MemoryType::OneWire { "OneWire" } else { "EEPROMConfig" };
+    println!("{} memory ID={} erased.", name, id);
     Ok(())
 }
 
@@ -202,17 +169,14 @@ struct Mismatch {
 /// script can act on it; the differing bytes are listed first.
 pub async fn verify(
     cf: &Crazyflie,
-    memory: MemoryDevice,
+    memory: &MemoryInfo,
     offset: usize,
     expected: &[u8],
 ) -> Result<()> {
-    let mem_id = memory.memory_id;
+    let mem_id = memory.id;
 
-    let raw = match cf.memory.open_memory::<RawMemory>(memory).await {
-        Some(Ok(m)) => m,
-        Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
-        None => bail!("Memory ID={} not found", mem_id),
-    };
+    let raw = cf.memory.open_memory::<RawMemory>(memory).await
+        .with_context(|| format!("Could not access memory ID={} as raw memory", mem_id))?;
 
     let progress_bar = crate::utils::display::get_progressbar(expected.len(), None);
     let pb = progress_bar.clone();

@@ -1,7 +1,7 @@
 //! Platform information for cfcli.
 
 use anyhow::Result;
-use crazyflie_lib::Crazyflie;
+use crazyflie_connection_server::Crazyflie;
 use tabled::Tabled;
 
 /// What `platform info` shows.
@@ -24,10 +24,12 @@ impl PlatformInfo {
     }
 }
 
+/// Read when the Crazyflie was connected, so this needs no radio traffic.
 pub async fn info(cf: &Crazyflie) -> Result<PlatformInfo> {
+    let unknown = || "?".to_string();
     Ok(PlatformInfo {
-        platform: cf.platform.device_type_name().await?,
-        firmware: cf.platform.firmware_version().await?,
-        protocol: cf.platform.protocol_version().await?.to_string(),
+        platform: cf.platform.device_type_name().map_or_else(unknown, str::to_string),
+        firmware: cf.platform.firmware_version().map_or_else(unknown, str::to_string),
+        protocol: cf.platform.protocol_version().map_or_else(unknown, |version| version.to_string()),
     })
 }

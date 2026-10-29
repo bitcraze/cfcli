@@ -9,14 +9,13 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::time::Duration;
 
-use anyhow::Result;
-use crazyflie_lib::Crazyflie;
+use anyhow::{Context, Result};
 use futures::stream::StreamExt;
 use tabled::Tabled;
 
 use super::runner::{csv_row_for, split, Outcome, Runner, SwarmRow};
 use crate::error::CliError;
-use crate::modules::{bootloader, debug, deck, log, param, platform};
+use crate::modules::{debug, deck, log, param, platform};
 use crate::utils::display::{csv_row, print_table, table, Column, StreamTable};
 use crate::{
     AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmLogCommands, SwarmParamCommands,
@@ -24,55 +23,34 @@ use crate::{
 };
 
 pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv: bool) -> Result<()> {
-    let link_context = runner.link_context();
-    // These commands are sent without waiting for an answer, so each
-    // Crazyflie is first checked to answer at all. Otherwise one that is
-    // switched off would be reported as done. A sleeping Crazyflie answers:
-    // its nRF51 stays on.
-    let (results, done) = match command {
+    // The commands get no answer, so the server first checks that each
+    // Crazyflie answers at all; one that is switched off fails instead of
+    // being reported as done. A sleeping Crazyflie answers: its nRF51 stays on.
+    let (label, done) = match command {
         SwarmPlatformCommands::Info => return platform_info(runner, csv).await,
-        SwarmPlatformCommands::Reboot => (
-            runner
-                .each("Rebooting", async |t| {
-                    t.check_answers(link_context).await?;
-                    bootloader::reboot(link_context, &t.link_uri).await
-                })
-                .await,
-            "rebooted",
-        ),
-        SwarmPlatformCommands::PowerOff => (
-            runner
-                .each("Powering off", async |t| {
-                    t.check_answers(link_context).await?;
-                    Ok(Crazyflie::power_off_all(link_context, &t.link_uri).await?)
-                })
-                .await,
-            "powered off",
-        ),
-        SwarmPlatformCommands::Sleep => (
-            runner
-                .each("Putting to sleep", async |t| {
-                    t.check_answers(link_context).await?;
-                    Ok(Crazyflie::power_off_stm32_domain(link_context, &t.link_uri).await?)
-                })
-                .await,
-            "asleep",
-        ),
-        SwarmPlatformCommands::Wakeup => (
-            runner
-                .each("Waking up", async |t| {
-                    t.check_answers(link_context).await?;
-                    Ok(Crazyflie::power_on_stm32_domain(link_context, &t.link_uri).await?)
-                })
-                .await,
-            "woken up",
-        ),
+        SwarmPlatformCommands::Reboot => ("Rebooting", "rebooted"),
+        SwarmPlatformCommands::PowerOff => ("Powering off", "powered off"),
+        SwarmPlatformCommands::Sleep => ("Putting to sleep", "asleep"),
+        SwarmPlatformCommands::Wakeup => ("Waking up", "woken up"),
     };
+    let client = runner.client();
+    let results = runner
+        .each(label, async |t| {
+            let uri = t.link_uri.as_str();
+            let sent = match command {
+                SwarmPlatformCommands::Reboot => client.reboot(uri).await,
+                SwarmPlatformCommands::PowerOff => client.power_off_all(uri).await,
+                SwarmPlatformCommands::Sleep => client.power_off_stm32_domain(uri).await,
+                _ => client.power_on_stm32_domain(uri).await,
+            };
+            sent.context(CliError::Connection(format!("{} {}", label.to_lowercase(), uri)))
+        })
+        .await;
     finish_actions(runner, results, done)
 }
 
 async fn platform_info(runner: &Runner<'_>, csv: bool) -> Result<()> {
-    let results = runner.connected("Reading", async |cf, _| platform::info(cf).await).await;
+    let results = runner.attached("Reading", async |cf, _| platform::info(cf).await).await;
     let (done, outcome) = split(results);
     if csv {
         let mut header = vec!["cf", "uri"];
@@ -90,7 +68,7 @@ async fn platform_info(runner: &Runner<'_>, csv: bool) -> Result<()> {
 
 pub async fn deck(runner: &Runner<'_>, command: &SwarmDeckCommands, csv: bool) -> Result<()> {
     let SwarmDeckCommands::List = command;
-    let results = runner.connected("Reading", async |cf, _| Ok(deck::decks(cf).await)).await;
+    let results = runner.attached("Reading", async |cf, _| Ok(deck::decks(cf).await)).await;
     let (done, outcome) = split(results);
     if csv {
         csv_row(&["cf", "uri", "name", "revision", "serial"]);
@@ -133,7 +111,7 @@ pub async fn log(runner: &Runner<'_>, command: &SwarmLogCommands, non_interactiv
 /// One sample from each Crazyflie: a row per Crazyflie, a column per
 /// variable.
 async fn log_once(runner: &Runner<'_>, names: &[String], period: u64, csv: bool) -> Result<()> {
-    let results = runner.connected("Reading", async |cf, _| log::sample(cf, names, period).await).await;
+    let results = runner.attached("Reading", async |cf, _| log::sample(cf, names, period).await).await;
     let (done, outcome) = split(results);
     if csv {
         let mut header = vec!["cf", "uri", "timestamp_ms"];
@@ -166,13 +144,13 @@ async fn log_once(runner: &Runner<'_>, names: &[String], period: u64, csv: bool)
 /// Crazyflie's name in front, until stopped (Ctrl-C or `--timeout`) or until
 /// every Crazyflie has dropped out.
 async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: bool) -> Result<()> {
-    let connections = runner.connect_all("Connecting").await;
+    let connections = runner.attach_all("Connecting").await;
     let starts = futures::future::join_all(connections.into_iter().map(|connection| async move {
-        let cf = connection?;
-        match log::start(&cf, names, period).await {
-            Ok(stream) => Ok((cf, stream)),
+        let attached = connection?;
+        match log::start(&attached.cf, names, period).await {
+            Ok(stream) => Ok((attached, stream)),
             Err(e) => {
-                cf.disconnect().await;
+                attached.disconnect().await;
                 Err(e)
             }
         }
@@ -187,7 +165,7 @@ async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: boo
             Ok((cf, stream)) => {
                 connections.push(cf);
                 streams.push(Box::pin(futures::stream::unfold(Some(stream), move |stream| async move {
-                    let stream = stream?;
+                    let mut stream = stream?;
                     match stream.next().await {
                         Ok(data) => Some(((i, Ok(data)), Some(stream))),
                         Err(e) => Some(((i, Err(e)), None)),
@@ -214,7 +192,7 @@ async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: boo
             let mut columns = vec![Column { name: "CF", width: name_width, right: false }];
             // The types come from the TOC, the same for Crazyflies with the
             // same firmware.
-            columns.extend(log::stream_columns(&connections[0], names));
+            columns.extend(log::stream_columns(&connections[0].cf, names));
             table = Some(StreamTable::new(&columns));
         }
     }
@@ -245,8 +223,10 @@ async fn log_stream(runner: &Runner<'_>, names: &[String], period: u64, csv: boo
         }
     }
 
-    for cf in connections {
-        cf.disconnect().await;
+    // The streams first: each holds its Crazyflie's log block.
+    drop(merged);
+    for attached in connections {
+        attached.disconnect().await;
     }
     let (_, outcome) = split(results);
     outcome.finish()
@@ -262,7 +242,7 @@ struct AssertRow {
 pub async fn debug(runner: &Runner<'_>, command: &SwarmDebugCommands, csv: bool) -> Result<()> {
     let SwarmDebugCommands::Assert(AssertArgs { wait_timeout_ms }) = command;
     let wait = Duration::from_millis(*wait_timeout_ms);
-    let results = runner.connected("Reading", async |cf, _| debug::assert_info(cf, wait).await).await;
+    let results = runner.attached("Reading", async |cf, _| debug::assert_info(cf, wait).await).await;
     let (done, outcome) = split(results);
     if csv {
         csv_row(&["cf", "uri", "assert_info"]);
@@ -302,7 +282,7 @@ pub async fn param(
                 None => pick(runner, non_interactive, "<params>", async |cf| param::pick_values(cf).await).await?,
             };
             let results = runner
-                .connected("Setting", async |cf, _| {
+                .attached("Setting", async |cf, _| {
                     param::check_params_exist(cf, params.keys().map(String::as_str))?;
                     for (name, value) in &params {
                         param::set_value(cf, name, value).await?;
@@ -318,7 +298,7 @@ pub async fn param(
         SwarmParamCommands::Store(VariableName { names }) => {
             let names = persistent_names(runner, names, non_interactive, "Select parameters to store:").await?;
             let results = runner
-                .connected("Storing", async |cf, _| {
+                .attached("Storing", async |cf, _| {
                     param::check_params_exist(cf, names.split(','))?;
                     for name in names.split(',') {
                         cf.param.persistent_store(name).await?;
@@ -331,7 +311,7 @@ pub async fn param(
         SwarmParamCommands::Clear(VariableName { names }) => {
             let names = persistent_names(runner, names, non_interactive, "Select parameters to clear:").await?;
             let results = runner
-                .connected("Clearing", async |cf, _| {
+                .attached("Clearing", async |cf, _| {
                     param::check_params_exist(cf, names.split(','))?;
                     for name in names.split(',') {
                         cf.param.persistent_clear(name).await?;
@@ -347,7 +327,7 @@ pub async fn param(
 async fn param_get(runner: &Runner<'_>, names: &str, csv: bool) -> Result<()> {
     if csv {
         let results = runner
-            .connected("Reading", async |cf, _| {
+            .attached("Reading", async |cf, _| {
                 param::check_params_exist(cf, names.split(','))?;
                 let mut rows = Vec::new();
                 for name in names.split(',') {
@@ -368,7 +348,7 @@ async fn param_get(runner: &Runner<'_>, names: &str, csv: bool) -> Result<()> {
     }
 
     let results = runner
-        .connected("Reading", async |cf, _| {
+        .attached("Reading", async |cf, _| {
             param::check_params_exist(cf, names.split(','))?;
             param::get_rows(cf, names).await
         })
@@ -405,12 +385,12 @@ async fn pick<T>(
     runner: &Runner<'_>,
     non_interactive: bool,
     missing_arg: &str,
-    picker: impl AsyncFn(&Crazyflie) -> Result<T>,
+    picker: impl AsyncFn(&crazyflie_connection_server::Crazyflie) -> Result<T>,
 ) -> Result<T> {
     crate::require_arg(non_interactive, missing_arg)?;
-    let cf = runner.connect(&runner.targets[0]).await?;
-    let picked = picker(&cf).await;
-    cf.disconnect().await;
+    let attached = runner.attach_first().await?;
+    let picked = picker(&attached.cf).await;
+    attached.disconnect().await;
     picked
 }
 

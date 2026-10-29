@@ -1,29 +1,32 @@
 //! Running a command on many Crazyflies at once.
 //!
-//! The Crazyflies are spread over the Crazyradios (see
-//! [`radio::assign`]), and each Crazyradio handles [`PER_RADIO`] of them at a
-//! time. One at a time would take minutes for a big swarm, and all at once
-//! leaves each link so little of the radio's time that connecting starts to
-//! time out. The results come back in the order of the swarm file, whatever
-//! order the Crazyflies answer in.
+//! The runner reaches the Crazyflies through the client API, like the
+//! single-Crazyflie commands: with this computer's Crazyradios (direct mode,
+//! the server runs inside cfcli) or through a connection server. The server
+//! connects them, downloads each firmware's TOCs once and keeps the
+//! Crazyflies of a channel on one Crazyradio.
+//!
+//! In direct mode the runner spreads the Crazyflies over the Crazyradios
+//! itself (see [`radio::assign`]) and pins each to its radio, so that the
+//! commands still done with crazyflie-lib or cfloader directly (bootloader,
+//! memories) reach them on the same one. Through a server the server picks.
+//!
+//! A command runs on all the Crazyflies at once, also the ones that share a
+//! Crazyradio. A few at a time is slower: the ones already connected keep
+//! polling the radio while the next ones connect (25 on one radio: 3.0 s at 8
+//! at a time, 1.4 s all at once, 2026-10-19). Only the bootloader steps run a
+//! few per radio at a time ([`Runner::each_at_most`]). The results come back
+//! in the order of the swarm file, whatever order the Crazyflies answer in.
 //!
 //! A Crazyflie that fails doesn't stop the others. [`Outcome::finish`] turns
 //! the failures into the command's exit code.
-//!
-//! Crazyflies running the same firmware have the same parameter and log
-//! TOCs, so downloading them from more than one Crazyflie is wasted radio
-//! time. [`Runner::connected`] connects using only the TOC cache at first,
-//! lets one Crazyflie per TOC checksum download what is missing, and then
-//! connects the rest from the cache.
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
+use crazyflie_connection_server::{Client, Crazyflie};
 use crazyflie_lib::crazyflie_link::LinkContext;
-use crazyflie_lib::{Crazyflie, TocCache};
 use futures::stream::{self, StreamExt};
 use tabled::Tabled;
 
@@ -31,19 +34,7 @@ use super::store::Swarm;
 use crate::error::{self, CliError};
 use crate::utils::display::csv_row;
 use crate::utils::radio::{self, RadioUri};
-use crate::{Config, ConfigTocCache};
-
-/// Crazyflies handled at the same time on each Crazyradio.
-const PER_RADIO: usize = 8;
-
-/// Packets sent to a Crazyflie before it counts as not answering.
-const ANSWER_ATTEMPTS: usize = 3;
-
-/// How long a rebooted Crazyflie gets to show up (on its new channel or
-/// address).
-const BOOT_TIMEOUT: Duration = Duration::from_secs(8);
-/// Pause between looking for a rebooting Crazyflie.
-const BOOT_POLL: Duration = Duration::from_millis(300);
+use crate::Config;
 
 /// One Crazyflie a command runs on.
 pub struct Target {
@@ -51,11 +42,22 @@ pub struct Target {
     pub name: String,
     /// Its URI as written in the swarm.
     pub uri: String,
-    /// The URI to connect with: a real Crazyradio, and the timeout from the
-    /// settings.
+    /// The URI to reach it with: the timeout from the settings, and in direct
+    /// mode the Crazyradio it was given.
     pub link_uri: String,
-    /// The Crazyradio it was given, `None` for `usb://`.
+    /// The Crazyradio it was given in direct mode. `None` for `usb://`, and
+    /// through a server, which picks the radio.
     pub radio: Option<usize>,
+    /// The targets of one lane share a Crazyradio: the radio in direct mode,
+    /// the channel through a server. `None` for `usb://`.
+    lane: Option<usize>,
+}
+
+impl Target {
+    /// Whether it is reached by radio.
+    pub fn is_radio(&self) -> bool {
+        !self.uri.starts_with("usb://")
+    }
 }
 
 /// A row of a normal listing with the Crazyflie's name in front.
@@ -75,30 +77,50 @@ pub fn csv_row_for(target: &Target, fields: &[&str]) {
 }
 
 pub struct Runner<'a> {
+    client: Client,
     link_context: &'a LinkContext,
-    toc_cache: ConfigTocCache,
     pub targets: Vec<Target>,
 }
 
+/// A Crazyflie the runner attached to.
+pub struct Attached {
+    pub cf: Crazyflie,
+    /// Disconnect it when done (direct mode, where nobody else uses it), so
+    /// that the next step can open its own link to it.
+    disconnect: bool,
+}
+
+impl Attached {
+    pub async fn disconnect(self) {
+        let lib = self.cf.lib().filter(|_| self.disconnect);
+        self.cf.detach();
+        if let Some(lib) = lib {
+            lib.disconnect().await;
+        }
+    }
+}
+
 impl<'a> Runner<'a> {
-    /// The selected Crazyflies of a swarm, each given a Crazyradio.
+    /// The selected Crazyflies of a swarm, reached through `client`. In
+    /// direct mode each is given a Crazyradio.
     pub async fn new(
+        client: &Client,
         link_context: &'a LinkContext,
         config: &Config,
-        toc_cache: ConfigTocCache,
         swarm: &Swarm,
         selected: &[usize],
     ) -> Result<Runner<'a>> {
         let units: Vec<_> = selected.iter().map(|i| &swarm.units[*i]).collect();
         let parsed = units.iter().map(|unit| RadioUri::parse(&unit.uri)).collect::<Result<Vec<_>>>()?;
 
-        let links: Vec<radio::Link> = parsed
-            .iter()
-            .flatten()
-            .map(|r| radio::Link { radio: r.radio, channel: r.channel })
-            .collect();
         let mut assigned = Vec::new().into_iter();
-        if !links.is_empty() {
+        let direct = client.is_in_process();
+        if direct && parsed.iter().any(Option::is_some) {
+            let links: Vec<radio::Link> = parsed
+                .iter()
+                .flatten()
+                .map(|r| radio::Link { radio: r.radio, channel: r.channel })
+                .collect();
             let available = radio::available_radios(link_context).await;
             if available.is_empty() {
                 anyhow::bail!(CliError::Connection("no Crazyradio could be opened".to_string()));
@@ -114,50 +136,64 @@ impl<'a> Runner<'a> {
             .iter()
             .zip(&parsed)
             .map(|(unit, parsed)| {
-                let (radio, uri) = match parsed {
-                    Some(radio_uri) => {
+                let (uri, radio, lane) = match parsed {
+                    Some(radio_uri) if direct => {
                         let radio = assigned.next().expect("one radio per radio URI");
-                        (Some(radio), radio_uri.with_radio(radio))
+                        (radio_uri.with_radio(radio), Some(radio), Some(radio))
                     }
-                    None => (None, unit.uri.clone()),
+                    Some(radio_uri) => (unit.uri.clone(), None, Some(usize::from(radio_uri.channel))),
+                    None => (unit.uri.clone(), None, None),
                 };
                 Target {
                     name: unit.name.clone(),
                     uri: unit.uri.clone(),
                     link_uri: crate::with_timeout(config, uri),
                     radio,
+                    lane,
                 }
             })
             .collect();
-        Ok(Runner { link_context, toc_cache, targets })
+        Ok(Runner { client: client.clone(), link_context, targets })
     }
 
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Whether this process drives the Crazyradios, so that crazyflie-lib
+    /// and cfloader can be used directly.
+    pub fn is_direct(&self) -> bool {
+        self.client.is_in_process()
+    }
+
+    /// The link context, for the parts of `what` that use crazyflie-lib or
+    /// cfloader directly. Direct mode only.
+    pub fn direct(&self, what: &str) -> Result<&'a LinkContext> {
+        if !self.is_direct() {
+            anyhow::bail!(CliError::Connection(format!(
+                "{} does not go through a connection server yet. Use --connection direct",
+                what
+            )));
+        }
+        Ok(self.link_context)
+    }
+
+    /// The link context, for code that only runs in direct mode (see
+    /// [`Runner::direct`]).
     pub fn link_context(&self) -> &'a LinkContext {
         self.link_context
     }
 
-    /// Connect to a Crazyflie the same way the other cfcli commands do,
-    /// downloading the TOCs that aren't in the cache.
-    pub async fn connect(&self, target: &Target) -> Result<Crazyflie> {
-        self.connect_with(target, self.toc_cache.clone()).await
-    }
-
-    async fn connect_with(&self, target: &Target, toc_cache: impl TocCache) -> Result<Crazyflie> {
-        Crazyflie::connect_from_uri(self.link_context, &target.link_uri, toc_cache)
-            .await
-            .context(CliError::Connection(format!("connecting to {}", target.link_uri)))
-    }
-
-    /// Run `op` for the targets with these indices. Each Crazyradio handles
-    /// `per_radio` of them at a time, all Crazyradios at once. The results
-    /// come in the order they finish.
+    /// Run `op` for the targets with these indices. Each lane handles
+    /// `per_radio` of them at a time, all lanes at once. The results come in
+    /// the order they finish.
     pub(super) async fn run<R>(&self, indices: Vec<usize>, per_radio: usize, op: impl AsyncFn(usize) -> R) -> Vec<(usize, R)> {
-        let mut by_radio: BTreeMap<Option<usize>, Vec<usize>> = BTreeMap::new();
+        let mut by_lane: BTreeMap<Option<usize>, Vec<usize>> = BTreeMap::new();
         for i in indices {
-            by_radio.entry(self.targets[i].radio).or_default().push(i);
+            by_lane.entry(self.targets[i].lane).or_default().push(i);
         }
         let op = &op;
-        let runs = by_radio.into_values().map(|members| async move {
+        let runs = by_lane.into_values().map(|members| async move {
             stream::iter(members)
                 .map(|i| async move { (i, op(i).await) })
                 .buffer_unordered(per_radio)
@@ -167,10 +203,10 @@ impl<'a> Runner<'a> {
         futures::future::join_all(runs).await.into_iter().flatten().collect()
     }
 
-    /// Run `op` on every target and return the results in target order.
-    /// `label` is shown next to the progress bar.
+    /// Run `op` on every target at once and return the results in target
+    /// order. `label` is shown next to the progress bar.
     pub async fn each<T>(&self, label: &str, op: impl AsyncFn(&Target) -> Result<T>) -> Vec<Result<T>> {
-        self.each_at_most(label, PER_RADIO, op).await
+        self.each_at_most(label, usize::MAX, op).await
     }
 
     /// [`Runner::each`] with at most `per_radio` targets at a time on each
@@ -207,178 +243,68 @@ impl<'a> Runner<'a> {
         results.into_iter().map(|(_, result)| result).collect()
     }
 
-    /// Connect to every target, run `op` on it and disconnect again. Each
-    /// TOC missing from the cache is downloaded from one Crazyflie only.
-    pub async fn connected<T>(
-        &self,
-        label: &str,
-        op: impl AsyncFn(&Crazyflie, &Target) -> Result<T>,
-    ) -> Vec<Result<T>> {
-        self.connect_each(label, async |cf: Crazyflie, target: &Target| {
-            let result = op(&cf, target).await;
-            cf.disconnect().await;
+    /// Attach to a target. The server connects it unless another program
+    /// already has.
+    pub async fn attach(&self, target: &Target) -> Result<Attached> {
+        let cf = self
+            .client
+            .attach(&target.link_uri)
+            .await
+            .context(CliError::Connection(format!("connecting to {}", target.link_uri)))?;
+        Ok(Attached { cf, disconnect: self.client.is_direct() })
+    }
+
+    /// Attach to every target, run `op` on it and detach again.
+    pub async fn attached<T>(&self, label: &str, op: impl AsyncFn(&Crazyflie, &Target) -> Result<T>) -> Vec<Result<T>> {
+        self.each(label, async |target: &Target| {
+            let attached = self.attach(target).await?;
+            let result = op(&attached.cf, target).await;
+            attached.disconnect().await;
             result
         })
         .await
-        .into_iter()
-        .map(|result| result.and_then(|inner| inner))
-        .collect()
     }
 
-    /// Connect to every target and keep the connections, for commands that
-    /// talk to all the Crazyflies at the same time. Each TOC missing from
-    /// the cache is downloaded from one Crazyflie only.
-    pub async fn connect_all(&self, label: &str) -> Vec<Result<Crazyflie>> {
-        self.connect_each(label, async |cf: Crazyflie, _: &Target| cf).await
+    /// Attach to every target and stay attached, for commands that talk to
+    /// all the Crazyflies at the same time.
+    pub async fn attach_all(&self, label: &str) -> Vec<Result<Attached>> {
+        self.each(label, async |target: &Target| self.attach(target).await).await
     }
 
-    /// Connect to every target and hand the connection to `then`, which
-    /// owns it from there. Each TOC missing from the cache is downloaded
-    /// from one Crazyflie only.
-    async fn connect_each<R>(&self, label: &str, then: impl AsyncFn(Crazyflie, &Target) -> R) -> Vec<Result<R>> {
-        let connect_then = async |target: &Target| -> Result<R> {
-            let cf = self.connect(target).await?;
-            Ok(then(cf, target).await)
-        };
-        // Without the cache every Crazyflie downloads its TOCs anyway.
-        if self.toc_cache.no_toc_cache {
-            return self.each(label, connect_then).await;
-        }
-
-        let total = self.targets.len();
-        let bar = progress(label, total);
-        let mut results: Vec<Option<Result<R>>> = std::iter::repeat_with(|| None).take(total).collect();
-        let mut pending: Vec<usize> = (0..total).collect();
-        while !pending.is_empty() {
-            // Every pending Crazyflie whose TOCs are all in the cache.
-            let probes = self
-                .run(pending, PER_RADIO, async |i| {
-                    let probe = ProbeCache::new(self.toc_cache.clone());
-                    let cf = match self.connect_with(&self.targets[i], probe.clone()).await {
-                        Ok(cf) => cf,
-                        Err(e) => return Probe::Done(Err(e)),
-                    };
-                    let missed = probe.missed();
-                    if missed.is_empty() {
-                        Probe::Done(Ok(then(cf, &self.targets[i]).await))
-                    } else {
-                        cf.disconnect().await;
-                        Probe::Missed(missed)
-                    }
-                })
-                .await;
-
-            // One Crazyflie per missing TOC downloads it, the others with
-            // the same TOC try again once it is in the cache. Every round
-            // finishes at least one Crazyflie per missing TOC, so this ends.
-            let mut seen: Vec<Vec<Vec<u8>>> = Vec::new();
-            let mut downloaders = Vec::new();
-            pending = Vec::new();
-            for (i, probe) in probes {
-                match probe {
-                    Probe::Done(result) => {
-                        results[i] = Some(result);
-                        bar.inc(1);
-                    }
-                    Probe::Missed(keys) if seen.contains(&keys) => pending.push(i),
-                    Probe::Missed(keys) => {
-                        seen.push(keys);
-                        downloaders.push(i);
-                    }
-                }
-            }
-            for (i, result) in self.run(downloaders, PER_RADIO, async |i| connect_then(&self.targets[i]).await).await {
-                results[i] = Some(result);
-                bar.inc(1);
-            }
-            pending.sort_unstable();
-        }
-
-        bar.finish_and_clear();
-        results.into_iter().map(|result| result.expect("every target ran")).collect()
-    }
-}
-
-impl Target {
-    /// Whether the Crazyflie answers a packet over the radio, without
-    /// connecting to it. `usb://` targets aren't checked and count as
-    /// answering: opening a link to a missing USB device fails anyway.
-    pub async fn answers(&self, link_context: &LinkContext) -> bool {
-        if self.radio.is_none() {
-            return true;
-        }
-        for _ in 0..ANSWER_ATTEMPTS {
-            if matches!(link_context.scan_selected(vec![self.link_uri.as_str()]).await, Ok(found) if !found.is_empty()) {
-                return true;
-            }
-        }
-        false
+    /// The first target, e.g. to pick names from its TOC.
+    pub async fn attach_first(&self) -> Result<Attached> {
+        self.attach(&self.targets[0]).await
     }
 
-    /// Wait for a rebooted Crazyflie to answer.
-    pub async fn wait_for(&self, link_context: &LinkContext) -> bool {
-        let deadline = tokio::time::Instant::now() + BOOT_TIMEOUT;
-        while tokio::time::Instant::now() < deadline {
-            if self.answers(link_context).await {
-                return true;
-            }
-            tokio::time::sleep(BOOT_POLL).await;
-        }
-        false
+    /// Which of these targets answer a packet over the radio, without
+    /// connecting. Connected ones answer without radio traffic. Returns, in
+    /// order, the Crazyradio each answered on (`Some(None)` over USB).
+    pub async fn answering(&self, indices: &[usize]) -> Result<Vec<Option<Option<usize>>>> {
+        let uris: Vec<&str> = indices.iter().map(|i| self.targets[*i].link_uri.as_str()).collect();
+        let found = self.client.scan_selected(&uris).await.context(CliError::Connection("checking which Crazyflies answer".to_string()))?;
+        Ok(indices
+            .iter()
+            .map(|i| {
+                let key = crazyflie_connection_server::normalize_uri(&self.targets[*i].link_uri).ok()?.key;
+                found.iter().find(|cf| cf.uri == key).map(|cf| cf.radio)
+            })
+            .collect())
     }
 
-    /// Fail with a connection error unless the Crazyflie answers.
-    pub async fn check_answers(&self, link_context: &LinkContext) -> Result<()> {
-        if !self.answers(link_context).await {
-            anyhow::bail!(CliError::Connection(format!("{} doesn't answer", self.link_uri)));
+    /// Whether the target answers.
+    pub async fn answers(&self, target: &Target) -> bool {
+        let found = self.client.scan_selected(&[target.link_uri.as_str()]).await;
+        found.is_ok_and(|found| !found.is_empty())
+    }
+
+    /// Fail with a connection error unless the target answers.
+    pub async fn check_answers(&self, target: &Target) -> Result<()> {
+        if !self.answers(target).await {
+            anyhow::bail!(CliError::Connection(format!("{} doesn't answer", target.link_uri)));
         }
         Ok(())
     }
-}
 
-/// How connecting with only the TOC cache went.
-enum Probe<T> {
-    /// Connected (or failed to), and the connection was handed over.
-    Done(Result<T>),
-    /// These TOCs (cache keys) weren't in the cache.
-    Missed(Vec<Vec<u8>>),
-}
-
-/// A TOC cache that never makes the Crazyflie download a TOC. A miss is
-/// noted and answered with an empty TOC, so the connection finishes right
-/// away (an empty parameter TOC also skips reading all the values); the
-/// caller then disconnects and tries again once the TOC is in the cache.
-#[derive(Clone)]
-struct ProbeCache {
-    inner: ConfigTocCache,
-    missed: Arc<Mutex<Vec<Vec<u8>>>>,
-}
-
-impl ProbeCache {
-    fn new(inner: ConfigTocCache) -> Self {
-        ProbeCache { inner, missed: Arc::default() }
-    }
-
-    /// The keys that weren't in the cache, sorted so that two Crazyflies
-    /// missing the same TOCs compare equal.
-    fn missed(&self) -> Vec<Vec<u8>> {
-        let mut missed = self.missed.lock().unwrap().clone();
-        missed.sort();
-        missed
-    }
-}
-
-impl TocCache for ProbeCache {
-    fn get_toc(&self, key: &[u8]) -> Option<String> {
-        self.inner.get_toc(key).or_else(|| {
-            self.missed.lock().unwrap().push(key.to_vec());
-            Some("{}".to_string())
-        })
-    }
-
-    fn store_toc(&self, key: &[u8], toc: &str) {
-        self.inner.store_toc(key, toc);
-    }
 }
 
 /// A progress bar on stderr, hidden when stderr isn't a terminal.
@@ -514,24 +440,6 @@ mod tests {
     fn all_failed_in_different_ways_is_exit_code_50() {
         let (_, outcome) = split::<()>(vec![Err(connection_error()), Err(not_found())]);
         assert_eq!(code(outcome.finish()), 50);
-    }
-
-    #[test]
-    fn probe_cache_answers_a_miss_with_an_empty_toc() {
-        let config = Config {
-            uri: String::new(),
-            toc_cache: [("01aabbccdd".to_string(), "{\"a\":[1,8]}".to_string())].into(),
-            timeout_ms: None,
-            addresses: Vec::new(),
-            swarm: None,
-            sync: None,
-        };
-        let probe = ProbeCache::new(ConfigTocCache::new(config, false));
-        assert_eq!(probe.get_toc(&[1, 0xaa, 0xbb, 0xcc, 0xdd]).as_deref(), Some("{\"a\":[1,8]}"));
-        assert!(probe.missed().is_empty());
-        assert_eq!(probe.get_toc(&[1, 2, 3, 4, 5]).as_deref(), Some("{}"));
-        assert_eq!(probe.get_toc(&[1, 0, 0, 0, 0]).as_deref(), Some("{}"));
-        assert_eq!(probe.missed(), vec![vec![1, 0, 0, 0, 0], vec![1, 2, 3, 4, 5]]);
     }
 
     #[derive(Tabled)]
