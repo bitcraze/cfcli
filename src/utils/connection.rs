@@ -80,10 +80,17 @@ impl Connection {
     /// server keeps the console) and, in direct mode, disconnect.
     pub async fn close(&mut self, preserve_console: bool) {
         if preserve_console {
-            if let Some(cf) = self.cf.as_ref().and_then(|cf| cf.lib()) {
-                if let Err(e) = save_console_history(&cf).await {
-                    eprintln!("Warning: could not save console history: {}", e);
+            match self.cf.as_ref().map(|cf| cf.lib()) {
+                Some(Some(cf)) => {
+                    if let Err(e) = save_console_history(&cf).await {
+                        eprintln!("Warning: could not save console history: {}", e);
+                    }
                 }
+                Some(None) => eprintln!(
+                    "Note: --preserve-console does nothing through a connection server: 'cfcli console' prints \
+                     what the Crazyflie printed since the server connected it"
+                ),
+                None => {}
             }
         }
         if let Some(client) = &self.client {

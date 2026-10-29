@@ -74,3 +74,9 @@ Most commands, swarm commands included, go through a server. The ones that
 don't yet stop with exit code 10 when a server holds the Crazyradios, and say
 so. Stop the server, or run the command with `--connection direct` and a
 Crazyradio the server doesn't hold.
+
+## Console
+
+The server keeps each Crazyflie's console from when it connected it, and
+`cfcli console` prints that first. So `--preserve-console` does nothing
+through a server, and says so.
