@@ -1657,6 +1657,9 @@ async fn run() -> Result<()> {
             match command {
                 BootloadCommands::Info(params) => {
                     modules::bootloader::print_bootloader_info(&link_context, params.cold, uri.as_str()).await?;
+                    if !params.cold {
+                        utils::connection::wait_until_restarted(connection.client().await?, uri.as_str()).await?;
+                    }
                 }
                 BootloadCommands::Releases => {
                     utils::firmware::print_releases().await?;
@@ -1724,6 +1727,9 @@ async fn run() -> Result<()> {
                       upgrade,
                       params.cold,
                     ).await?;
+                    if !params.cold {
+                      utils::connection::wait_until_restarted(connection.client().await?, uri.as_str()).await?;
+                    }
                   }
                 }
             }

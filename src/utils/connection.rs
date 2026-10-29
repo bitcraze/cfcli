@@ -178,6 +178,35 @@ pub async fn require_direct(mode: &str) -> Result<()> {
     }
 }
 
+/// How long a Crazyflie that was just restarted gets to run its firmware again.
+const RESTART_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Wait until the Crazyflie at `uri`, just restarted into its firmware by
+/// cfcli itself (not through a server, whose jobs wait already), runs it
+/// again, so that the next command finds it running. Its address doesn't
+/// answer until its STM32 has started and set it (2.7 s after a reboot, a
+/// Crazyflie 2.1 Brushless), and the server waits for the firmware once it does.
+pub async fn wait_until_restarted(client: &Client, uri: &str) -> Result<()> {
+    let deadline = Instant::now() + RESTART_TIMEOUT;
+    loop {
+        match client.attach(uri).await {
+            Ok(cf) => {
+                // In direct mode it is disconnected, for the next step's own link
+                let lib = cf.lib();
+                cf.detach();
+                if let Some(lib) = lib {
+                    lib.disconnect().await;
+                }
+                return Ok(());
+            }
+            Err(crazyflie_connection_server::Error::Server(e)) if e.ends_with("doesn't answer") && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(e) => bail!(CliError::Connection(format!("not back after its restart: {}", e))),
+        }
+    }
+}
+
 /// The crazyflie-lib `Crazyflie` behind `cf`, for the parts of a command
 /// that the client API does not cover yet. Direct mode only.
 pub fn lib(cf: &Crazyflie, what: &str) -> Result<Arc<crazyflie_lib::Crazyflie>> {

@@ -19,6 +19,7 @@ use super::broadcast::{self, Job};
 use super::runner::{csv_row_for, split, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::bootloader;
+use crate::utils::connection;
 use crate::utils::display::{csv_row, finish_progress, get_progressbar, print_table, table};
 use crate::utils::firmware::FirmwareUpgrade;
 use crate::utils::flash_source;
@@ -61,7 +62,7 @@ async fn info(runner: &Runner<'_>, csv: bool) -> Result<()> {
     let link_context = runner.direct("swarm bootload info")?;
     // Not cut short by a timeout: that could leave a Crazyflie in its
     // bootloader, and every step of reading has its own.
-    let results = runner
+    let read = runner
         .each_at_most("Reading", BOOTLOADER_PER_RADIO, async |t| {
             // Restarting a Crazyflie that isn't there fails with an unhelpful
             // link error.
@@ -69,6 +70,20 @@ async fn info(runner: &Runner<'_>, csv: bool) -> Result<()> {
             bootloader::bootloader_versions(link_context, &t.link_uri).await
         })
         .await;
+    // Running their firmware again before the command ends, all at once.
+    let restarted = read.iter().enumerate().filter(|(_, read)| read.is_ok()).map(|(i, _)| i).collect();
+    let mut back: HashMap<usize, Result<()>> = runner
+        .run(restarted, usize::MAX, async |i| {
+            connection::wait_until_restarted(runner.client(), &runner.targets[i].link_uri).await
+        })
+        .await
+        .into_iter()
+        .collect();
+    let results = read
+        .into_iter()
+        .enumerate()
+        .map(|(i, read)| read.and_then(|versions| back.remove(&i).unwrap_or(Ok(())).map(|()| versions)))
+        .collect();
     let (done, outcome) = split(results);
     let broadcast = |stm32: u8, nrf51: u8| if stm32 >= BROADCAST_PROTOCOL && nrf51 >= BROADCAST_PROTOCOL { "yes" } else { "no" };
     if csv {
@@ -242,7 +257,14 @@ async fn flash(
             println!("{} ({} of {}, {}): {}", target.name, job.index + 1, total, job.platform, target.uri);
             let flashed =
                 bootloader::flash(link_context, &target.link_uri, toc_cache.clone(), job.upgrade.clone(), false).await;
-            results[job.index] = Some(flashed.map(|()| "flashed".to_string()));
+            let back = match flashed {
+                Ok(()) => connection::wait_until_restarted(runner.client(), &target.link_uri)
+                    .await
+                    .map(|()| "flashed".to_string())
+                    .map_err(|e| anyhow!("flashed, but {:#}", e)),
+                Err(e) => Err(e),
+            };
+            results[job.index] = Some(back);
         }
     } else {
         for (i, result) in broadcast::flash(runner, &jobs, toc_cache).await {
