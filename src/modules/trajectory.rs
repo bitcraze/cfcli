@@ -252,7 +252,7 @@ pub async fn display_memory(cf: &Crazyflie) -> Result<()> {
     }
 
     println!("Note: Trajectory definitions (ID -> memory mappings) are stored in RAM");
-    println!("      and cannot be queried. Use 'cfcli trajectory upload' to define trajectories.");
+    println!("      and cannot be queried. Use 'cfcli hlc trajectory upload' to define trajectories.");
 
     Ok(())
 }

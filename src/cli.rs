@@ -1556,7 +1556,7 @@ enum HlCommands {
     Land(HlLandParameters),
     /// Go to a specified position
     Goto(HlGotoParameters),
-    /// Stop all high-level commands and disable motors
+    /// Stop all high-level commands and cut the thrust (the Crazyflie stays armed, the motors idle)
     Stop,
     /// Trajectory operations
     Trajectory {

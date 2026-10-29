@@ -11,11 +11,11 @@
 # This ensures zero velocity and acceleration at start/end of each segment
 #
 # Usage:
-#   cfcli trajectory upload examples/square.yaml
+#   cfcli hlc trajectory upload 1 -i examples/trajectories/square.yaml
 #   cfcli hlc arm
-#   cfcli hlc takeoff 0.5
+#   cfcli hlc takeoff -z 0.5
 #   sleep 3
-#   cfcli trajectory run 1 -r   # -r for relative position
+#   cfcli hlc trajectory run 1 -r   # -r for relative position
 #   sleep 9
 #   cfcli hlc land
 
