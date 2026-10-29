@@ -758,18 +758,18 @@ dependencies = [
 
 [[package]]
 name = "crazyflie-connection-protocol"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "404ffb80ee4aa7f6c218c65032060ea0999849904acd21b9b4600ace3f080e70"
+checksum = "aa941278b5198f2fd688afc6726c2a701d032865e58e6cfc31fa1663f9562abf"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "crazyflie-connection-server"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2b4fadb1de5630460f61ed4bf0246516932bb5567e4bae4e2d3ed9737784e09"
+checksum = "8f2ab140f4a2171bab1f1970d82c446067ca1fbf7a18bcb8d2254315d65b4fc3"
 dependencies = [
  "axum",
  "base64 0.22.1",
