@@ -258,7 +258,7 @@ struct CheckRow {
 
 async fn check(runner: &Runner<'_>, wanted: &LighthouseConfigFile, write_args: &str, csv: bool) -> Result<()> {
     let results = runner
-        .connected("Reading", async |cf, _| {
+        .attached("Reading", async |cf, _| {
             let on_cf = read_config(cf, |_, _| {}).await?;
             Ok(Found { diffs: compare(wanted, &on_cf), supported: supported_base_stations(cf) })
         })
@@ -306,7 +306,7 @@ async fn check(runner: &Runner<'_>, wanted: &LighthouseConfigFile, write_args: &
 
 async fn write(runner: &Runner<'_>, wanted: &LighthouseConfigFile, force: bool) -> Result<()> {
     let results = runner
-        .connected("Writing", async |cf, _| {
+        .attached("Writing", async |cf, _| {
             // Refused before anything is written.
             check_supported(wanted, supported_base_stations(cf))?;
             if !force && is_same(&compare(wanted, &read_config(cf, |_, _| {}).await?)) {

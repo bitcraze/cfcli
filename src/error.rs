@@ -80,6 +80,14 @@ pub fn classify_exit_code(err: &anyhow::Error) -> i32 {
                 _ => {}
             }
         }
+        // Through the client API, errors from the Crazyflie arrive as text.
+        if let Some(client_err) = cause.downcast_ref::<crazyflie_connection_server::Error>() {
+            match client_err {
+                crazyflie_connection_server::Error::UnknownName(_) => return 20,
+                crazyflie_connection_server::Error::ConnectionLost | crazyflie_connection_server::Error::Transport(_) => return 10,
+                _ => {}
+            }
+        }
     }
     1
 }

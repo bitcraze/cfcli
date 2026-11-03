@@ -13,7 +13,7 @@ Commands:
   takeoff     Take off to a specified height
   land        Land at the current position
   goto        Go to a specified position
-  stop        Stop all high-level commands and disable motors
+  stop        Stop all high-level commands and cut the thrust (the Crazyflie stays armed, the motors idle)
   trajectory  Trajectory operations
   help        Print this message or the help of the given subcommand(s)
 ```
@@ -111,7 +111,9 @@ cfcli hlc goto 0.0,0.0,0.5 --yaw 180
 
 ## Stop
 
-Immediately stop all high-level commander operations and disable the motors.
+Immediately stop all high-level commander operations and cut the thrust: a flying Crazyflie
+falls. The Crazyflie stays armed, so a brushless one keeps its motors at idle; `cfcli hlc disarm`
+stops them.
 
 ```text
 cfcli hlc stop

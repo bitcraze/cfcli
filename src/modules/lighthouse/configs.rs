@@ -9,7 +9,7 @@
 //! may also have a `name`, which the client ignores.
 
 use anyhow::{anyhow, bail, Context, Result};
-use crazyflie_lib::Crazyflie;
+use crazyflie_connection_server::Crazyflie;
 use inquire::{Confirm, Select};
 use tabled::Tabled;
 

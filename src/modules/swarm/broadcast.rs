@@ -32,6 +32,7 @@ use tokio::time::sleep;
 use super::bootload::{BOOTLOADER_PER_RADIO, BROADCAST_PROTOCOL};
 use super::runner::{progress, Runner};
 use crate::modules::bootloader::{self, DeckOutput};
+use crate::utils::connection;
 use crate::utils::display::{finish_progress, get_count_progressbar, get_progressbar};
 use crate::utils::firmware::{Firmware, FirmwareUpgrade};
 use crate::ConfigTocCache;
@@ -346,8 +347,10 @@ pub async fn flash(runner: &Runner<'_>, jobs: &[Job<'_>], toc_cache: ConfigTocCa
     if !outcomes.restarted.is_empty() {
         sleep(Duration::from_millis(500)).await;
     }
+    let mut left = Vec::new();
     for (index, bootloader_uri) in std::mem::take(&mut outcomes.restarted) {
         if bootloader::left_bootloader(link_context, &bootloader_uri).await {
+            left.push(index);
             continue;
         }
         let address = bootloader_uri.split('?').next().unwrap_or_default();
@@ -356,6 +359,17 @@ pub async fn flash(runner: &Runner<'_>, jobs: &[Job<'_>], toc_cache: ConfigTocCa
                 "it is still in its bootloader, at {}. Restart it with its power button",
                 address
             ));
+        }
+    }
+    // And run its firmware again before the command ends.
+    let back = runner
+        .run(left, usize::MAX, async |i| {
+            connection::wait_until_restarted(runner.client(), &runner.targets[i].link_uri).await
+        })
+        .await;
+    for (index, back) in back {
+        if let (Err(e), Some((_, result))) = (back, outcomes.results.iter_mut().find(|(i, _)| *i == index)) {
+            *result = Err(anyhow!("flashed, but {:#}", e));
         }
     }
 

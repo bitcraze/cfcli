@@ -10,14 +10,15 @@ pub fn format_console_line(line: &str) -> String {
     }
 }
 
-pub async fn print(cf: &crazyflie_lib::Crazyflie, no_format: bool) -> Result<()> {
-            let mut console_stream = cf.console.stream().await;
+/// Print the console, starting with what it printed since it was connected.
+pub async fn print(cf: &crazyflie_connection_server::Crazyflie, no_format: bool) -> Result<()> {
+    let mut lines = cf.console.line_stream().await?;
 
-    while let Some(line) = console_stream.next().await {
+    while let Some(line) = lines.next().await {
         if no_format {
-            print!("{}", line);
+            println!("{}", line);
         } else {
-            print!("{}", format_console_line(&line));
+            println!("{}", format_console_line(&line));
         }
     }
 

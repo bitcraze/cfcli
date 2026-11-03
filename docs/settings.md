@@ -8,11 +8,12 @@ as opposed to `config` which configures the Crazyflie hardware itself.
 Usage: cfcli settings <COMMAND>
 
 Commands:
-  show     Show all current settings
-  timeout  Manage the connection timeout
-  address  Manage scan addresses
-  sync     Whether commands sync shared swarms and lighthouse configs with the server
-  help     Print this message or the help of the given subcommand(s)
+  show        Show all current settings
+  timeout     Manage the connection timeout
+  address     Manage scan addresses
+  sync        Whether commands sync shared swarms and lighthouse configs with the server
+  connection  Where to reach the Crazyflies: directly or through a connection server (experimental)
+  help        Print this message or the help of the given subcommand(s)
 ```
 
 ## Show all settings
@@ -106,3 +107,14 @@ cfcli settings sync off
 cfcli settings sync on
 ```
 
+## Connection (experimental)
+
+Whether cfcli drives this computer's Crazyradios itself or goes through a
+connection server: `auto` (the default), `direct`, `local` or a server
+address. See [Connection server](connection-server.md).
+
+```bash
+cfcli settings connection show
+cfcli settings connection set direct
+cfcli settings connection clear
+```

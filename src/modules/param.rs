@@ -1,10 +1,11 @@
 use anyhow::{anyhow, bail, Result};
-use crazyflie_lib::Crazyflie;
+use crazyflie_connection_server::Crazyflie;
 use crazyflie_lib::Value;
 use crazyflie_lib::ValueType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use crate::error::CliError;
+use crate::utils::connection::{get_param, param_type, param_value};
 use crate::utils::display::{csv_row, print_table, table, value_to_csv_string};
 use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
@@ -57,11 +58,11 @@ async fn print_csv_row(cf: &Crazyflie, name: &str) -> Result<()> {
 /// current value. Empty cells for fields that don't apply (e.g.
 /// non-persistent params have empty default/stored_value).
 pub async fn csv_fields(cf: &Crazyflie, name: &str) -> Result<Vec<String>> {
-    let value: Value = cf.param.get(name).await?;
+    let value: Value = get_param(cf, name).await?;
     let writable = if cf.param.is_writable(name)? { "RW" } else { "RO" };
 
     let (persistent, default_s, stored_s) = if cf.param.is_persistent(name).await? {
-        match cf.param.persistent_get_state(name).await {
+        match persistent_state(cf, name).await {
             Ok(state) => {
                 let default = value_to_csv_string(&state.default_value);
                 let stored = match state.stored_value {
@@ -84,6 +85,16 @@ pub async fn csv_fields(cf: &Crazyflie, name: &str) -> Result<Vec<String>> {
         stored_s,
         value_to_csv_string(&value),
     ])
+}
+
+/// The persisted default and stored values of a parameter, typed like it.
+async fn persistent_state(cf: &Crazyflie, name: &str) -> Result<crazyflie_lib::subsystems::param::PersistentParamState> {
+    let state = cf.param.persistent_get_state(name).await?;
+    Ok(crazyflie_lib::subsystems::param::PersistentParamState {
+        is_stored: state.is_stored,
+        default_value: param_value(cf, name, state.default_value)?,
+        stored_value: state.stored_value.map(|value| param_value(cf, name, value)).transpose()?,
+    })
 }
 
 /// Verify each `name` is in the parameter TOC. Bails with `CliError::NotFound`
@@ -110,11 +121,11 @@ pub async fn list(cf: &Crazyflie, csv: bool) -> Result<()> {
 
     let mut rows = Vec::new();
     for name in cf.param.names() {
-        let value: Value = cf.param.get(&name).await?;
+        let value: Value = get_param(cf, &name).await?;
         let writable = if cf.param.is_writable(&name)? { "RW" } else { "RO" };
 
         let (persistent, value_str) = if cf.param.is_persistent(&name).await? {
-            match cf.param.persistent_get_state(&name).await {
+            match persistent_state(cf, &name).await {
                 Ok(state) if state.is_stored => {
                     let stored_val = state.stored_value.unwrap();
                     ("Stored", format!("{:?}/{:?}", value, stored_val))
@@ -169,11 +180,11 @@ pub fn print_get_table<R: Tabled>(rows: &[R], access_column: usize) {
 pub async fn get_rows(cf: &Crazyflie, names: &str) -> Result<Vec<ParamGetRow>> {
     let mut rows = Vec::new();
     for name in names.split(',') {
-        let value: Value = cf.param.get(name).await?;
+        let value: Value = get_param(cf, name).await?;
         let writable = if cf.param.is_writable(&name)? { "RW" } else { "RO" };
 
         let (persistent, default_str, stored_str) = if cf.param.is_persistent(name).await? {
-            match cf.param.persistent_get_state(name).await {
+            match persistent_state(cf, name).await {
                 Ok(state) => {
                     let stored = if state.is_stored { "Yes".to_string() } else { "No".to_string() };
                     let default = format!("{:?}", state.default_value);
@@ -217,54 +228,22 @@ pub async fn set(cf: &Crazyflie, param_list: &HashMap<String, String>, store: bo
 }
 
 /// Set one parameter from its text form, parsed as the parameter's type.
+/// The client API carries values as `f64`, exact for every type up to 32 bits.
 pub async fn set_value(cf: &Crazyflie, name: &str, value: &str) -> Result<()> {
-    match cf.param.get_type(name) {
-        Ok(ValueType::U8) => {
-            let value: u8 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::U16) => {
-            let value: u16 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::U32) => {
-            let value: u32 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::U64) => {
-            let value: u64 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::I8) => {
-            let value: i8 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::I16) => {
-            let value: i16 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::I32) => {
-            let value: i32 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::I64) => {
-            let value: i64 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::F16) => {
-            let value: f32 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::F32) => {
-            let value: f32 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
-        Ok(ValueType::F64) => {
-            let value: f64 = value.parse()?;
-            cf.param.set(name, value).await?;
-        }
+    let value = match param_type(cf, name) {
+        Ok(ValueType::U8) => f64::from(value.parse::<u8>()?),
+        Ok(ValueType::U16) => f64::from(value.parse::<u16>()?),
+        Ok(ValueType::U32) => f64::from(value.parse::<u32>()?),
+        Ok(ValueType::U64) => value.parse::<u64>()? as f64,
+        Ok(ValueType::I8) => f64::from(value.parse::<i8>()?),
+        Ok(ValueType::I16) => f64::from(value.parse::<i16>()?),
+        Ok(ValueType::I32) => f64::from(value.parse::<i32>()?),
+        Ok(ValueType::I64) => value.parse::<i64>()? as f64,
+        Ok(ValueType::F16) | Ok(ValueType::F32) => f64::from(value.parse::<f32>()?),
+        Ok(ValueType::F64) => value.parse::<f64>()?,
         Err(e) => bail!("Failed to get type for parameter '{}': {}", name, e),
-    }
+    };
+    cf.param.set_lossy(name, value).await?;
     Ok(())
 }
 
@@ -304,7 +283,7 @@ pub async fn pick_values(cf: &Crazyflie) -> Result<HashMap<String, String>> {
 
     let mut values = HashMap::new();
     for name in selected {
-        let current: Value = cf.param.get(&name).await?;
+        let current: Value = get_param(cf, &name).await?;
         let value = inquire::Text::new(&format!("[{}] {:?}:", name, current))
             .prompt()
             .map_err(|_| anyhow!("No value entered for parameter '{}'", name))?;

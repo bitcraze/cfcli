@@ -8,16 +8,20 @@
 //! busy, so flashing several at once wouldn't be faster. `info` shows which
 //! Crazyflies have bootloaders that take broadcast.
 
+use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use crazyflie_connection_server::FlashProgress;
 use tabled::Tabled;
 
 use super::broadcast::{self, Job};
-use super::runner::{csv_row_for, split, Runner, SwarmRow};
+use super::runner::{csv_row_for, progress as progress_bar, split, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::bootloader;
-use crate::utils::display::{csv_row, print_table, table};
+use crate::utils::connection;
+use crate::utils::display::{csv_row, finish_progress, get_progressbar, print_table, table};
 use crate::utils::firmware::FirmwareUpgrade;
 use crate::utils::flash_source;
 use crate::{ConfigTocCache, SwarmBootloadCommands, SwarmFlashParameters};
@@ -56,17 +60,31 @@ struct InfoRow {
 }
 
 async fn info(runner: &Runner<'_>, csv: bool) -> Result<()> {
-    let link_context = runner.link_context();
+    let link_context = runner.direct("swarm bootload info")?;
     // Not cut short by a timeout: that could leave a Crazyflie in its
     // bootloader, and every step of reading has its own.
-    let results = runner
+    let read = runner
         .each_at_most("Reading", BOOTLOADER_PER_RADIO, async |t| {
             // Restarting a Crazyflie that isn't there fails with an unhelpful
             // link error.
-            t.check_answers(link_context).await?;
+            runner.check_answers(t).await?;
             bootloader::bootloader_versions(link_context, &t.link_uri).await
         })
         .await;
+    // Running their firmware again before the command ends, all at once.
+    let restarted = read.iter().enumerate().filter(|(_, read)| read.is_ok()).map(|(i, _)| i).collect();
+    let mut back: HashMap<usize, Result<()>> = runner
+        .run(restarted, usize::MAX, async |i| {
+            connection::wait_until_restarted(runner.client(), &runner.targets[i].link_uri).await
+        })
+        .await
+        .into_iter()
+        .collect();
+    let results = read
+        .into_iter()
+        .enumerate()
+        .map(|(i, read)| read.and_then(|versions| back.remove(&i).unwrap_or(Ok(())).map(|()| versions)))
+        .collect();
     let (done, outcome) = split(results);
     let broadcast = |stm32: u8, nrf51: u8| if stm32 >= BROADCAST_PROTOCOL && nrf51 >= BROADCAST_PROTOCOL { "yes" } else { "no" };
     if csv {
@@ -111,15 +129,38 @@ async fn flash(
     non_interactive: bool,
 ) -> Result<()> {
     let source = &params.source;
+    if params.unicast && !runner.is_direct() {
+        bail!(CliError::Connection(
+            "--unicast does not go through a connection server: the server flashes the Crazyflies whose \
+             bootloaders don't take broadcast one after another. Use --connection direct"
+                .to_string()
+        ));
+    }
     // Everything that comes from the command line first, before any
     // Crazyflie is touched.
     let only = params.platform.as_deref().map(flash_source::platform_name).transpose()?;
     let release = flash_source::release(&source.release, non_interactive).await?;
     let bins = flash_source::bins(&source.bin, &source.targets, non_interactive)?;
 
-    // The platform decides which files of a release a Crazyflie gets.
+    // The platform decides which files of a release a Crazyflie gets. One
+    // that is asleep is woken up to read it, since flashing restarts it anyway.
     let platforms = runner
-        .connected("Reading", async |cf, _| Ok(cf.platform.device_type_name().await?))
+        .each("Reading", async |target| {
+            let attached = match runner.attach(target).await {
+                Err(e) if format!("{:#}", e).contains("asleep") => {
+                    runner
+                        .client()
+                        .power_on_stm32_domain(&target.link_uri)
+                        .await
+                        .context(CliError::Connection(format!("waking up {}", target.link_uri)))?;
+                    runner.attach(target).await?
+                }
+                attached => attached?,
+            };
+            let platform = attached.cf.platform.device_type_name().map(str::to_string);
+            attached.disconnect().await;
+            platform.ok_or_else(|| anyhow!("its platform is unknown"))
+        })
         .await;
     let to_flash: Vec<(usize, &str)> = platforms
         .iter()
@@ -204,7 +245,11 @@ async fn flash(
         }
     }
 
-    if params.unicast {
+    if !runner.is_direct() {
+        for (i, result) in flash_through_server(runner, &jobs).await? {
+            results[i] = Some(result);
+        }
+    } else if params.unicast {
         // One Crazyflie after another.
         let link_context = runner.link_context();
         for job in &jobs {
@@ -213,7 +258,14 @@ async fn flash(
             println!("{} ({} of {}, {}): {}", target.name, job.index + 1, total, job.platform, target.uri);
             let flashed =
                 bootloader::flash(link_context, &target.link_uri, toc_cache.clone(), job.upgrade.clone(), false).await;
-            results[job.index] = Some(flashed.map(|()| "flashed".to_string()));
+            let back = match flashed {
+                Ok(()) => connection::wait_until_restarted(runner.client(), &target.link_uri)
+                    .await
+                    .map(|()| "flashed".to_string())
+                    .map_err(|e| anyhow!("flashed, but {:#}", e)),
+                Err(e) => Err(e),
+            };
+            results[job.index] = Some(back);
         }
     } else {
         for (i, result) in broadcast::flash(runner, &jobs, toc_cache).await {
@@ -243,6 +295,159 @@ async fn flash(
     println!("Took {}:{:02}", elapsed / 60, elapsed % 60);
     let (_, outcome) = split(results);
     outcome.finish()
+}
+
+/// Flash the jobs through the connection server: a job on the server per
+/// platform, which broadcasts to the Crazyflies whose bootloaders take it and
+/// flashes the others one after another. Returns a result for each job, by
+/// target index. Fails before anything is flashed if a platform's firmware
+/// can't go through a server.
+async fn flash_through_server(runner: &Runner<'_>, jobs: &[Job<'_>]) -> Result<Vec<(usize, Result<String>)>> {
+    let mut platforms: Vec<(&str, Vec<crazyflie_connection_server::FlashImage>, Vec<&Job>)> = Vec::new();
+    for job in jobs {
+        match platforms.iter_mut().find(|(platform, _, _)| *platform == job.platform) {
+            Some((_, _, members)) => members.push(job),
+            None => platforms.push((&job.platform, bootloader::server_images(job.upgrade)?, vec![job])),
+        }
+    }
+
+    let mut results = Vec::new();
+    for (platform, images, members) in platforms {
+        bootloader::print_decks_skipped(members[0].upgrade);
+        let (by_radio, by_usb): (Vec<&Job>, Vec<&Job>) =
+            members.into_iter().partition(|job| runner.targets[job.index].is_radio());
+        for job in by_usb {
+            results.push((job.index, Err(anyhow!("stm32-fw / nrf51-fw flashing requires a radio URI"))));
+        }
+        if by_radio.is_empty() {
+            continue;
+        }
+        if images.is_empty() {
+            for job in by_radio {
+                results.push((job.index, Ok("nothing to flash through a connection server".to_string())));
+            }
+            continue;
+        }
+
+        println!();
+        println!("{} ({}) through the connection server", super::crazyflies(by_radio.len()), platform);
+        let uris: Vec<&str> = by_radio.iter().map(|job| runner.targets[job.index].link_uri.as_str()).collect();
+        let names: HashMap<String, &str> = by_radio
+            .iter()
+            .filter_map(|job| {
+                let target = &runner.targets[job.index];
+                Some((crazyflie_connection_server::normalize_uri(&target.link_uri).ok()?.key, target.name.as_str()))
+            })
+            .collect();
+        let mut shown = JobProgress { names, bar: None, finished: None };
+        let flashed = runner
+            .client()
+            .flash_swarm(&uris, images, |progress| shown.show(progress))
+            .await
+            .context(CliError::Connection("flashing through the connection server".to_string()));
+        shown.finish();
+        for (job, result) in by_radio.into_iter().zip(flashed?) {
+            results.push((job.index, result.map(|how| format!("flashed ({})", how)).map_err(|reason| anyhow!(reason))));
+        }
+    }
+    Ok(results)
+}
+
+/// The progress of a flash job on a server: a bar counting the Crazyflies
+/// through each step, a bar while an image is written, and the steps of a
+/// single Crazyflie on a line.
+struct JobProgress<'n> {
+    /// Each Crazyflie's name, by normalized URI.
+    names: HashMap<String, &'n str>,
+    /// The bar shown.
+    bar: Option<JobBar>,
+    /// The counted step whose bar was finished: reports of it that arrive
+    /// late don't start it again.
+    finished: Option<String>,
+}
+
+/// A bar of a flash job: Crazyflies through a step, or the bytes of an image
+/// for one Crazyflie or all of them.
+struct JobBar {
+    uri: Option<String>,
+    step: String,
+    /// It counts Crazyflies, not bytes.
+    counts: bool,
+    bar: indicatif::ProgressBar,
+}
+
+impl JobProgress<'_> {
+    fn show(&mut self, progress: FlashProgress) {
+        // Writing an image counts bytes; the other steps come for each
+        // Crazyflie as it starts and finishes them, counting the Crazyflies.
+        let image = progress.step.starts_with("Flashing ") || progress.step.starts_with("Broadcasting ");
+        if !image {
+            self.show_count(progress);
+            return;
+        }
+        if self.bar.as_ref().is_none_or(|shown| shown.uri != progress.uri || shown.step != progress.step) {
+            self.finish();
+            let label = self.label(progress.uri.as_deref(), &progress.step);
+            let bar = get_progressbar(progress.total as usize, Some(&label));
+            self.bar = Some(JobBar { uri: progress.uri.clone(), step: progress.step.clone(), counts: false, bar });
+        }
+        if let Some(shown) = &self.bar {
+            shown.bar.set_position(progress.done);
+        }
+    }
+
+    fn show_count(&mut self, progress: FlashProgress) {
+        // A step of a single Crazyflie, or a server that doesn't count (0 of
+        // 1 for each): a line when it starts.
+        if progress.total <= 1 {
+            if progress.done == 0 {
+                self.finish();
+                println!("{}", self.label(progress.uri.as_deref(), &progress.step));
+            }
+            return;
+        }
+        if self.finished.as_ref() == Some(&progress.step) {
+            return;
+        }
+        if self.bar.as_ref().is_none_or(|shown| !shown.counts || shown.step != progress.step) {
+            self.finish();
+            let bar = progress_bar(&progress.step, progress.total as usize);
+            self.bar = Some(JobBar { uri: None, step: progress.step.clone(), counts: true, bar });
+        }
+        if let Some(shown) = &self.bar {
+            // Crazyflies going through a step side by side may report out of order.
+            shown.bar.set_position(progress.done.max(shown.bar.position()));
+        }
+        if progress.done >= progress.total {
+            self.finish();
+        }
+    }
+
+    /// "CF-01: Flashing stm32", or the step alone for all Crazyflies.
+    fn label(&self, uri: Option<&str>, step: &str) -> String {
+        match uri {
+            Some(uri) => format!("{}: {}", self.names.get(uri).copied().unwrap_or(uri), step),
+            None => step.to_string(),
+        }
+    }
+
+    fn finish(&mut self) {
+        let Some(shown) = self.bar.take() else {
+            return;
+        };
+        let label = self.label(shown.uri.as_deref(), &shown.step);
+        if shown.counts {
+            self.finished = Some(shown.step.clone());
+            // The bar stays as it ended. It is hidden without a terminal, so
+            // say how far it got.
+            if !std::io::stderr().is_terminal() {
+                println!("{}: {}/{}", label, shown.bar.position(), shown.bar.length().unwrap_or_default());
+            }
+            shown.bar.finish();
+        } else {
+            finish_progress(&shown.bar, format!("{} done", label));
+        }
+    }
 }
 
 /// Refuse STM32 and nRF51 images (`bound`, the `--bin` keys) for Crazyflies

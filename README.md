@@ -82,6 +82,7 @@ Commands:
   select       Scan for Crazyflies and select which one to save for later interactions
   console      Print the console text from a Crazyflie
   settings     Local CLI settings (scan addresses, timeout, etc.)
+  server       Connection server (experimental): share Crazyradios and Crazyflies between programs and computers
   loco         Loco Positioning System
   hlc          High-level commander operations (takeoff, land, go-to, trajectory, etc.)
   cr           Crazyradio operations (sniffer, etc.)
@@ -94,15 +95,16 @@ Commands:
   help         Print this message or the help of the given subcommand(s)
 
 Options:
-  -n, --no-toc-cache       Do not use TOC cache
-  -d, --debug              Enable debug mode
-  -u, --uri <URI>          Override the URI to connect to (instead of using the config file)
-  -p, --preserve-console   Preserve console output across connections, printed when the 'console' command is run
-      --timeout <TIMEOUT>  Timeout in milliseconds for the command
-      --non-interactive    Disable interactive prompts (auto-set when stdin is not a TTY)
-      --csv                Emit machine-readable CSV (for read commands that support it)
-  -h, --help               Print help
-  -V, --version            Print version
+  -n, --no-toc-cache             Do not use TOC cache
+  -d, --debug                    Enable debug mode
+  -u, --uri <URI>                Override the URI to connect to (instead of using the config file)
+  -p, --preserve-console         Preserve console output across connections, printed when the 'console' command is run
+      --timeout <TIMEOUT>        Timeout in milliseconds for the command
+      --non-interactive          Disable interactive prompts (auto-set when stdin is not a TTY)
+      --csv                      Emit machine-readable CSV (for read commands that support it)
+      --connection <CONNECTION>  Experimental: where to reach the Crazyflies: direct (this computer's Crazyradios), auto (a connection server on this computer if one runs, else direct), local, or a server address (host, host:port). Overrides 'settings connection' [env: CRAZYFLIE_CONNECTION=]
+  -h, --help                     Print help
+  -V, --version                  Print version
 
 Exit codes:
    0  success
@@ -210,6 +212,7 @@ For a more indepth view on how to use the different commands, have a look at the
 * [Settings](/docs/settings.md)
 * [Swarms](/docs/swarm.md)
 * [Signing in](/docs/auth.md)
+* [Connection server (experimental)](/docs/connection-server.md)
 * [Crazyradio](/docs/crazyradio.md)
 * [Debug](/docs/debug.md)
 * [Test](/docs/test.md)

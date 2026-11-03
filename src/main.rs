@@ -2,7 +2,7 @@ use crate::modules::bootloader;
 use crate::utils::deckctrl::DeckConfig;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_num::maybe_hex;
-use crazyflie_lib::subsystems::memory::{MemoryDevice, MemoryType, RadioSpeed, RawMemory};
+use crazyflie_connection_server::memory::{MemoryInfo, MemoryType, RawMemory};
 use crazyflie_lib::TocCache;
 use probe_rs::probe::list::Lister;
 use probe_rs::{
@@ -46,6 +46,7 @@ pub mod utils {
     pub mod display;
     pub mod firmware;
     pub mod flash_source;
+    pub mod connection;
     pub mod radio;
 }
 
@@ -68,9 +69,9 @@ struct MemoryRow {
 }
 
 impl MemoryTypeArg {
-    /// Convert to the `crazyflie_lib` memory type. Defined here (not on the
-    /// CLI type itself) so the CLI module stays free of the lib dependency.
-    fn to_lib(self) -> MemoryType {
+    /// Convert to the client API's memory type. Defined here (not on the
+    /// CLI type itself) so the CLI module stays free of the API dependency.
+    fn to_memory_type(self) -> MemoryType {
         match self {
             MemoryTypeArg::EepromConfig => MemoryType::EEPROMConfig,
             MemoryTypeArg::OneWire => MemoryType::OneWire,
@@ -93,18 +94,18 @@ impl MemoryTypeArg {
 }
 
 fn resolve_memory_ref<'a>(
-    memories: &[&'a MemoryDevice],
+    memories: &[&'a MemoryInfo],
     reference: &MemoryRef,
-) -> Result<&'a MemoryDevice> {
+) -> Result<&'a MemoryInfo> {
     match reference {
         MemoryRef::Id(id) => memories
             .iter()
-            .find(|m| m.memory_id == *id)
+            .find(|m| m.id == *id)
             .copied()
             .ok_or_else(|| CliError::NotFound(format!("memory with ID {}", id)).into()),
         MemoryRef::Type(mt, instance) => {
-            let lib_mt = mt.to_lib();
-            let matches: Vec<&MemoryDevice> = memories
+            let lib_mt = mt.to_memory_type();
+            let matches: Vec<&MemoryInfo> = memories
                 .iter()
                 .filter(|m| m.memory_type == lib_mt)
                 .copied()
@@ -161,6 +162,10 @@ pub struct Config {
     /// `cfcli settings sync`); None is the default, on.
     #[serde(default)]
     sync: Option<bool>,
+    /// Where to reach the Crazyflies (see `cfcli settings connection`); None
+    /// is the default, auto.
+    #[serde(default)]
+    connection: Option<String>,
 }
 
 fn default_addresses() -> Vec<String> {
@@ -177,6 +182,7 @@ impl Default for Config {
             addresses: default_addresses(),
             swarm: None,
             sync: None,
+            connection: None,
         }
     }
 }
@@ -263,7 +269,9 @@ fn is_streaming_command(cmd: &Commands) -> bool {
         Commands::Swarm { command: SwarmCommands::Log { command: SwarmLogCommands::Print(params), .. } } => {
             !params.once
         }
-        Commands::Console { .. } | Commands::Cr { command: CrCommands::Sniff(_) } => true,
+        Commands::Console { .. }
+        | Commands::Cr { command: CrCommands::Sniff(_) }
+        | Commands::Server { command: ServerCommands::Run { .. } } => true,
         _ => false,
     }
 }
@@ -278,11 +286,35 @@ fn uses_selected_uri(cmd: &Commands) -> bool {
             | Commands::Scan(_)
             | Commands::Select(_)
             | Commands::Settings { .. }
+            | Commands::Server { .. }
             | Commands::Swarm { .. }
             | Commands::Cr { .. }
             | Commands::Util { .. }
             | Commands::Bootload { command: BootloadCommands::Releases | BootloadCommands::Targets }
     )
+}
+
+/// Whether a command reaches the Crazyflie through the client API
+/// (`crazyflie_connection_server`), so that it works in every server mode. The others
+/// use crazyflie-lib directly and work in direct mode only.
+fn uses_client(cmd: &Commands) -> bool {
+    match cmd {
+        Commands::Scan(options) => !options.from_usb,
+        Commands::Select(options) => !options.from_usb && options.from_swarm.is_none(),
+        Commands::Console { .. }
+        | Commands::Log { .. }
+        | Commands::Param { .. }
+        | Commands::Platform { command: PlatformCommands::Info | PlatformCommands::Reboot | PlatformCommands::PowerOff | PlatformCommands::Sleep | PlatformCommands::Wakeup }
+        | Commands::Debug { .. }
+        | Commands::Deck { .. }
+        | Commands::Lh { command: LighthouseCommands::Config { .. } }
+        | Commands::Config { .. }
+        | Commands::Mem { .. }
+        | Commands::Loco { .. }
+        | Commands::Hlc { .. }
+        | Commands::Server { .. } => true,
+        _ => false,
+    }
 }
 
 /// Connect to a Crazyflie and store the resulting handle in `holder` so the
@@ -363,6 +395,31 @@ pub fn decode_address(address: &str) -> Result<[u8; 5]> {
     }
 }
 
+/// Scan the addresses for Crazyflies, through the client API. A Crazyflie
+/// found on several addresses is listed once.
+async fn scan(client: &crazyflie_connection_server::Client, addresses: &[String]) -> Result<Vec<crazyflie_connection_server::CfInfo>> {
+    let mut found: Vec<crazyflie_connection_server::CfInfo> = Vec::new();
+    for addr_str in addresses {
+        let address = decode_address(addr_str)?;
+        for cf in client.scan(Some(address)).await? {
+            if !found.iter().any(|f| f.uri == cf.uri) {
+                found.push(cf);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The programs attached to a Crazyflie on a connection server, as shown
+/// after its URI.
+fn clients_suffix(clients: &[String]) -> String {
+    if clients.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", clients.join(", "))
+    }
+}
+
 /// List the URIs of all USB-attached Crazyflies. USB devices are found
 /// regardless of radio address, so scanning on the default one is enough.
 async fn scan_usb(link_context: &crazyflie_lib::crazyflie_link::LinkContext) -> Result<Vec<String>> {
@@ -389,8 +446,18 @@ async fn radio_uri_from_usb(
     radio_uri
 }
 
+/// The radio URI in the EEPROM config of a Crazyflie on this computer's USB.
 async fn read_radio_uri(cf: &crazyflie_lib::Crazyflie) -> Result<String> {
-    let eeprom = modules::config::open(cf).await?;
+    use crazyflie_lib::subsystems::memory::{EEPROMConfigMemory, MemoryType, RadioSpeed};
+    let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
+    let Some(device) = memories.first() else {
+        bail!("No EEPROMConfig memory found");
+    };
+    let eeprom = match cf.memory.open_memory::<EEPROMConfigMemory>((*device).clone()).await {
+        Some(Ok(eeprom)) => eeprom,
+        Some(Err(e)) => bail!("Could not read the EEPROM config: {}", e),
+        None => bail!("No EEPROM config memory found"),
+    };
 
     let speed_str = match eeprom.get_radio_speed() {
         RadioSpeed::R250Kbps => "250K",
@@ -399,7 +466,9 @@ async fn read_radio_uri(cf: &crazyflie_lib::Crazyflie) -> Result<String> {
     };
     let address_str = eeprom.get_radio_address().iter().map(|b| format!("{:02X}", b)).collect::<String>();
 
-    Ok(format!("radio://0/{}/{}/{}", eeprom.get_radio_channel(), speed_str, address_str))
+    let uri = format!("radio://0/{}/{}/{}", eeprom.get_radio_channel(), speed_str, address_str);
+    cf.memory.close_memory(eeprom).await?;
+    Ok(uri)
 }
 
 #[tokio::main]
@@ -436,18 +505,23 @@ fn completion_cache_path() -> std::path::PathBuf {
 /// completion always reflects the most recent drone. Best-effort: any error
 /// is ignored so it can never break the command that triggered the connect.
 async fn update_completion_cache(cf: &crazyflie_lib::Crazyflie) {
-    let param = cf
-        .param
-        .names()
+    write_completion_cache(cf.param.names(), |name| cf.param.is_writable(name).unwrap_or(false), cf.log.names());
+}
+
+/// [`update_completion_cache`] for a Crazyflie reached through the client API.
+fn update_client_completion_cache(cf: &crazyflie_connection_server::Crazyflie) {
+    write_completion_cache(cf.param.names(), |name| cf.param.is_writable(name).unwrap_or(false), cf.log.names());
+}
+
+fn write_completion_cache(params: Vec<String>, writable: impl Fn(&str) -> bool, logs: Vec<String>) {
+    let param = params
         .into_iter()
         .map(|name| {
-            let readonly = !cf.param.is_writable(&name).unwrap_or(false);
+            let readonly = !writable(&name);
             LatestCachedParameter { name, readonly }
         })
         .collect();
-    let log = cf
-        .log
-        .names()
+    let log = logs
         .into_iter()
         .map(|name| LatestCachedLogVariable { name })
         .collect();
@@ -581,13 +655,23 @@ async fn run() -> Result<()> {
     #[cfg(all(unix, feature = "packet_capture"))]
     crazyflie_lib::crazyflie_link::capture::init();
 
-    let link_context = crazyflie_lib::crazyflie_link::LinkContext::new();
+    let link_context = Arc::new(crazyflie_lib::crazyflie_link::LinkContext::new());
+
+    let mode = utils::connection::mode(args.connection.as_deref(), &config);
+    // With a connection server holding the Crazyradios, it flashes as a job
+    let flash_through_server = matches!(&args.command, Commands::Bootload { command: BootloadCommands::Flash(params) } if !params.cold)
+        && utils::connection::through_server(&mode).await;
+    let direct_only = uses_selected_uri(&args.command) && !uses_client(&args.command) && !flash_through_server;
+    if direct_only {
+        utils::connection::require_direct(&mode).await?;
+    }
 
     let uri = {
         let base = args.uri.clone().unwrap_or(config.uri.clone());
         // A radio:/// URI (any Crazyradio) gets a real radio here, so every
-        // command below can hand it straight to crazyflie-link.
-        let base = if uses_selected_uri(&args.command) {
+        // command below can hand it straight to crazyflie-link. Through the
+        // client API, the server picks the radio.
+        let base = if direct_only {
             utils::radio::resolve(&link_context, &base).await
         } else {
             base
@@ -596,6 +680,7 @@ async fn run() -> Result<()> {
     };
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
+    let mut connection = utils::connection::Connection::new(mode, toc_cache.clone(), link_context.clone());
     let preserve_console = args.preserve_console;
     let timeout_ms = args.timeout;
     let non_interactive = args.non_interactive || !std::io::stdin().is_terminal();
@@ -627,23 +712,15 @@ async fn run() -> Result<()> {
                 Some(addr) => vec![addr.clone()],
                 None => config.addresses.clone(),
             };
-            let mut found = Vec::new();
-            for addr_str in &addresses {
-                let address = decode_address(addr_str)?;
-                for uri in link_context.scan(address).await? {
-                    if !found.contains(&uri) {
-                        found.push(uri);
-                    }
-                }
-            }
+            let found = scan(connection.client().await?, &addresses).await?;
             if csv {
-                println!("uri");
-                for uri in &found {
-                    utils::display::csv_row(&[uri]);
+                println!("uri,clients");
+                for cf in &found {
+                    utils::display::csv_row(&[&cf.uri, &cf.clients.join(";")]);
                 }
             } else {
-                for uri in &found {
-                    println!("> {}", uri);
+                for cf in &found {
+                    println!("> {}{}", cf.uri, clients_suffix(&cf.clients));
                 }
             }
         }
@@ -673,15 +750,11 @@ async fn run() -> Result<()> {
                     Some(addr) => vec![addr.clone()],
                     None => config.addresses.clone(),
                 };
-                let mut found = Vec::new();
-                for addr_str in &addresses {
-                    let address = decode_address(addr_str)?;
-                    for uri in link_context.scan(address).await? {
-                        if !found.contains(&uri) {
-                            found.push(uri);
-                        }
-                    }
-                }
+                let found: Vec<String> = scan(connection.client().await?, &addresses)
+                    .await?
+                    .into_iter()
+                    .map(|cf| cf.uri)
+                    .collect();
 
                 if found.is_empty() {
                     bail!(CliError::Connection("no Crazyflies found on configured addresses".to_string()));
@@ -735,7 +808,7 @@ async fn run() -> Result<()> {
                 }
             }
 
-            let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+            let cf = connection.attach(uri.as_str(), args.debug).await?;
 
             modules::console::print(cf, *no_format).await?;
             // Cleanup at end of run() handles disconnect.
@@ -743,14 +816,14 @@ async fn run() -> Result<()> {
         Commands::Log { command } => {
             match command {
                 LogCommands::List => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     modules::log::list(&cf, csv).await?;
 
                 }
                 LogCommands::Print(var) => {
 
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
@@ -774,14 +847,14 @@ async fn run() -> Result<()> {
         Commands::Param { command } => {
             match command {
                 ParamCommands::List => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     // update_cache(&mut config, &cf).expect("Could not populate last used cache");
 
                     modules::param::list(&cf, csv).await?;
                 }
                 ParamCommands::Get(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -794,7 +867,7 @@ async fn run() -> Result<()> {
                     modules::param::get(&cf, &names, csv).await?;
                 }
                 ParamCommands::Set(params) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let param_list = match &params.params {
                       Some(p) => p.clone(),
@@ -807,7 +880,7 @@ async fn run() -> Result<()> {
                     modules::param::set(&cf, &param_list, params.store).await?;
                 }
                 ParamCommands::Store(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -820,7 +893,7 @@ async fn run() -> Result<()> {
                     modules::param::store(&cf, &names).await?;
                 }
                 ParamCommands::Clear(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let names = match &var.names {
                       Some(n) => n.clone(),
@@ -920,7 +993,7 @@ async fn run() -> Result<()> {
         Commands::Config { command } => {
             match command {
                 ConfigCommands::Set(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let mut eeprom_memory = modules::config::open(cf).await?;
 
@@ -953,7 +1026,7 @@ async fn run() -> Result<()> {
                             Ok(s) if s <= 2 => s,
                             _ => bail!(CliError::InvalidValue(format!("speed '{}' must be 0 (250Kbps), 1 (1Mbps) or 2 (2Mbps)", value))),
                           };
-                          eeprom_memory.set_radio_speed(RadioSpeed::try_from(speed)?);
+                          eeprom_memory.set_radio_speed(speed);
                           println!("Set radio speed to {}", speed);
                         }
                         "pitch_trim" => {
@@ -982,7 +1055,7 @@ async fn run() -> Result<()> {
 
                 }
                 ConfigCommands::Display => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(Some(MemoryType::EEPROMConfig));
 
@@ -990,7 +1063,7 @@ async fn run() -> Result<()> {
                       bail!("No EEPROMConfig memory found or more than one ({}), exiting!", memories.len());
                     }
 
-                    modules::memory::display(&cf, memories[0].clone()).await?;
+                    modules::memory::display(cf, memories[0]).await?;
 
                   }
             }
@@ -1020,23 +1093,54 @@ async fn run() -> Result<()> {
                         SettingsSyncCommands::Off => settings::sync_set(&mut config, false),
                     }
                 }
+                SettingsCommands::Connection { command: connection_cmd } => {
+                    match connection_cmd {
+                        SettingsConnectionCommands::Show => settings::connection_show(&config),
+                        SettingsConnectionCommands::Set { mode } => settings::connection_set(&mut config, mode),
+                        SettingsConnectionCommands::Clear => settings::connection_clear(&mut config),
+                    }
+                }
+            }
+        }
+        Commands::Server { command } => {
+            match command {
+                ServerCommands::Run { listen, linger, toc_cache } => {
+                    utils::connection::run(listen, *linger, toc_cache.clone()).await?;
+                }
+                ServerCommands::List => {
+                    let client = connection.client().await?;
+                    if client.is_direct() {
+                        bail!(CliError::Connection("no connection server is running on this computer".to_string()));
+                    }
+                    let connected = client.list().await?;
+                    if csv {
+                        println!("uri,radio,clients");
+                        for cf in &connected {
+                            let radio = cf.radio.map(|r| r.to_string()).unwrap_or_default();
+                            utils::display::csv_row(&[&cf.uri, &radio, &cf.clients.join(";")]);
+                        }
+                    } else {
+                        for cf in &connected {
+                            let radio = cf.radio.map(|r| format!(" (radio {})", r)).unwrap_or_default();
+                            println!("> {}{}{}", cf.uri, radio, clients_suffix(&cf.clients));
+                        }
+                    }
+                }
             }
         }
         Commands::Mem { command } => {
             match command {
                 MemoryCommands::List => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memory = cf.memory.get_memories(None);
 
                     if csv {
                         println!("id,type,size_bytes,serial");
                         for mem in memory {
-                            let serial = mem.serial.as_ref()
-                                .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
-                                .unwrap_or_default();
+                            let serial = mem.serial.clone().unwrap_or_default();
                             utils::display::csv_row(&[
-                                &mem.memory_id.to_string(),
+                                &mem.id.to_string(),
                                 &format!("{:?}", mem.memory_type),
                                 &mem.size.to_string(),
                                 &serial,
@@ -1046,14 +1150,10 @@ async fn run() -> Result<()> {
                         let rows: Vec<MemoryRow> = memory
                             .iter()
                             .map(|mem| MemoryRow {
-                                id: mem.memory_id.to_string(),
+                                id: mem.id.to_string(),
                                 memory_type: format!("{:?}", mem.memory_type),
                                 size: format!("{} (0x{:x})", mem.size, mem.size),
-                                serial: mem
-                                    .serial
-                                    .as_ref()
-                                    .map(|s| s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
-                                    .unwrap_or_default(),
+                                serial: mem.serial.clone().unwrap_or_default(),
                             })
                             .collect();
 
@@ -1067,17 +1167,14 @@ async fn run() -> Result<()> {
 
                 }
                 MemoryCommands::Read(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
-                    let mem_id = device.memory_id;
+                    let mem_id = device.id;
 
-                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(device).await {
-                      Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
-                      None => bail!("Memory ID={} not found", mem_id),
-                    };
+                    let raw_access_memory = cf.memory.open_memory::<RawMemory>(&device).await
+                      .with_context(|| format!("Could not access memory ID={} as raw memory", mem_id))?;
 
                     if let Some(output_file) = &var.output {
 
@@ -1111,17 +1208,14 @@ async fn run() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
-                    let mem_id = device.memory_id;
+                    let mem_id = device.id;
 
-                    let raw_access_memory = match cf.memory.open_memory::<RawMemory>(device).await {
-                      Some(Ok(m)) => m,
-                      Some(Err(e)) => bail!("Could not access memory ID={} as raw memory: {}", mem_id, e),
-                      None => bail!("Memory ID={} not found", mem_id),
-                    };
+                    let raw_access_memory = cf.memory.open_memory::<RawMemory>(&device).await
+                      .with_context(|| format!("Could not access memory ID={} as raw memory", mem_id))?;
 
                     let progress_bar = utils::display::get_progressbar(data.len(), None);
                     let pb = progress_bar.clone();
@@ -1146,15 +1240,15 @@ async fn run() -> Result<()> {
                       }
                     };
 
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
                     let device = resolve_memory_ref(&memories, &var.mem)?.clone();
 
-                    modules::memory::verify(&cf, device, var.offset, &expected).await?;
+                    modules::memory::verify(cf, &device, var.offset, &expected).await?;
                 }
                 MemoryCommands::Display(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1163,7 +1257,7 @@ async fn run() -> Result<()> {
                       None => {
                         require_arg(non_interactive, "<mem>")?;
                         let options: Vec<String> = memories.iter().map(|mem| {
-                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
+                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
                         }).collect();
 
                         let selected_option = Select::new("Select a memory:", options)
@@ -1177,18 +1271,18 @@ async fn run() -> Result<()> {
                           .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
                         memories.iter()
-                          .find(|m| m.memory_id == selected_id)
+                          .find(|m| m.id == selected_id)
                           .copied()
                           .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", selected_id))?
                           .clone()
                       }
                     };
 
-                    modules::memory::display(&cf, device).await?;
+                    modules::memory::display(cf, &device).await?;
 
                   }
                 MemoryCommands::Erase(var) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let memories = cf.memory.get_memories(None);
 
@@ -1197,7 +1291,7 @@ async fn run() -> Result<()> {
                       None => {
                         require_arg(non_interactive, "<mem>")?;
                         let options: Vec<String> = memories.iter().map(|mem| {
-                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.memory_id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
+                          format!("[{}] {:?} size={}k (0x{:x}/{})", mem.id, mem.memory_type, mem.size / 1024, mem.size, mem.size)
                         }).collect();
 
                         let selected_option = Select::new("Select a memory:", options)
@@ -1211,14 +1305,14 @@ async fn run() -> Result<()> {
                           .ok_or_else(|| anyhow::anyhow!("Failed to parse memory ID"))?;
 
                         memories.iter()
-                          .find(|m| m.memory_id == selected_id)
+                          .find(|m| m.id == selected_id)
                           .copied()
                           .ok_or_else(|| anyhow::anyhow!("No memory with ID {}", selected_id))?
                           .clone()
                       }
                     };
 
-                    modules::memory::erase(&cf, device).await?;
+                    modules::memory::erase(cf, &device).await?;
 
                   }
             }
@@ -1226,7 +1320,7 @@ async fn run() -> Result<()> {
         Commands::Platform { command } => {
             match command {
                 PlatformCommands::Info => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     let info = modules::platform::info(cf).await?;
 
@@ -1242,17 +1336,24 @@ async fn run() -> Result<()> {
                     }
 
                 }
+                // The server checks that the Crazyflie answers first: the
+                // commands get no answer. A reboot returns once the firmware
+                // answers again.
                 PlatformCommands::Reboot => {
-                    modules::bootloader::reboot(&link_context, uri.as_str()).await?;
+                    connection.client().await?.reboot(uri.as_str()).await
+                        .context(CliError::Connection(format!("rebooting {}", uri)))?;
                 },
                 PlatformCommands::PowerOff => {
-                    crazyflie_lib::Crazyflie::power_off_all(&link_context, uri.as_str()).await?;
+                    connection.client().await?.power_off_all(uri.as_str()).await
+                        .context(CliError::Connection(format!("powering off {}", uri)))?;
                 },
                 PlatformCommands::Sleep => {
-                    crazyflie_lib::Crazyflie::power_off_stm32_domain(&link_context, uri.as_str()).await?;
+                    connection.client().await?.power_off_stm32_domain(uri.as_str()).await
+                        .context(CliError::Connection(format!("putting {} to sleep", uri)))?;
                 },
                 PlatformCommands::Wakeup => {
-                    crazyflie_lib::Crazyflie::power_on_stm32_domain(&link_context, uri.as_str()).await?;
+                    connection.client().await?.power_on_stm32_domain(uri.as_str()).await
+                        .context(CliError::Connection(format!("waking up {}", uri)))?;
                 }
                 PlatformCommands::Dfu => {
                     if !modules::bootloader::stm32_dfu(&link_context, uri.as_str()).await? {
@@ -1304,22 +1405,22 @@ async fn run() -> Result<()> {
 
             match command {
                 LocoCommands::Display => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::lps::display(&cf, csv, non_interactive).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
+                    modules::lps::display(cf, csv, non_interactive).await?;
                 }
                 LocoCommands::Config { command } => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
 
                     match command {
                         LocoConfigCommands::Display(_) => {
-                            modules::lps::display(&cf, csv, non_interactive).await?;
+                            modules::lps::display(cf, csv, non_interactive).await?;
                         }
                         LocoConfigCommands::Read(params) => {
-                            modules::lps::read(&cf, params.output.as_deref(), non_interactive).await?;
+                            modules::lps::read(cf, params.output.as_deref(), non_interactive).await?;
                         }
                         LocoConfigCommands::Write(params) => {
                             modules::lps::write(
-                                &cf,
+                                cf,
                                 params.input.as_deref(),
                                 !params.no_verify,
                                 std::time::Duration::from_secs(params.verify_timeout),
@@ -1339,7 +1440,7 @@ async fn run() -> Result<()> {
                 }
             }
 
-            let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+            let cf = connection.attach(uri.as_str(), args.debug).await?;
 
             match command {
                 HlCommands::Arm => {
@@ -1386,11 +1487,11 @@ async fn run() -> Result<()> {
                 HlCommands::Trajectory { command: traj_cmd } => {
                     match traj_cmd {
                         TrajectoryCommands::Upload(params) => {
-                            modules::trajectory::upload(&cf, &params.input, params.trajectory_id, params.offset).await?;
+                            modules::trajectory::upload(cf, &params.input, params.trajectory_id, params.offset).await?;
                         }
                         TrajectoryCommands::Run(params) => {
                             modules::trajectory::run(
-                                &cf,
+                                cf,
                                 params.trajectory_id,
                                 params.time_scale,
                                 params.relative_position,
@@ -1401,7 +1502,7 @@ async fn run() -> Result<()> {
                         TrajectoryCommands::Display(params) => {
                             // File case handled above, this is memory display
                             if params.file.is_none() {
-                                modules::trajectory::display_memory(&cf).await?;
+                                modules::trajectory::display_memory(cf).await?;
                             }
                         }
                     }
@@ -1437,7 +1538,7 @@ async fn run() -> Result<()> {
         Commands::Debug { command } => {
             match command {
                 DebugCommands::Assert(params) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::debug::assert_dump(
                         cf,
                         std::time::Duration::from_millis(params.wait_timeout_ms),
@@ -1455,29 +1556,29 @@ async fn run() -> Result<()> {
                     (Some(id), _) => configs::show(&LhConfigs::open(&config)?, id, csv).await?,
                     (None, Some(file_path)) => modules::lighthouse::display_file(file_path, csv)?,
                     (None, None) => {
-                        let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                        let cf = connection.attach(uri.as_str(), args.debug).await?;
                         modules::lighthouse::display(cf, csv, non_interactive).await?;
                     }
                 },
                 LighthouseConfigCommands::Write(params) => {
                     let (file, _) =
                         configs::source(&config, params.id.as_deref(), params.input.as_deref(), !non_interactive).await?;
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::lighthouse::write(cf, &file, non_interactive).await?;
                 }
                 LighthouseConfigCommands::Read(params) => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::lighthouse::read(cf, params.output.as_deref(), non_interactive).await?;
                 }
                 LighthouseConfigCommands::Check(params) => {
                     let (file, source) =
                         configs::source(&config, params.id.as_deref(), params.input.as_deref(), false).await?;
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     modules::lighthouse::check(cf, &file, &source, csv, non_interactive).await?;
                 }
                 LighthouseConfigCommands::Save(params) => {
                     let lh_configs = LhConfigs::open(&config)?;
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
                     configs::save(&lh_configs, cf, &params.id, params.name.as_deref(), params.force, non_interactive).await?;
                 }
                 LighthouseConfigCommands::Import(params) => {
@@ -1535,10 +1636,11 @@ async fn run() -> Result<()> {
             let usb_uri = &found[0];
             println!("Found Crazyflie on USB: {}", usb_uri);
             let radio_uri = radio_uri_from_usb(&mut connected_cf, &link_context, usb_uri, toc_cache.clone(), args.debug, preserve_console).await?;
-            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, &link_context, toc_cache, non_interactive).await?;
+            let client = connection.client().await?;
+            modules::swarm::add_from_usb(&config, &id, params, usb_uri, radio_uri, client, &link_context, non_interactive).await?;
         }
         Commands::Swarm { command } => {
-            modules::swarm::run(&mut config, command, &link_context, toc_cache, non_interactive, csv).await?;
+            modules::swarm::run(&mut config, command, &mut connection, &link_context, toc_cache, non_interactive, csv).await?;
         }
         Commands::Auth { command } => {
             modules::auth::run(command).await?;
@@ -1546,8 +1648,8 @@ async fn run() -> Result<()> {
         Commands::Deck { command } => {
             match command {
                 DeckCommands::List => {
-                    let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
-                    modules::deck::list(&cf, csv).await?;
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
+                    modules::deck::list(cf, csv).await?;
                 }
             }
         }
@@ -1555,6 +1657,9 @@ async fn run() -> Result<()> {
             match command {
                 BootloadCommands::Info(params) => {
                     modules::bootloader::print_bootloader_info(&link_context, params.cold, uri.as_str()).await?;
+                    if !params.cold {
+                        utils::connection::wait_until_restarted(connection.client().await?, uri.as_str()).await?;
+                    }
                 }
                 BootloadCommands::Releases => {
                     utils::firmware::print_releases().await?;
@@ -1585,6 +1690,15 @@ async fn run() -> Result<()> {
                           .to_string()
                       }
                     }
+                  } else if flash_through_server {
+                    let cf = connection.attach(uri.as_str(), args.debug).await?;
+                    let platform = cf
+                      .platform
+                      .device_type_name()
+                      .map(str::to_string)
+                      .ok_or_else(|| anyhow::anyhow!("The connection server doesn't know the platform of {}", uri))?;
+                    cf.detach();
+                    platform
                   } else {
                     let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache.clone(), args.debug).await?;
                     let platform = cf.platform.device_type_name().await?;
@@ -1603,6 +1717,8 @@ async fn run() -> Result<()> {
                     println!("No valid targets to flash, exiting!");
                   } else if !utils::flash_source::confirm_nrf51_bootloader(&upgrade, 1, source.accept_bootloader_risk, non_interactive)? {
                     println!("Nothing flashed");
+                  } else if flash_through_server {
+                    modules::bootloader::flash_through_server(connection.client().await?, uri.as_str(), &upgrade).await?;
                   } else {
                     modules::bootloader::flash(
                       &link_context,
@@ -1611,6 +1727,9 @@ async fn run() -> Result<()> {
                       upgrade,
                       params.cold,
                     ).await?;
+                    if !params.cold {
+                      utils::connection::wait_until_restarted(connection.client().await?, uri.as_str()).await?;
+                    }
                   }
                 }
             }
@@ -1639,6 +1758,7 @@ async fn run() -> Result<()> {
     if let Some(ref cf) = connected_cf {
         save_and_disconnect(cf, preserve_console).await;
     }
+    connection.close(preserve_console).await;
 
     result
 }

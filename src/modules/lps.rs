@@ -19,10 +19,8 @@
 //! ```
 
 use anyhow::{bail, Context, Result};
-use crazyflie_lib::{
-    subsystems::memory::{LocoMemory2, LocoSystemData, MemoryType},
-    Crazyflie,
-};
+use crazyflie_connection_server::memory::{LocoMemory2, LocoSystemData, MemoryType};
+use crazyflie_connection_server::Crazyflie;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -180,23 +178,13 @@ async fn open_loco_memory(cf: &Crazyflie) -> Result<LocoMemory2> {
         ));
     }
 
-    match cf
-        .memory
-        .open_memory::<LocoMemory2>(memories[0].clone())
-        .await
-    {
-        Some(Ok(m)) => Ok(m),
-        Some(Err(e)) => bail!("Could not access Loco2 memory: {}", e),
-        None => bail!("Loco2 memory not found"),
-    }
+    cf.memory.open_memory::<LocoMemory2>(memories[0]).await.context("Could not access Loco2 memory")
 }
 
-/// Read the full anchor snapshot from the Crazyflie, closing the memory again.
+/// Read the full anchor snapshot from the Crazyflie.
 async fn read_system_data(cf: &Crazyflie, non_interactive: bool) -> Result<LocoSystemData> {
     let loco_mem = open_loco_memory(cf).await?;
-    let data = read_all_with_progress(&loco_mem, non_interactive).await;
-    cf.memory.close_memory(loco_mem).await?;
-    data
+    read_all_with_progress(&loco_mem, non_interactive).await
 }
 
 /// `LocoMemory2::read_all` unrolled so it can be reported as it goes: the
@@ -396,9 +384,7 @@ pub async fn write(
     // is no LPS deck (in which case the anchors would never hear us either) and
     // gives us the handle we need to read the positions back.
     let loco_mem = open_loco_memory(cf).await?;
-    let result = send_and_verify(cf, &loco_mem, targets, timeout, non_interactive).await;
-    cf.memory.close_memory(loco_mem).await?;
-    result?;
+    send_and_verify(cf, &loco_mem, targets, timeout, non_interactive).await?;
 
     println!("All {} anchor positions written and confirmed", total);
 

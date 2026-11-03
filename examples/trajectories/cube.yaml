@@ -10,11 +10,11 @@
 # When using relative mode (-r), z=0 is your takeoff height
 #
 # Usage:
-#   cfcli trajectory upload examples/cube.yaml
+#   cfcli hlc trajectory upload 1 -i examples/trajectories/cube.yaml
 #   cfcli hlc arm
-#   cfcli hlc takeoff 0.5
+#   cfcli hlc takeoff -z 0.5
 #   sleep 3
-#   cfcli trajectory run 1 -r
+#   cfcli hlc trajectory run 1 -r
 #   sleep 13
 #   cfcli hlc land
 
