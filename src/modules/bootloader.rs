@@ -746,7 +746,10 @@ pub async fn flash_through_server(
                 }
                 None => {
                     finish(&mut bar);
-                    println!("{}", progress.step);
+                    // A step counting the Crazyflies (one here) reports again when done.
+                    if progress.done == 0 {
+                        println!("{}", progress.step);
+                    }
                 }
             })
             .await

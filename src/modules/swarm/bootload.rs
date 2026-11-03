@@ -9,6 +9,7 @@
 //! Crazyflies have bootloaders that take broadcast.
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -16,7 +17,7 @@ use crazyflie_connection_server::FlashProgress;
 use tabled::Tabled;
 
 use super::broadcast::{self, Job};
-use super::runner::{csv_row_for, split, Runner, SwarmRow};
+use super::runner::{csv_row_for, progress as progress_bar, split, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::bootloader;
 use crate::utils::connection;
@@ -338,7 +339,7 @@ async fn flash_through_server(runner: &Runner<'_>, jobs: &[Job<'_>]) -> Result<V
                 Some((crazyflie_connection_server::normalize_uri(&target.link_uri).ok()?.key, target.name.as_str()))
             })
             .collect();
-        let mut shown = JobProgress { names, bar: None };
+        let mut shown = JobProgress { names, bar: None, finished: None };
         let flashed = runner
             .client()
             .flash_swarm(&uris, images, |progress| shown.show(progress))
@@ -352,41 +353,99 @@ async fn flash_through_server(runner: &Runner<'_>, jobs: &[Job<'_>]) -> Result<V
     Ok(results)
 }
 
-/// The progress of a flash job on a server: each step of each Crazyflie on
-/// a line, a bar while an image is written.
+/// The progress of a flash job on a server: a bar counting the Crazyflies
+/// through each step, a bar while an image is written, and the steps of a
+/// single Crazyflie on a line.
 struct JobProgress<'n> {
     /// Each Crazyflie's name, by normalized URI.
     names: HashMap<String, &'n str>,
-    /// The bar shown, with the Crazyflie and step it is for.
-    bar: Option<(Option<String>, String, indicatif::ProgressBar)>,
+    /// The bar shown.
+    bar: Option<JobBar>,
+    /// The counted step whose bar was finished: reports of it that arrive
+    /// late don't start it again.
+    finished: Option<String>,
+}
+
+/// A bar of a flash job: Crazyflies through a step, or the bytes of an image
+/// for one Crazyflie or all of them.
+struct JobBar {
+    uri: Option<String>,
+    step: String,
+    /// It counts Crazyflies, not bytes.
+    counts: bool,
+    bar: indicatif::ProgressBar,
 }
 
 impl JobProgress<'_> {
     fn show(&mut self, progress: FlashProgress) {
-        let label = match &progress.uri {
-            Some(uri) => format!("{}: {}", self.names.get(uri).copied().unwrap_or(uri), progress.step),
-            None => progress.step.clone(),
-        };
-        // Steps without a byte count report 0 or 1 of 1.
-        if progress.total <= 1 {
-            self.finish();
-            println!("{}", label);
+        // Writing an image counts bytes; the other steps come for each
+        // Crazyflie as it starts and finishes them, counting the Crazyflies.
+        let image = progress.step.starts_with("Flashing ") || progress.step.starts_with("Broadcasting ");
+        if !image {
+            self.show_count(progress);
             return;
         }
-        if self.bar.as_ref().is_none_or(|(uri, step, _)| *uri != progress.uri || *step != progress.step) {
+        if self.bar.as_ref().is_none_or(|shown| shown.uri != progress.uri || shown.step != progress.step) {
             self.finish();
+            let label = self.label(progress.uri.as_deref(), &progress.step);
             let bar = get_progressbar(progress.total as usize, Some(&label));
-            self.bar = Some((progress.uri.clone(), progress.step.clone(), bar));
+            self.bar = Some(JobBar { uri: progress.uri.clone(), step: progress.step.clone(), counts: false, bar });
         }
-        if let Some((_, _, bar)) = &self.bar {
-            bar.set_position(progress.done);
+        if let Some(shown) = &self.bar {
+            shown.bar.set_position(progress.done);
+        }
+    }
+
+    fn show_count(&mut self, progress: FlashProgress) {
+        // A step of a single Crazyflie, or a server that doesn't count (0 of
+        // 1 for each): a line when it starts.
+        if progress.total <= 1 {
+            if progress.done == 0 {
+                self.finish();
+                println!("{}", self.label(progress.uri.as_deref(), &progress.step));
+            }
+            return;
+        }
+        if self.finished.as_ref() == Some(&progress.step) {
+            return;
+        }
+        if self.bar.as_ref().is_none_or(|shown| !shown.counts || shown.step != progress.step) {
+            self.finish();
+            let bar = progress_bar(&progress.step, progress.total as usize);
+            self.bar = Some(JobBar { uri: None, step: progress.step.clone(), counts: true, bar });
+        }
+        if let Some(shown) = &self.bar {
+            // Crazyflies going through a step side by side may report out of order.
+            shown.bar.set_position(progress.done.max(shown.bar.position()));
+        }
+        if progress.done >= progress.total {
+            self.finish();
+        }
+    }
+
+    /// "CF-01: Flashing stm32", or the step alone for all Crazyflies.
+    fn label(&self, uri: Option<&str>, step: &str) -> String {
+        match uri {
+            Some(uri) => format!("{}: {}", self.names.get(uri).copied().unwrap_or(uri), step),
+            None => step.to_string(),
         }
     }
 
     fn finish(&mut self) {
-        if let Some((uri, step, bar)) = self.bar.take() {
-            let who = uri.as_ref().map(|uri| format!("{}: ", self.names.get(uri).copied().unwrap_or(uri)));
-            finish_progress(&bar, format!("{}{} done", who.unwrap_or_default(), step));
+        let Some(shown) = self.bar.take() else {
+            return;
+        };
+        let label = self.label(shown.uri.as_deref(), &shown.step);
+        if shown.counts {
+            self.finished = Some(shown.step.clone());
+            // The bar stays as it ended. It is hidden without a terminal, so
+            // say how far it got.
+            if !std::io::stderr().is_terminal() {
+                println!("{}: {}/{}", label, shown.bar.position(), shown.bar.length().unwrap_or_default());
+            }
+            shown.bar.finish();
+        } else {
+            finish_progress(&shown.bar, format!("{} done", label));
         }
     }
 }
