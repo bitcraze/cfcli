@@ -32,11 +32,11 @@ pub async fn assert_dump(cf: &Crazyflie, wait_timeout: Duration) -> Result<()> {
 /// nothing arrives within `wait_timeout` the firmware never responded and
 /// there is no line.
 pub async fn assert_info(cf: &Crazyflie, wait_timeout: Duration) -> Result<Option<String>> {
-    let mut stream = cf.console.stream().await;
+    let mut console = cf.console.open(crate::modules::console::STM32_CONSOLE).await?;
+    let mut stream = console.text();
 
     // Drain any console history / pre-existing output so we don't mix it
-    // with the assert dump. The first item from `stream()` is the buffered
-    // history; anything that arrives within the drain window is also
+    // with the assert dump. Anything that arrives within the drain window is
     // pre-trigger noise.
     let drain_window = Duration::from_millis(200);
     while timeout(drain_window, stream.next()).await.is_ok() {}

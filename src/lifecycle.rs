@@ -62,8 +62,8 @@ pub async fn cleanup(
     const SOURCE_DISABLE_TIMEOUT: Duration = Duration::from_secs(1);
     match tokio::time::timeout(SOURCE_DISABLE_TIMEOUT, disable).await {
         Ok(Ok(())) => {}
-        Ok(Err(err)) => eprintln!("Warning: could not disable console source: {}", err),
-        Err(_) => eprintln!("Warning: timed out while disabling console source"),
+        Ok(Err(err)) => eprintln!("Warning: could not close console: {}", err),
+        Err(_) => eprintln!("Warning: timed out while closing console"),
     }
     disconnect.await;
 }

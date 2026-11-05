@@ -221,7 +221,7 @@ struct CliArgs {
     #[clap(short, long)]
     uri: Option<String>,
 
-    /// Preserve console output across connections, printed when the 'console' command is run
+    /// Preserve console output across connections, printed when the 'console' command shows cf:stm32
     #[clap(short, long, action)]
     preserve_console: bool,
 
@@ -297,20 +297,20 @@ enum Commands {
     /// Print the console text from a Crazyflie
     Console {
       /// Output raw console data without processing
-      #[clap(long, conflicts_with = "list_sources")]
+      #[clap(long, conflicts_with = "list")]
       no_format: bool,
 
       /// Delete the preserved console history file and exit without connecting
-      #[clap(long, conflicts_with_all = ["source", "list_sources"])]
+      #[clap(long, conflicts_with_all = ["source", "list"])]
       clear: bool,
 
-      /// Print one sourced console selected by its catalog path
-      #[clap(long, value_name = "PATH", conflicts_with_all = ["list_sources", "clear"])]
+      /// Print this console instead of asking which one to show (e.g. cf:stm32)
+      #[clap(long, value_name = "PATH", conflicts_with_all = ["list", "clear"])]
       source: Option<String>,
 
-      /// List the available sourced-console paths and exit
+      /// List the paths of the available consoles and exit
       #[clap(long, conflicts_with_all = ["source", "no_format", "clear"])]
-      list_sources: bool,
+      list: bool,
     },
 
     /// Local CLI settings (scan addresses, timeout, etc.)

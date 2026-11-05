@@ -264,7 +264,7 @@ fn is_streaming_command(cmd: &Commands) -> bool {
         Commands::Swarm { command: SwarmCommands::Log { command: SwarmLogCommands::Print(params), .. } } => {
             !params.once
         }
-        Commands::Console { clear, list_sources, .. } => !clear && !list_sources,
+        Commands::Console { clear, list, .. } => !clear && !list,
         Commands::Cr { command: CrCommands::Sniff(_) } => true,
         _ => false,
     }
@@ -275,6 +275,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn console_without_a_selection_is_a_streaming_command() {
+        let args = CliArgs::try_parse_from(["cfcli", "console"]).unwrap();
+
+        assert!(is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn console_has_no_default_flag() {
+        assert!(CliArgs::try_parse_from(["cfcli", "console", "--default"]).is_err());
+    }
+
+    #[test]
+    fn console_selection_is_required_when_non_interactive() {
+        let err = require_arg(true, "--source").unwrap_err();
+
+        assert_eq!(error::classify_exit_code(&err), 30);
+        assert!(require_arg(false, "--source").is_ok());
+    }
+
+    #[test]
     fn sourced_console_is_a_streaming_command() {
         let args = CliArgs::try_parse_from(["cfcli", "console", "--source", "deck:bcCam"]).unwrap();
 
@@ -283,7 +303,7 @@ mod tests {
 
     #[test]
     fn listing_console_sources_is_a_bounded_command() {
-        let args = CliArgs::try_parse_from(["cfcli", "console", "--list-sources"]).unwrap();
+        let args = CliArgs::try_parse_from(["cfcli", "console", "--list"]).unwrap();
 
         assert!(!is_streaming_command(&args.command));
     }
@@ -295,7 +315,7 @@ mod tests {
             "console",
             "--source",
             "deck:bcCam",
-            "--list-sources",
+            "--list",
         ]);
 
         assert!(result.is_err());
@@ -303,13 +323,13 @@ mod tests {
 
     #[test]
     fn source_listing_conflicts_with_console_formatting() {
-        let result = CliArgs::try_parse_from(["cfcli", "console", "--list-sources", "--no-format"]);
+        let result = CliArgs::try_parse_from(["cfcli", "console", "--list", "--no-format"]);
 
         assert!(result.is_err());
     }
 
     #[test]
-    fn sourced_console_conflicts_with_clearing_legacy_history() {
+    fn console_source_conflicts_with_clearing_preserved_history() {
         let result =
             CliArgs::try_parse_from(["cfcli", "console", "--source", "deck:bcCam", "--clear"]);
 
@@ -369,15 +389,28 @@ async fn save_console_history(cf: &crazyflie_lib::Crazyflie) -> Result<()> {
     use futures::StreamExt;
     use std::io::Write;
 
-    let mut stream = cf.console.stream().await;
-    if let Some(history) = stream.next().await {
-        if !history.is_empty() {
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(console_preserve_path())?;
-            file.write_all(history.as_bytes())?;
+    // The history is already in memory, so its chunks arrive without delay. A
+    // pause means it is drained; the deadline covers a console that never pauses.
+    const IDLE: std::time::Duration = std::time::Duration::from_millis(10);
+    const LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+    let mut console = cf.console.open(modules::console::STM32_CONSOLE).await?;
+    let mut stream = console.text();
+    let mut history = String::new();
+    let deadline = tokio::time::Instant::now() + LIMIT;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(IDLE, stream.next()).await {
+            Ok(Some(chunk)) => history.push_str(&chunk),
+            _ => break,
         }
+    }
+
+    if !history.is_empty() {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(console_preserve_path())?;
+        file.write_all(history.as_bytes())?;
     }
     Ok(())
 }
@@ -389,6 +422,18 @@ fn read_and_clear_console_file() -> Result<String> {
         std::fs::write(&path, "")?;
     }
     Ok(content)
+}
+
+fn print_preserved_console(no_format: bool) -> Result<()> {
+    let saved = read_and_clear_console_file()?;
+    if no_format {
+        print!("{}", saved);
+    } else {
+        for line in saved.lines() {
+            println!("{}", modules::console::format_console_line(line));
+        }
+    }
+    Ok(())
 }
 
 async fn save_and_disconnect(cf: &crazyflie_lib::Crazyflie, preserve_console: bool) {
@@ -645,13 +690,16 @@ async fn run() -> Result<()> {
     };
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
-    let mut enabled_console_source = None;
+    let mut open_console = None;
     let preserve_console = args.preserve_console;
     let timeout_ms = args.timeout;
     let non_interactive = args.non_interactive || !std::io::stdin().is_terminal();
     let csv = args.csv;
 
-    let interruption = if matches!(&args.command, Commands::Console { source: Some(_), .. }) {
+    let interruption = if matches!(
+        &args.command,
+        Commands::Console { clear: false, list: false, .. }
+    ) {
         Some(lifecycle::interruption()?)
     } else {
         None
@@ -767,7 +815,7 @@ async fn run() -> Result<()> {
             });
 
         }
-        Commands::Console { no_format, clear, source, list_sources } => {
+        Commands::Console { no_format, clear, source, list } => {
             if *clear {
                 let path = console_preserve_path();
                 if path.exists() {
@@ -779,33 +827,33 @@ async fn run() -> Result<()> {
                 return Ok(());
             }
 
-            if source.is_none() && !list_sources {
-                let saved = read_and_clear_console_file()?;
-                if !saved.is_empty() {
-                    if *no_format {
-                        print!("{}", saved);
-                    } else {
-                        for line in saved.lines() {
-                            print!("{}", modules::console::format_console_line(line));
-                            println!();
-                        }
-                    }
-                }
+            if source.is_none() && !list {
+                require_arg(non_interactive, "--source")?;
+            }
+
+            // The preserved history must stay readable when the Crazyflie that
+            // produced it no longer connects, so show it before connecting when
+            // the selection is already known.
+            if source.as_deref() == Some(modules::console::STM32_CONSOLE) {
+                print_preserved_console(*no_format)?;
             }
 
             let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-            if *list_sources {
-                modules::console::list_sources(cf, csv).await?;
-            } else if let Some(source) = source {
-                modules::console::print_source(
-                    cf,
-                    source,
-                    *no_format,
-                    &mut enabled_console_source,
-                ).await?;
+            if *list {
+                modules::console::list(cf, csv).await?;
             } else {
-                modules::console::print(cf, *no_format).await?;
+                let path = match source {
+                    Some(path) => path.clone(),
+                    None => {
+                        let path = modules::console::pick(cf).await?;
+                        if path == modules::console::STM32_CONSOLE {
+                            print_preserved_console(*no_format)?;
+                        }
+                        path
+                    }
+                };
+                modules::console::print(cf, &path, *no_format, &mut open_console).await?;
             }
             // Cleanup at end of run() handles disconnect.
         }
@@ -1702,8 +1750,8 @@ async fn run() -> Result<()> {
 
     lifecycle::cleanup(
         async {
-            if let (Some(cf), Some(selector)) = (connected_cf.as_ref(), enabled_console_source) {
-                cf.console.disable(selector).await?;
+            if let Some(console) = open_console {
+                console.close().await?;
             }
             Ok(())
         },

@@ -1,52 +1,58 @@
 # Crazyflie console
 
-Use `cfcli console` to read output from the Crazyflie's local console or from
-a source advertised by protocol-13 firmware, such as the Camera Deck.
-Running `cfcli console` without source options keeps the legacy behavior.
+Use `cfcli console` to read the output of one of the Crazyflie's consoles. Each
+console has a path, such as `cf:stm32` for the Crazyflie's STM32 or `deck:bcCam`
+for the Camera Deck. `cf:stm32` is available on every firmware version; other
+consoles are advertised by firmware using CRTP protocol 13 or newer.
 
-## Show console prints
+## Choose a console
 
-This command shows everything printed in the Crazyflie console.
+Running `cfcli console` in a terminal asks which console to show:
 
 ```text
-cfcli console
+Select a console:
+> cf:stm32
+  deck:bcCam
 ```
+
+The question is skipped when the Crazyflie only has one console.
+
+To choose on the command line, give the exact, case-sensitive path with
+`--source`. This is required in non-interactive use, including whenever stdin is
+not a terminal; without it cfcli exits with code 30 before connecting.
+
+```text
+cfcli console --source cf:stm32
+cfcli console --source deck:bcCam
+```
+
+If the console does not exist, cfcli exits with resource-not-found code 20 and
+reports the available paths.
+
+Only one console can be shown at a time; concurrent output from several consoles
+may be added later.
+
+## List the consoles
+
+```text
+cfcli console --list
+```
+
+Use global `--csv` to emit a `path` header and one CSV row per console.
+
+## What is shown
+
+The command replays the output already received for the console and then
+continues with live output. Replay may include output from a previous connection
+if the library received it before discovering the consoles. The library keeps up
+to 64 KiB of such early packets and drops the oldest packets when full. Packets
+lost over radio cannot be recovered.
 
 If you do not want any formatting of the text then use the ```--no-format``` parameter:
 
 ```text
-cfcli console --no-format
+cfcli console --source cf:stm32 --no-format
 ```
-
-## Show a sourced console
-
-Firmware using CRTP protocol 13 or newer may advertise additional console
-sources, such as a console retained by a deck. List their paths with:
-
-```text
-cfcli console --list-sources
-```
-
-The list contains source paths only. Use global `--csv` to emit a `path`
-header and one CSV row per source. Older firmware and Crazyflies without
-sourced consoles report an empty list successfully.
-
-Select one source by its exact, case-sensitive path:
-
-```text
-cfcli console --source deck:bcCam
-```
-
-The command enables the source, replays output already received for it, and
-then continues with live output. Replay may include output from a previous
-connection if the library received it before catalog discovery. The library
-keeps up to 64 KiB of early packets and drops the oldest packets when full.
-Packets lost over radio cannot be recovered. Formatting and `--no-format`
-behave like the legacy console. Only one source can be selected at a time in
-this first implementation; concurrent multi-source output may be added later.
-
-If a requested source does not exist, cfcli exits with resource-not-found code
-20 and reports the available paths.
 
 ## Preserve console across connections
 
@@ -57,17 +63,16 @@ cfcli -p param set motorPowerSet.enable 1
 cfcli -p log print stabilizer.roll --period 100
 ```
 
-When the ```console``` command is executed, any saved console history is always printed first and then cleared, followed by the live console output:
+When the ```console``` command shows `cf:stm32`, any saved console history is printed first and then cleared, followed by the live console output:
 
 ```text
-cfcli console
+cfcli console --source cf:stm32
 ```
 
 This is useful for capturing console debug output that was printed during other operations (e.g. parameter changes or log sessions).
 
-Preservation currently applies only to the legacy Crazyflie console. A sourced
-console uses its own retained history and `cfcli console --source ...` neither
-prints nor clears the locally preserved legacy-console file.
+Preservation currently applies only to `cf:stm32`. Showing another console
+neither prints nor clears the preserved file.
 
 ## Clear preserved console history
 
@@ -81,25 +86,25 @@ The file path is shown by `cfcli settings show`.
 
 ## Stop streaming after a fixed duration
 
-Legacy and sourced console output are streaming commands — by default they run
-until the link is broken. Combine either with the global `--timeout` flag to
-stop cleanly after a fixed wall-clock duration:
+Console output is a streaming command: by default it runs until the link is
+broken. Combine it with the global `--timeout` flag to stop cleanly after a fixed
+wall-clock duration:
 
 ```text
-cfcli --timeout 3000 console
 cfcli --timeout 3000 console --source deck:bcCam
 ```
 
 When `--timeout` fires on a streaming command, the process exits **0** (the
-timer is the intended way to stop it). For a sourced console, cfcli then makes
-a clean disable attempt bounded to one additional second before disconnecting.
-This is the recommended pattern when running `cfcli console` from a script or
-CI step.
+timer is the intended way to stop it). cfcli then makes a clean attempt to close
+the console, bounded to one additional second, before disconnecting. This is the
+recommended pattern when running `cfcli console` from a script or CI step.
 
-Ctrl-C also stops a sourced console with the same bounded disable attempt
-before disconnecting, then exits with code 130. On Unix, SIGTERM follows the
-same cleanup path and exits with code 143. Interruption during source enable
-also attempts disable, since the device may already have accepted the request.
+The timeout covers the whole command, including the time spent answering the
+question, so give `--source` when combining the two.
 
-`--list-sources` is bounded rather than streaming. If its global timeout
+Ctrl-C also stops the console with the same bounded close attempt before
+disconnecting, then exits with code 130. On Unix, SIGTERM follows the same
+cleanup path and exits with code 143.
+
+`--list` is bounded rather than streaming. If its global timeout
 expires, cfcli exits with timeout code 40.
