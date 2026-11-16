@@ -145,6 +145,10 @@ pub struct LatestCachedLogVariable {
 pub struct LatestCache {
     log: Vec<LatestCachedLogVariable>,
     param: Vec<LatestCachedParameter>,
+    /// Console paths, such as `cf:stm32`. Defaults to empty so that a cache
+    /// written by an older cfcli still loads its param and log names.
+    #[serde(default)]
+    console: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +283,18 @@ mod tests {
         let args = CliArgs::try_parse_from(["cfcli", "console"]).unwrap();
 
         assert!(is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn completion_cache_without_consoles_still_loads() {
+        let cache: LatestCache = serde_json::from_str(
+            r#"{"log":[{"name":"pm.vbat"}],"param":[{"name":"deck.bcCam","readonly":true}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(cache.log.len(), 1);
+        assert_eq!(cache.param.len(), 1);
+        assert!(cache.console.is_empty());
     }
 
     #[test]
@@ -526,6 +542,11 @@ fn completion_cache_path() -> std::path::PathBuf {
     config_path.with_file_name("cf-cli-completion.json")
 }
 
+/// How long the completion cache waits for the console list on connection.
+/// Listing asks the Crazyflie for its console catalog, unlike the param and
+/// log names that are already known once connected.
+const COMPLETION_CONSOLE_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Overwrite the completion cache from a freshly-connected Crazyflie so that
 /// completion always reflects the most recent drone. Best-effort: any error
 /// is ignored so it can never break the command that triggered the connect.
@@ -545,7 +566,20 @@ async fn update_completion_cache(cf: &crazyflie_lib::Crazyflie) {
         .into_iter()
         .map(|name| LatestCachedLogVariable { name })
         .collect();
-    let cache = LatestCache { log, param };
+    // If the catalog does not arrive in time, for example while a deck is
+    // still starting, keep the consoles cached from the previous connection
+    // and make sure the one every Crazyflie has is offered.
+    let console = match tokio::time::timeout(COMPLETION_CONSOLE_LIST_TIMEOUT, cf.console.list()).await {
+        Ok(Ok(paths)) => paths,
+        _ => {
+            let mut paths = load_completion_cache().console;
+            if !paths.iter().any(|path| path == modules::console::STM32_CONSOLE) {
+                paths.insert(0, modules::console::STM32_CONSOLE.to_string());
+            }
+            paths
+        }
+    };
+    let cache = LatestCache { log, param, console };
     if let Ok(json) = serde_json::to_string(&cache) {
         let _ = std::fs::write(completion_cache_path(), json);
     }
@@ -557,7 +591,7 @@ fn load_completion_cache() -> LatestCache {
     std::fs::read_to_string(completion_cache_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(LatestCache { log: Vec::new(), param: Vec::new() })
+        .unwrap_or(LatestCache { log: Vec::new(), param: Vec::new(), console: Vec::new() })
 }
 
 /// Names of the Crazyflies in the selected swarm, for completion. Empty when
@@ -617,6 +651,7 @@ fn emit_dynamic_completions(kind: CompletionKind, partial: &str) {
         CompletionKind::LogNames => {
             load_completion_cache().log.into_iter().map(|l| l.name).collect()
         }
+        CompletionKind::ConsolePaths => load_completion_cache().console,
         CompletionKind::FlashTargets => bootloader::get_hardcoded_list_of_targets()
             .into_iter()
             .map(|s| s.to_string())

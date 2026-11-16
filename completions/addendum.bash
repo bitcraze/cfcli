@@ -1,7 +1,7 @@
 
 # ---- cfcli dynamic completion -------------------------------------------
 # Appended by build.rs to the clap-generated bash completion. Adds param/log
-# variable names, flash targets, swarm IDs and Crazyflie names sourced from
+# variable names, console paths, flash targets, swarm IDs and Crazyflie names sourced from
 # `cfcli __complete`, which reads only local files (a cache written on each
 # connection, the stored swarms) and never talks to a Crazyflie. Wrapping the
 # generated `_cfcli` keeps this robust across clap versions: we let clap
@@ -72,11 +72,27 @@ _cfcli_dynamic() {
            esac ;;
     esac
 
+    # `console --source` paths contain ':', which is in COMP_WORDBREAKS, so
+    # `cf:st` arrives as the words `cf`, `:` and `st`, and bash replaces only
+    # the text after the last ':'. Rebuild the path from the line and drop
+    # its part up to the last ':' from each candidate.
+    local query="$cur" strip=""
+    local before="${COMP_LINE:0:COMP_POINT}"
+    local source_re='--source[ =]+([^ =]*)$'
+    if [[ "$before" == *" console "* && "$before" =~ $source_re ]]; then
+        # A console path is never a file: drop clap's file candidates, which
+        # would otherwise prevent bash from inserting the only path.
+        COMPREPLY=()
+        kind="console-paths"
+        query="${BASH_REMATCH[1]}"
+        [[ "$query" == *:* ]] && strip="${query%:*}:"
+    fi
+
     if [[ -n "$kind" ]]; then
         local cands=() c
         while IFS= read -r c; do
-            [[ -n "$c" ]] && cands+=("$c")
-        done < <(cfcli __complete "$kind" "$cur" 2>/dev/null)
+            [[ -n "$c" ]] && cands+=("${c#"$strip"}")
+        done < <(cfcli __complete "$kind" "$query" 2>/dev/null)
 
         if (( ${#cands[@]} > 0 )); then
             # Append the suffix only once it resolves to a single match (that's

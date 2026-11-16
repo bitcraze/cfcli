@@ -1,7 +1,7 @@
 
 # ---- cfcli dynamic completion -------------------------------------------
 # Appended by build.rs to the clap-generated zsh completion. build.rs also
-# rewrites the `_default` action of the param/log/flash-target/swarm arguments to
+# rewrites the `_default` action of the param/log/console/flash-target/swarm arguments to
 # call the helpers below. Each helper passes the whole current word to `cfcli
 # __complete`, which handles comma-separated lists (returning fully-qualified
 # tokens) and reads only a local cache (never connects).
@@ -25,6 +25,7 @@ _cfcli_param_names()   { _cfcli__dyn param-names }
 _cfcli_param_set()     { _cfcli__dyn param-names-writable '=' }
 _cfcli_config_set()    { _cfcli__dyn config-keys '=' }
 _cfcli_log_names()     { _cfcli__dyn log-names '' }
+_cfcli_console_paths() { _cfcli__dyn console-paths }
 _cfcli_flash_targets() { _cfcli__dyn flash-targets }
 _cfcli_swarm_configs() { _cfcli__dyn swarm-configs }
 _cfcli_lh_configs()    { _cfcli__dyn lh-configs }

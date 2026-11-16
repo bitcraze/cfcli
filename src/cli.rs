@@ -383,6 +383,8 @@ enum CompletionKind {
     ParamNamesWritable,
     /// Log variable names (for `log print`)
     LogNames,
+    /// Console paths (for `console --source`)
+    ConsolePaths,
     /// Firmware flash target names (for `bootload flash --targets`/`--bin`)
     FlashTargets,
     /// EEPROM config setting names (for `config set`)

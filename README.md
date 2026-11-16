@@ -227,7 +227,7 @@ For a more indepth view on how to use the different commands, have a look at the
 
 `cfcli` ships tab-completion for **bash**, **zsh** and **PowerShell**. It
 completes commands, flags, file paths, and dynamic values such as parameter and
-log variable names, flash targets and config keys.
+log variable names, console paths, flash targets and config keys.
 
 bash and zsh completion is installed automatically by the `.deb` and Homebrew
 packages (open a new shell after installing). For PowerShell, generate and load
@@ -237,13 +237,15 @@ the script yourself, e.g. add to your `$PROFILE`:
 cfcli completions powershell | Out-String | Invoke-Expression
 ```
 
-Parameter and log variable names depend on the connected device's firmware, so
-they are cached locally: on every successful connection `cfcli` writes the
-current Crazyflie's parameter and log variable names to `cf-cli-completion.json`
-(next to the config file). Completion reads from that cache, so it always
-reflects the **most recently connected** Crazyflie and the names are available
-instantly without querying the device. The cache is empty until the first
-successful connection.
+Parameter and log variable names and console paths depend on the connected
+device's firmware and decks, so they are cached locally: on every successful
+connection `cfcli` writes the current Crazyflie's parameter and log variable
+names and console paths to `cf-cli-completion.json` (next to the config file).
+Completion reads from that cache, so it always reflects the **most recently
+connected** Crazyflie and the names are available instantly without querying
+the device. The cache is empty until the first successful connection. If the
+Crazyflie does not list its consoles within 500 ms of connecting, for example
+while a deck is still starting, the previously cached console paths are kept.
 
 ## Scripting / AI agent usage
 
