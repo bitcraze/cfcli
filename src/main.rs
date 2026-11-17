@@ -19,6 +19,7 @@ use tabled::settings::{object::Columns, Alignment, Modify};
 use tabled::Tabled;
 
 pub mod error;
+mod lifecycle;
 
 pub mod modules {
     pub mod auth;
@@ -144,6 +145,10 @@ pub struct LatestCachedLogVariable {
 pub struct LatestCache {
     log: Vec<LatestCachedLogVariable>,
     param: Vec<LatestCachedParameter>,
+    /// Console paths, such as `cf:stm32`. Defaults to empty so that a cache
+    /// written by an older cfcli still loads its param and log names.
+    #[serde(default)]
+    console: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,8 +268,88 @@ fn is_streaming_command(cmd: &Commands) -> bool {
         Commands::Swarm { command: SwarmCommands::Log { command: SwarmLogCommands::Print(params), .. } } => {
             !params.once
         }
-        Commands::Console { .. } | Commands::Cr { command: CrCommands::Sniff(_) } => true,
+        Commands::Console { clear, list, .. } => !clear && !list,
+        Commands::Cr { command: CrCommands::Sniff(_) } => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_without_a_selection_is_a_streaming_command() {
+        let args = CliArgs::try_parse_from(["cfcli", "console"]).unwrap();
+
+        assert!(is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn completion_cache_without_consoles_still_loads() {
+        let cache: LatestCache = serde_json::from_str(
+            r#"{"log":[{"name":"pm.vbat"}],"param":[{"name":"deck.bcCam","readonly":true}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(cache.log.len(), 1);
+        assert_eq!(cache.param.len(), 1);
+        assert!(cache.console.is_empty());
+    }
+
+    #[test]
+    fn console_has_no_default_flag() {
+        assert!(CliArgs::try_parse_from(["cfcli", "console", "--default"]).is_err());
+    }
+
+    #[test]
+    fn console_selection_is_required_when_non_interactive() {
+        let err = require_arg(true, "--source").unwrap_err();
+
+        assert_eq!(error::classify_exit_code(&err), 30);
+        assert!(require_arg(false, "--source").is_ok());
+    }
+
+    #[test]
+    fn sourced_console_is_a_streaming_command() {
+        let args = CliArgs::try_parse_from(["cfcli", "console", "--source", "deck:bcCam"]).unwrap();
+
+        assert!(is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn listing_console_sources_is_a_bounded_command() {
+        let args = CliArgs::try_parse_from(["cfcli", "console", "--list"]).unwrap();
+
+        assert!(!is_streaming_command(&args.command));
+    }
+
+    #[test]
+    fn console_source_conflicts_with_source_listing() {
+        let result = CliArgs::try_parse_from([
+            "cfcli",
+            "console",
+            "--source",
+            "deck:bcCam",
+            "--list",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn source_listing_conflicts_with_console_formatting() {
+        let result = CliArgs::try_parse_from(["cfcli", "console", "--list", "--no-format"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn console_source_conflicts_with_clearing_preserved_history() {
+        let result =
+            CliArgs::try_parse_from(["cfcli", "console", "--source", "deck:bcCam", "--clear"]);
+
+        assert!(result.is_err());
     }
 }
 
@@ -320,15 +405,28 @@ async fn save_console_history(cf: &crazyflie_lib::Crazyflie) -> Result<()> {
     use futures::StreamExt;
     use std::io::Write;
 
-    let mut stream = cf.console.stream().await;
-    if let Some(history) = stream.next().await {
-        if !history.is_empty() {
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(console_preserve_path())?;
-            file.write_all(history.as_bytes())?;
+    // The history is already in memory, so its chunks arrive without delay. A
+    // pause means it is drained; the deadline covers a console that never pauses.
+    const IDLE: std::time::Duration = std::time::Duration::from_millis(10);
+    const LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+    let mut console = cf.console.open(modules::console::STM32_CONSOLE).await?;
+    let mut stream = console.text();
+    let mut history = String::new();
+    let deadline = tokio::time::Instant::now() + LIMIT;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(IDLE, stream.next()).await {
+            Ok(Some(chunk)) => history.push_str(&chunk),
+            _ => break,
         }
+    }
+
+    if !history.is_empty() {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(console_preserve_path())?;
+        file.write_all(history.as_bytes())?;
     }
     Ok(())
 }
@@ -340,6 +438,18 @@ fn read_and_clear_console_file() -> Result<String> {
         std::fs::write(&path, "")?;
     }
     Ok(content)
+}
+
+fn print_preserved_console(no_format: bool) -> Result<()> {
+    let saved = read_and_clear_console_file()?;
+    if no_format {
+        print!("{}", saved);
+    } else {
+        for line in saved.lines() {
+            println!("{}", modules::console::format_console_line(line));
+        }
+    }
+    Ok(())
 }
 
 async fn save_and_disconnect(cf: &crazyflie_lib::Crazyflie, preserve_console: bool) {
@@ -432,6 +542,11 @@ fn completion_cache_path() -> std::path::PathBuf {
     config_path.with_file_name("cf-cli-completion.json")
 }
 
+/// How long the completion cache waits for the console list on connection.
+/// Listing asks the Crazyflie for its console catalog, unlike the param and
+/// log names that are already known once connected.
+const COMPLETION_CONSOLE_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Overwrite the completion cache from a freshly-connected Crazyflie so that
 /// completion always reflects the most recent drone. Best-effort: any error
 /// is ignored so it can never break the command that triggered the connect.
@@ -451,7 +566,20 @@ async fn update_completion_cache(cf: &crazyflie_lib::Crazyflie) {
         .into_iter()
         .map(|name| LatestCachedLogVariable { name })
         .collect();
-    let cache = LatestCache { log, param };
+    // If the catalog does not arrive in time, for example while a deck is
+    // still starting, keep the consoles cached from the previous connection
+    // and make sure the one every Crazyflie has is offered.
+    let console = match tokio::time::timeout(COMPLETION_CONSOLE_LIST_TIMEOUT, cf.console.list()).await {
+        Ok(Ok(paths)) => paths,
+        _ => {
+            let mut paths = load_completion_cache().console;
+            if !paths.iter().any(|path| path == modules::console::STM32_CONSOLE) {
+                paths.insert(0, modules::console::STM32_CONSOLE.to_string());
+            }
+            paths
+        }
+    };
+    let cache = LatestCache { log, param, console };
     if let Ok(json) = serde_json::to_string(&cache) {
         let _ = std::fs::write(completion_cache_path(), json);
     }
@@ -463,7 +591,7 @@ fn load_completion_cache() -> LatestCache {
     std::fs::read_to_string(completion_cache_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(LatestCache { log: Vec::new(), param: Vec::new() })
+        .unwrap_or(LatestCache { log: Vec::new(), param: Vec::new(), console: Vec::new() })
 }
 
 /// Names of the Crazyflies in the selected swarm, for completion. Empty when
@@ -523,6 +651,7 @@ fn emit_dynamic_completions(kind: CompletionKind, partial: &str) {
         CompletionKind::LogNames => {
             load_completion_cache().log.into_iter().map(|l| l.name).collect()
         }
+        CompletionKind::ConsolePaths => load_completion_cache().console,
         CompletionKind::FlashTargets => bootloader::get_hardcoded_list_of_targets()
             .into_iter()
             .map(|s| s.to_string())
@@ -596,10 +725,20 @@ async fn run() -> Result<()> {
     };
 
     let mut connected_cf: Option<crazyflie_lib::Crazyflie> = None;
+    let mut open_console = None;
     let preserve_console = args.preserve_console;
     let timeout_ms = args.timeout;
     let non_interactive = args.non_interactive || !std::io::stdin().is_terminal();
     let csv = args.csv;
+
+    let interruption = if matches!(
+        &args.command,
+        Commands::Console { clear: false, list: false, .. }
+    ) {
+        Some(lifecycle::interruption()?)
+    } else {
+        None
+    };
 
     let body = async {
     match &args.command {
@@ -711,7 +850,7 @@ async fn run() -> Result<()> {
             });
 
         }
-        Commands::Console { no_format, clear } => {
+        Commands::Console { no_format, clear, source, list } => {
             if *clear {
                 let path = console_preserve_path();
                 if path.exists() {
@@ -723,21 +862,34 @@ async fn run() -> Result<()> {
                 return Ok(());
             }
 
-            let saved = read_and_clear_console_file()?;
-            if !saved.is_empty() {
-                if *no_format {
-                    print!("{}", saved);
-                } else {
-                    for line in saved.lines() {
-                        print!("{}", modules::console::format_console_line(line));
-                        println!();
-                    }
-                }
+            if source.is_none() && !list {
+                require_arg(non_interactive, "--source")?;
+            }
+
+            // The preserved history must stay readable when the Crazyflie that
+            // produced it no longer connects, so show it before connecting when
+            // the selection is already known.
+            if source.as_deref() == Some(modules::console::STM32_CONSOLE) {
+                print_preserved_console(*no_format)?;
             }
 
             let cf = connect_cf(&mut connected_cf, &link_context, uri.as_str(), toc_cache, args.debug).await?;
 
-            modules::console::print(cf, *no_format).await?;
+            if *list {
+                modules::console::list(cf, csv).await?;
+            } else {
+                let path = match source {
+                    Some(path) => path.clone(),
+                    None => {
+                        let path = modules::console::pick(cf).await?;
+                        if path == modules::console::STM32_CONSOLE {
+                            print_preserved_console(*no_format)?;
+                        }
+                        path
+                    }
+                };
+                modules::console::print(cf, &path, *no_format, &mut open_console).await?;
+            }
             // Cleanup at end of run() handles disconnect.
         }
         Commands::Log { command } => {
@@ -1619,26 +1771,31 @@ async fn run() -> Result<()> {
     Ok(())
     };
 
-    let result: Result<()> = if let Some(ms) = timeout_ms {
-        let deadline = std::time::Duration::from_millis(ms);
-        match tokio::time::timeout(deadline, body).await {
-            Ok(r) => r,
-            Err(_) => {
-                if is_streaming_command(&args.command) {
-                    Ok(())
-                } else {
-                    Err(CliError::Timeout(format!("command did not complete within {} ms", ms)).into())
-                }
+    let result = lifecycle::run_command(
+        body,
+        timeout_ms,
+        is_streaming_command(&args.command),
+        async {
+            match interruption {
+                Some(signal) => signal.await,
+                None => std::future::pending().await,
             }
-        }
-    } else {
-        body.await
-    };
+        },
+    ).await;
 
-    // Save console and disconnect any remaining connection
-    if let Some(ref cf) = connected_cf {
-        save_and_disconnect(cf, preserve_console).await;
-    }
+    lifecycle::cleanup(
+        async {
+            if let Some(console) = open_console {
+                console.close().await?;
+            }
+            Ok(())
+        },
+        async {
+            if let Some(ref cf) = connected_cf {
+                save_and_disconnect(cf, preserve_console).await;
+            }
+        },
+    ).await;
 
     result
 }

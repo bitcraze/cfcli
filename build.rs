@@ -7,7 +7,7 @@
 //
 // Static completion (subcommands, flags, the memory-type enum, file paths via
 // ValueHint) comes straight from clap_complete. Dynamic values (param/log
-// variable names, flash targets) are added by appending the per-shell
+// variable names, console paths, flash targets, ...) are added by appending the per-shell
 // `completions/addendum.*` glue, which calls `cfcli __complete` at runtime.
 
 use clap_complete::{generate_to, Shell};
@@ -83,6 +83,12 @@ fn main() {
             "loco.mode,kalman.initialX:_cfcli_param_names",
         );
         s = s.replace("::TARGETS:_default", "::TARGETS:_cfcli_flash_targets");
+        // `console --source`, anchored on its help text so that another
+        // argument named PATH keeps its default completion.
+        s = s.replace(
+            "(e.g. cf\\:stm32)]:PATH:_default",
+            "(e.g. cf\\:stm32)]:PATH:_cfcli_console_paths",
+        );
         s = s.replace(":BIN:_default", ":BIN:_cfcli_flash_bin");
         // Swarm IDs: `--swarm` and the positional ID of select/delete/show/
         // export (not create, which takes a new ID).

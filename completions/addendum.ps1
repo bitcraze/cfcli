@@ -1,6 +1,6 @@
     # ---- cfcli dynamic completion ----------------------------------------
     # Injected by build.rs before the final filter of the clap-generated
-    # completer. Adds param/log variable names and flash targets from
+    # completer. Adds param/log variable names, console paths, flash targets, ... from
     # `cfcli __complete` (local cache only; never connects). $command is the
     # ';'-joined subcommand path; $completions is the static list built above.
     # $cfcliSuffix is appended to each candidate ('=' for `name=value`
@@ -34,6 +34,7 @@
     if ($cfcliPrev -eq '--swarm')   { $cfcliDynKind = 'swarm-configs' }
     if ($cfcliPrev -eq '--config')  { $cfcliDynKind = 'lh-configs' }
     if ($cfcliPrev -in '--cf', '--exclude', '--from-swarm') { $cfcliDynKind = 'swarm-units' }
+    if ($cfcliPrev -eq '--source' -and $command -eq 'cfcli;console') { $cfcliDynKind = 'console-paths' }
     # Values that are a new name, a file or free text.
     if ($cfcliPrev -in '-o', '--output', '-i', '--input', '--id', '--name', '--description') { $cfcliDynKind = '' }
 

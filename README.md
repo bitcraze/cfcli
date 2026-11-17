@@ -97,7 +97,7 @@ Options:
   -n, --no-toc-cache       Do not use TOC cache
   -d, --debug              Enable debug mode
   -u, --uri <URI>          Override the URI to connect to (instead of using the config file)
-  -p, --preserve-console   Preserve console output across connections, printed when the 'console' command is run
+  -p, --preserve-console   Preserve console output across connections, printed when the 'console' command shows cf:stm32
       --timeout <TIMEOUT>  Timeout in milliseconds for the command
       --non-interactive    Disable interactive prompts (auto-set when stdin is not a TTY)
       --csv                Emit machine-readable CSV (for read commands that support it)
@@ -148,15 +148,24 @@ Now this URI will be used in all commands until a new one is selected. You can a
 selected URI for a single command using the `--uri` flag:
 
 ```text
-cfcli --uri radio://0/80/2M/E7E7E7E7E7 console
+cfcli --uri radio://0/80/2M/E7E7E7E7E7 console --source cf:stm32
+```
+
+A Crazyflie can have several consoles. Run `cfcli console` to choose one from a
+list, or list them and select one by its path:
+
+```text
+cfcli console
+cfcli console --list
+cfcli --timeout 3000 console --source deck:bcCam
 ```
 
 You can preserve console output across connections using the `-p` flag. Console data is accumulated
-during each connection and printed when the `console` command is run:
+during each connection and printed when the `console` command shows `cf:stm32`:
 
 ```text
 cfcli -p param set motorPowerSet.enable 1
-cfcli console
+cfcli console --source cf:stm32
 ```
 
 For instance a parameter
@@ -218,7 +227,7 @@ For a more indepth view on how to use the different commands, have a look at the
 
 `cfcli` ships tab-completion for **bash**, **zsh** and **PowerShell**. It
 completes commands, flags, file paths, and dynamic values such as parameter and
-log variable names, flash targets and config keys.
+log variable names, console paths, flash targets and config keys.
 
 bash and zsh completion is installed automatically by the `.deb` and Homebrew
 packages (open a new shell after installing). For PowerShell, generate and load
@@ -228,13 +237,15 @@ the script yourself, e.g. add to your `$PROFILE`:
 cfcli completions powershell | Out-String | Invoke-Expression
 ```
 
-Parameter and log variable names depend on the connected device's firmware, so
-they are cached locally: on every successful connection `cfcli` writes the
-current Crazyflie's parameter and log variable names to `cf-cli-completion.json`
-(next to the config file). Completion reads from that cache, so it always
-reflects the **most recently connected** Crazyflie and the names are available
-instantly without querying the device. The cache is empty until the first
-successful connection.
+Parameter and log variable names and console paths depend on the connected
+device's firmware and decks, so they are cached locally: on every successful
+connection `cfcli` writes the current Crazyflie's parameter and log variable
+names and console paths to `cf-cli-completion.json` (next to the config file).
+Completion reads from that cache, so it always reflects the **most recently
+connected** Crazyflie and the names are available instantly without querying
+the device. The cache is empty until the first successful connection. If the
+Crazyflie does not list its consoles within 500 ms of connecting, for example
+while a deck is still starting, the previously cached console paths are kept.
 
 ## Scripting / AI agent usage
 
@@ -244,6 +255,7 @@ prompt) a few flags make the output predictable:
 * `--non-interactive` — disable interactive `Select`/`MultiSelect` pickers.
   Auto-enabled when stdin isn't a TTY. Missing required arguments now produce
   a clear error (exit code 30) instead of hanging waiting for keyboard input.
+  In particular, `console` requires `--source <PATH>` or `--list`.
 * `--timeout <ms>` — global wall-clock cap for the whole command. For
   *streaming* commands (`console`, `log print` and `swarm log print` without
   `--once`, `cr sniff`) the timer is the intended way to stop them and the
@@ -251,8 +263,8 @@ prompt) a few flags make the output predictable:
   stuck and the command exits **40**.
 * `--csv` — machine-readable CSV output for the read commands (`scan`,
   `param list`/`get`, `log list`/`print`, `mem list`, `deck list`,
-  `platform info`, `swarm config list`/`show`, `swarm scan`,
-  `swarm platform info`, `swarm param get`, `swarm log print`,
+  `platform info`, `console --list`, `swarm config list`/`show`,
+  `swarm scan`, `swarm platform info`, `swarm param get`, `swarm log print`,
   `swarm deck list`, `swarm debug assert`, `swarm bootload info`,
   `swarm lh check`, `lh config list`/`display`/`check`). Other
   commands ignore the flag.
@@ -282,7 +294,7 @@ value=$(cfcli --non-interactive --timeout 5000 --csv \
 Watch the console for 3 seconds then stop cleanly:
 
 ```bash
-cfcli --timeout 3000 console
+cfcli --timeout 3000 console --source cf:stm32
 ```
 
 The same information is available from `cfcli --help` on every install.

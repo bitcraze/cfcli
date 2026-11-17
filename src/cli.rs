@@ -221,7 +221,7 @@ struct CliArgs {
     #[clap(short, long)]
     uri: Option<String>,
 
-    /// Preserve console output across connections, printed when the 'console' command is run
+    /// Preserve console output across connections, printed when the 'console' command shows cf:stm32
     #[clap(short, long, action)]
     preserve_console: bool,
 
@@ -297,12 +297,20 @@ enum Commands {
     /// Print the console text from a Crazyflie
     Console {
       /// Output raw console data without processing
-      #[clap(long)]
+      #[clap(long, conflicts_with = "list")]
       no_format: bool,
 
       /// Delete the preserved console history file and exit without connecting
-      #[clap(long)]
+      #[clap(long, conflicts_with_all = ["source", "list"])]
       clear: bool,
+
+      /// Print this console instead of asking which one to show (e.g. cf:stm32)
+      #[clap(long, value_name = "PATH", conflicts_with_all = ["list", "clear"])]
+      source: Option<String>,
+
+      /// List the paths of the available consoles and exit
+      #[clap(long, conflicts_with_all = ["source", "no_format", "clear"])]
+      list: bool,
     },
 
     /// Local CLI settings (scan addresses, timeout, etc.)
@@ -375,6 +383,8 @@ enum CompletionKind {
     ParamNamesWritable,
     /// Log variable names (for `log print`)
     LogNames,
+    /// Console paths (for `console --source`)
+    ConsolePaths,
     /// Firmware flash target names (for `bootload flash --targets`/`--bin`)
     FlashTargets,
     /// EEPROM config setting names (for `config set`)

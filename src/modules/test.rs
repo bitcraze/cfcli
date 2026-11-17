@@ -276,7 +276,8 @@ pub async fn reboot(
             // Collect console lines until it's time to reboot (10s since last reboot)
             bar.set_message("collecting console...".to_string());
             let mut console_lines: Vec<String> = Vec::new();
-            let mut line_stream = cf.console.line_stream().await;
+            let mut console = cf.console.open(crate::modules::console::STM32_CONSOLE).await?;
+            let mut line_stream = console.lines();
 
             let console_deadline = if i < iterations {
                 let since_reboot = reboot_time.map_or(Duration::ZERO, |rt| rt.elapsed());
