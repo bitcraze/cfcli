@@ -701,8 +701,9 @@ dependencies = [
 
 [[package]]
 name = "crazyflie-lib"
-version = "0.8.2"
-source = "git+https://github.com/bitcraze/crazyflie-lib-rs?rev=0e7ea9f4d8cf44d4ffd678adef9961615b66fdbb#0e7ea9f4d8cf44d4ffd678adef9961615b66fdbb"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e96cc054f6cfb1dda512e6d541e9c5b559f0d8462743e2338f679442d0e3d1e1"
 dependencies = [
  "async-broadcast",
  "async-stream",

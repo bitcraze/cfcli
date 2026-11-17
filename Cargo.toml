@@ -57,12 +57,7 @@ num_enum = "0.7"
 half = "2.7"
 env_logger = "0.11"
 anyhow = "1.0"
-# TODO: Return to a crates.io version before merging this PR.
-crazyflie-lib = {
-    git = "https://github.com/bitcraze/crazyflie-lib-rs",
-    rev = "0e7ea9f4d8cf44d4ffd678adef9961615b66fdbb",
-    default-features = false,
-}
+crazyflie-lib = { version = "0.9", default-features = false }
 rusb = "0.9"
 cfloader = "0.2"
 clap = { version = "4.6", features = ["derive"] }
@@ -95,13 +90,7 @@ gethostname = "1"
 open = "5"
 
 [target.'cfg(unix)'.dependencies]
-# TODO: Return to a crates.io version before merging this PR.
-crazyflie-lib = {
-    git = "https://github.com/bitcraze/crazyflie-lib-rs",
-    rev = "0e7ea9f4d8cf44d4ffd678adef9961615b66fdbb",
-    default-features = false,
-    features = ["packet_capture"],
-}
+crazyflie-lib = { version = "0.9", default-features = false, features = ["packet_capture"] }
 
 # Used by build.rs to generate shell-completion scripts from the same clap
 # command tree as the binary (src/cli.rs is shared via include!).
