@@ -395,15 +395,24 @@ fn geometry_delta(file: &GeometryFileEntry, cf: &GeometryFileEntry) -> GeometryD
         .map(|(a, b)| (*a as f64 - *b as f64).powi(2))
         .sum::<f64>()
         .sqrt();
-    // The angle of the rotation between the two: trace(R1ᵀ R2) = 1 + 2 cos θ.
-    let trace: f64 = file
-        .rotation
-        .iter()
-        .flatten()
-        .zip(cf.rotation.iter().flatten())
-        .map(|(a, b)| *a as f64 * *b as f64)
-        .sum();
-    let turned_deg = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees();
+    // Compute R1ᵀ R2 from the stored f32 values using f64 arithmetic.
+    let relative: [[f64; 3]; 3] = std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            (0..3)
+                .map(|k| file.rotation[k][i] as f64 * cf.rotation[k][j] as f64)
+                .sum()
+        })
+    });
+    // atan2 avoids amplifying rounding errors near zero. For identical
+    // rotations the relative matrix is symmetric, so its skew part is zero.
+    let skew = [
+        relative[2][1] - relative[1][2],
+        relative[0][2] - relative[2][0],
+        relative[1][0] - relative[0][1],
+    ];
+    let sin = skew.iter().map(|value| value.powi(2)).sum::<f64>().sqrt() / 2.0;
+    let cos = (relative[0][0] + relative[1][1] + relative[2][2] - 1.0) / 2.0;
+    let turned_deg = sin.atan2(cos).to_degrees();
     GeometryDelta { moved_m, turned_deg }
 }
 
@@ -976,6 +985,47 @@ calibs:
         assert_eq!(diffs.len(), 2);
         assert!(is_same(&diffs));
         assert_eq!(diffs[1].calibration, Part::Absent);
+    }
+
+    #[test]
+    fn position_change_does_not_report_rotation() {
+        let mut file = parse(FILE).unwrap();
+        let c = std::f32::consts::FRAC_1_SQRT_2;
+        file.geos.get_mut(&0).unwrap().rotation =
+            [[c, -c, 0.0], [c, c, 0.0], [0.0, 0.0, 1.0]];
+
+        let mut cf = file.clone();
+        cf.geos.get_mut(&0).unwrap().origin[0] += 0.03;
+
+        let diffs = compare(&file, &cf);
+        let Part::Differs(delta) = diffs[0].geometry else {
+            panic!("{:?}", diffs[0]);
+        };
+        assert!((delta.moved_m - 0.03).abs() < 1e-6, "{:?}", delta);
+        assert_eq!(delta.turned_deg, 0.0);
+        assert!(!is_same(&diffs));
+    }
+
+    #[test]
+    fn rotation_delta_keeps_small_and_half_turns() {
+        let file = parse(FILE).unwrap();
+        for expected in [0.001_f64, 90.0, 180.0] {
+            let mut cf = file.clone();
+            let (sin, cos) = expected.to_radians().sin_cos();
+            cf.geos.get_mut(&0).unwrap().rotation = [
+                [cos as f32, -sin as f32, 0.0],
+                [sin as f32, cos as f32, 0.0],
+                [0.0, 0.0, 1.0],
+            ];
+
+            let delta = geometry_delta(&file.geos[&0], &cf.geos[&0]);
+            assert!(
+                (delta.turned_deg - expected).abs() < 1e-6,
+                "expected {} degrees, got {:?}",
+                expected,
+                delta
+            );
+        }
     }
 
     #[test]
