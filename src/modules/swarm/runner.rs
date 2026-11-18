@@ -54,7 +54,7 @@ pub struct Target {
     /// The URI to connect with: a real Crazyradio, and the timeout from the
     /// settings.
     pub link_uri: String,
-    /// The Crazyradio it was given, `None` for `usb://`.
+    /// The Crazyradio it was given, `None` for `usb://` and `udp://`.
     pub radio: Option<usize>,
 }
 
@@ -300,11 +300,17 @@ impl<'a> Runner<'a> {
 }
 
 impl Target {
-    /// Whether the Crazyflie answers a packet over the radio, without
-    /// connecting to it. `usb://` targets aren't checked and count as
-    /// answering: opening a link to a missing USB device fails anyway.
+    /// Whether the Crazyflie is attached over USB.
+    pub fn is_usb(&self) -> bool {
+        self.uri.starts_with("usb://")
+    }
+
+    /// Whether the Crazyflie answers a packet over the radio, or the
+    /// simulator over UDP, without connecting to it. `usb://` targets aren't
+    /// checked and count as answering: opening a link to a missing USB device
+    /// fails anyway.
     pub async fn answers(&self, link_context: &LinkContext) -> bool {
-        if self.radio.is_none() {
+        if self.is_usb() {
             return true;
         }
         for _ in 0..ANSWER_ATTEMPTS {

@@ -1088,15 +1088,15 @@ struct ScanRow {
 /// connection.
 async fn scan(runner: &Runner<'_>, csv: bool) -> Result<()> {
     let link_context = runner.link_context();
-    let usb_present = if runner.targets.iter().any(|t| t.radio.is_none()) {
+    let usb_present = if runner.targets.iter().any(|t| t.is_usb()) {
         crate::scan_usb(link_context).await?
     } else {
         Vec::new()
     };
     let results = runner
-        .each("Checking", async |t| match t.radio {
-            Some(_) => Ok(t.answers(link_context).await),
-            None => Ok(usb_present.contains(&t.uri)),
+        .each("Checking", async |t| match t.is_usb() {
+            true => Ok(usb_present.contains(&t.uri)),
+            false => Ok(t.answers(link_context).await),
         })
         .await;
     let online: Vec<bool> = results.into_iter().map(|r| r.unwrap_or(false)).collect();
@@ -1108,7 +1108,11 @@ async fn scan(runner: &Runner<'_>, csv: bool) -> Result<()> {
         .map(|(t, online)| ScanRow {
             name: t.name.clone(),
             uri: t.uri.clone(),
-            radio: t.radio.map(|r| r.to_string()).unwrap_or_else(|| "USB".to_string()),
+            radio: match t.radio {
+                Some(radio) => radio.to_string(),
+                None if t.is_usb() => "USB".to_string(),
+                None => "UDP".to_string(),
+            },
             online: if *online { "yes" } else { "no" }.to_string(),
         })
         .collect();

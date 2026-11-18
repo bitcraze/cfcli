@@ -17,6 +17,7 @@ use tabled::Tabled;
 use super::runner::{csv_row_for, split, Outcome, Runner, SwarmRow};
 use crate::error::CliError;
 use crate::modules::{bootloader, debug, deck, log, param, platform};
+use crate::utils::udp::check_not_udp;
 use crate::utils::display::{csv_row, print_table, table, Column, StreamTable};
 use crate::{
     AssertArgs, SwarmDebugCommands, SwarmDeckCommands, SwarmLogCommands, SwarmParamCommands,
@@ -34,6 +35,7 @@ pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv:
         SwarmPlatformCommands::Reboot => (
             runner
                 .each("Rebooting", async |t| {
+                    check_not_udp(&t.uri, "Rebooting")?;
                     t.check_answers(link_context).await?;
                     bootloader::reboot(link_context, &t.link_uri).await
                 })
@@ -43,6 +45,7 @@ pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv:
         SwarmPlatformCommands::PowerOff => (
             runner
                 .each("Powering off", async |t| {
+                    check_not_udp(&t.uri, "Powering off")?;
                     t.check_answers(link_context).await?;
                     Ok(Crazyflie::power_off_all(link_context, &t.link_uri).await?)
                 })
@@ -52,6 +55,7 @@ pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv:
         SwarmPlatformCommands::Sleep => (
             runner
                 .each("Putting to sleep", async |t| {
+                    check_not_udp(&t.uri, "Sleep")?;
                     t.check_answers(link_context).await?;
                     Ok(Crazyflie::power_off_stm32_domain(link_context, &t.link_uri).await?)
                 })
@@ -61,6 +65,7 @@ pub async fn platform(runner: &Runner<'_>, command: &SwarmPlatformCommands, csv:
         SwarmPlatformCommands::Wakeup => (
             runner
                 .each("Waking up", async |t| {
+                    check_not_udp(&t.uri, "Wakeup")?;
                     t.check_answers(link_context).await?;
                     Ok(Crazyflie::power_on_stm32_domain(link_context, &t.link_uri).await?)
                 })
